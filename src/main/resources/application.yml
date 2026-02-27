@@ -1,0 +1,110 @@
+spring:
+  application:
+    name: aimate
+
+  # ── Database ──────────────────────────────────────────────────────────────
+  datasource:
+    url: jdbc:mysql://localhost:3306/aimate?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:ayp43520}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate          # never auto-create in prod; use schema.sql
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+
+  # Virtual Threads for Tomcat (Spring Boot 3.2+, still valid in 3.5)
+  threads:
+    virtual:
+      enabled: true
+
+  # Spring Boot 3.5 changed the auto-configured TaskExecutor bean alias:
+  # only "applicationTaskExecutor" is registered now ("taskExecutor" alias removed).
+  # Our virtualThreadExecutor bean is separate and unaffected.
+  task:
+    execution:
+      pool:
+        core-size: 1      # nominal; actual concurrency is handled by virtual threads
+
+# ── Server ─────────────────────────────────────────────────────────────────
+server:
+  port: 8080
+
+# ── LLM Provider Configuration ─────────────────────────────────────────────
+agent:
+  llm:
+    primary:
+      name: gpt-4o
+      base-url: https://api.openai.com/v1
+      api-key: ${PRIMARY_LLM_API_KEY:sk-placeholder}
+      model: gpt-4o
+      timeout-seconds: 120
+    fallback:
+      name: deepseek-chat
+      base-url: https://api.deepseek.com/v1
+      api-key: ${FALLBACK_LLM_API_KEY:sk-placeholder}
+      model: deepseek-chat
+      timeout-seconds: 120
+
+  # ── Embedding (OpenAI text-embedding-3-small) ──────────────────────────
+  # Reuses the same API key as the primary LLM by default.
+  # Override EMBEDDING_API_KEY to use a dedicated embedding key.
+  embedding:
+    base-url: https://api.openai.com/v1
+    api-key: ${EMBEDDING_API_KEY:${PRIMARY_LLM_API_KEY:sk-placeholder}}
+    model: text-embedding-3-small
+    dimensions: 1536
+    timeout-seconds: 30
+
+  # ── Milvus Vector Database ─────────────────────────────────────────────
+  # Set enabled: false to start the app without a running Milvus instance.
+  # Long-term memory features will be silently skipped.
+  milvus:
+    enabled: true
+    host: ${MILVUS_HOST:localhost}
+    port: ${MILVUS_PORT:19530}
+    collection-name: agent_memories
+    vector-dimensions: 1536    # must match embedding dimensions above
+
+# ── Resilience4j ───────────────────────────────────────────────────────────
+# Fine-tuning is done programmatically in Resilience4jConfig.
+# These entries exist so Actuator exposes the metrics endpoints.
+resilience4j:
+  circuitbreaker:
+    instances:
+      primaryLlm:
+        register-health-indicator: true
+      fallbackLlm:
+        register-health-indicator: true
+
+# ── Actuator ────────────────────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,circuitbreakers,retries
+  endpoint:
+    health:
+      show-details: always
+
+# ── JWT ──────────────────────────────────────────────────────────────────────
+app:
+  jwt:
+    # Replace with a long random secret in production (≥256 bits / 32 bytes)
+    secret: ${JWT_SECRET:OpenForgeX-super-secret-key-change-me-in-prod-2026}
+    expiration-ms: 86400000   # 24 hours
+
+# ── Logging ─────────────────────────────────────────────────────────────────
+logging:
+  level:
+    com.openforge.aimate: DEBUG
+    org.hibernate.SQL: WARN
