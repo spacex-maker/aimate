@@ -7,11 +7,12 @@ const typeConfig: Record<MemoryType, { label: string; class: string }> = {
   SEMANTIC:   { label: '语义', class: 'text-blue-400 bg-blue-400/10 border-blue-400/30' },
   PROCEDURAL: { label: '程序', class: 'text-purple-400 bg-purple-400/10 border-purple-400/30' },
 }
+const defaultTypeConfig = typeConfig.SEMANTIC
 
 interface Props {
   items: MemoryItem[]
-  onDelete: (id: number) => void
-  isDeleting?: number | null
+  onDelete: (id: string) => void
+  isDeleting?: string | null
   showScore?: boolean
 }
 
@@ -41,10 +42,11 @@ export function MemoryTable({ items, onDelete, isDeleting, showScore }: Props) {
           </tr>
         </thead>
         <tbody className="divide-y divide-white/5">
-          {items.map((item) => {
-            const tc = typeConfig[item.memoryType]
+          {items.map((item, index) => {
+            const type = item.memoryType ?? (item as { memory_type?: MemoryType }).memory_type
+            const tc = (type && typeConfig[type]) ? typeConfig[type] : defaultTypeConfig
             return (
-              <tr key={item.id} className="group hover:bg-white/[0.03] transition-colors">
+              <tr key={`${item.id}-${index}`} className="group hover:bg-white/[0.03] transition-colors">
                 <td className="py-3 pr-4">
                   <span className={clsx('text-[10px] font-mono border rounded px-1.5 py-0.5', tc.class)}>
                     {tc.label}

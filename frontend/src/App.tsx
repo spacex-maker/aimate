@@ -35,7 +35,7 @@ function AppLayout({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      <BrowserRouter future={{ v7_relativeSplatPath: true }}>
         <Routes>
           {/* ── Public routes (no sidebar) ─────────────────────────────── */}
           <Route path="/login"    element={<LoginPage />} />

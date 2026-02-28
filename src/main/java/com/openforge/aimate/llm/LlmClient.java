@@ -1,6 +1,7 @@
 package com.openforge.aimate.llm;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openforge.aimate.llm.model.ChatRequest;
 import com.openforge.aimate.llm.model.ChatResponse;
@@ -103,15 +104,10 @@ public class LlmClient {
             model = config.model();
         }
 
-        // DeepSeek 对 tools 支持较为严格，如果历史中残留了孤立的 tool 消息
-        // （例如只保留了 tool 结果而裁掉了原始 tool_calls），会直接返回 400。
-        // 为了稳妥起见，对 deepseek 提供方，我们在发送前先过滤掉 role = "tool" 的消息。
+        // Send full context including tool results. An assistant message with tool_calls
+        // must be followed by tool messages for each tool_call_id (OpenAI/DeepSeek spec).
+        // Do not strip role="tool" messages or the API returns 400.
         var messages = request.messages();
-        if (messages != null && "deepseek".equalsIgnoreCase(config.name())) {
-            messages = messages.stream()
-                    .filter(m -> !"tool".equals(m.role()))
-                    .toList();
-        }
 
         ChatRequest effectiveRequest = ChatRequest.builder()
                 .model(model)
@@ -296,8 +292,42 @@ public class LlmClient {
         try {
             return objectMapper.readValue(body, ChatResponse.class);
         } catch (JsonProcessingException e) {
-            throw new LlmException(
-                    "Failed to parse response from provider [%s]: %s".formatted(config.name(), body), e);
+            // DeepSeek / OpenAI 兼容接口可能会在 usage 等结构中加入额外字段或结构变化，
+            // 导致直接反序列化到 ChatResponse 失败。这里做一次兜底解析，只关心
+            //  id / model / choices[0].message 这些我们真正需要的字段。
+            log.warn("[LlmClient:{}] Failed to parse ChatResponse normally, falling back to lenient parsing: {}",
+                    config.name(), e.getMessage());
+            try {
+                JsonNode root = objectMapper.readTree(body);
+
+                String id      = root.path("id").asText(null);
+                String object  = root.path("object").asText(null);
+                Long   created = root.hasNonNull("created") ? root.get("created").asLong() : null;
+                String model   = root.path("model").asText(null);
+
+                List<ChatResponse.Choice> choices = List.of();
+                JsonNode choicesNode = root.path("choices");
+                if (choicesNode.isArray() && !choicesNode.isEmpty()) {
+                    JsonNode first = choicesNode.get(0);
+                    int index = first.path("index").asInt(0);
+                    String finishReason = first.path("finish_reason").asText(null);
+                    JsonNode messageNode = first.path("message");
+                    Message message = null;
+                    if (!messageNode.isMissingNode() && !messageNode.isNull()) {
+                        message = objectMapper.treeToValue(messageNode, Message.class);
+                    }
+                    choices = List.of(new ChatResponse.Choice(index, message, finishReason));
+                }
+
+                // usage 结构经常变化，兜底模式下直接置空即可。
+                ChatResponse.Usage usage = null;
+
+                return new ChatResponse(id, object, created, model, choices, usage);
+            } catch (Exception fallbackEx) {
+                throw new LlmException(
+                        "Failed to parse response from provider [%s]: %s".formatted(config.name(), body),
+                        fallbackEx);
+            }
         }
     }
 

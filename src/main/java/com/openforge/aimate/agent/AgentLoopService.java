@@ -65,26 +65,28 @@ public class AgentLoopService {
     public static final ScopedValue<String> SESSION_SCOPE = ScopedValue.newInstance();
 
     // ── Safety limits ────────────────────────────────────────────────────────
-    private static final int MAX_ITERATIONS      = 30;
-    private static final int MEMORY_RECALL_TOP_K = 5;
+    private static final int MAX_ITERATIONS           = 30;
+    /** Max number of tools to pass to the LLM (retrieved by semantic relevance). */
+    private static final int TOP_K_TOOLS              = 12;
+    /** Prefix length for "same topic" deduplication (e.g. "我的名字是forge，用户希望" catches both variants). */
+    private static final int STORE_MEMORY_PREFIX_LEN = 15;
 
     private static final String BASE_SYSTEM_PROMPT =
             """
-            You are an autonomous AI agent with access to a set of tools.
-            Think step by step. Use tools ONLY when they are clearly helpful.
-
-            Long-term memory:
-            - Use the "store_memory" tool ONLY for information that will be useful across many future tasks
-              (for example: stable user preferences, long-term goals, important facts about the user or system).
-            - Do NOT call "store_memory" repeatedly with the same or very similar content.
-            - Do NOT store trivial restatements of the current question.
-
-            Answering:
-            - When you have enough information to answer the user's task completely, provide a final answer
-              WITHOUT calling any more tools.
-            - Prefer fewer, higher-quality tool calls over many repetitive ones.
-
-            Be concise but thorough. Think out loud as you reason.
+            You are an autonomous AI agent with access to tools. Think step by step and decide for yourself when to use which tool.
+            
+            Tools (use only when you judge it helps):
+            - recall_memory: search long-term memory by query (e.g. user name, preferences, past facts). Use when the user's question might be answered from something you stored before.
+            - store_memory: save a fact for future sessions. Use at most once per distinct, important fact; then reply in natural language.
+            
+            Memory writing rules (VERY IMPORTANT):
+            - When calling store_memory, ALWAYS rewrite the fact into a clear, third-person sentence with an explicit subject.
+              For example: "用户的名字是 Zed", "智能体的名字是 Forge", "用户是 Java 后端开发人员".
+            - NEVER store ambiguous first-person sentences like "我的名字是 Forge", "I am a Java developer", "我是 Java 开发".
+              Before storing, rewrite them so that it is clear whether the fact is about the USER or about the ASSISTANT.
+            - If a fact is about the user, use "用户…" / "the user…". If it is about you (the assistant), use "智能体…" / "the assistant…".
+            
+            When you can answer directly, reply in natural language without calling tools. Be concise. Think out loud as you reason.
             """;
 
     private final LlmRouter              llmRouter;
@@ -93,6 +95,7 @@ public class AgentLoopService {
     private final AgentSessionRepository sessionRepository;
     private final AgentToolRepository    toolRepository;
     private final LongTermMemoryService  memoryService;
+    private final ToolIndexService       toolIndexService;
     private final ObjectMapper           objectMapper;
     private final UserApiKeyResolver     keyResolver;
     private final HttpClient             httpClient;
@@ -133,6 +136,8 @@ public class AgentLoopService {
                 });
     }
 
+    private static final List<String> EXECUTION_PLAN = List.of("回忆", "思考与执行", "回答");
+
     private void executeLoop(AgentSession session) {
         String sessionId = session.getSessionId();
         log.info("[Agent:{}] Loop started. Task: {}", sessionId, session.getTaskDescription());
@@ -142,18 +147,17 @@ public class AgentLoopService {
             sessionRepository.save(session);
             publisher.publish(AgentEvent.statusChange(sessionId, "RUNNING"));
 
-            // ── Resolve LLM caller (user key > system fallback) ──────────────
             var llmCaller = buildCaller(session);
             final Long userId = session.getUserId();
 
-            // ── RECALL: search long-term memory before first iteration ───────
-            // Only initialize context when this is the very first run
-            // (context window is empty). For subsequent runs (multi-turn),
-            // we keep the existing context and simply append new user messages.
+            // ── 1. Output plan to frontend ────────────────────────────────────
+            publisher.publish(AgentEvent.planReady(sessionId, new ArrayList<>(EXECUTION_PLAN)));
+
+            // ── Step 1: 回忆 ──────────────────────────────────────────────────
+            publisher.publish(AgentEvent.stepStart(sessionId, 1, EXECUTION_PLAN.get(0)));
             List<Message> existingContext = contextService.load(session);
             if (existingContext.isEmpty()) {
-                String systemPrompt = buildSystemPromptWithMemory(
-                        session.getTaskDescription(), userId, sessionId);
+                String systemPrompt = buildSystemPrompt();
                 contextService.initialize(session, List.of(
                         Message.system(systemPrompt),
                         Message.user(session.getTaskDescription())
@@ -162,159 +166,130 @@ public class AgentLoopService {
                 log.debug("[Agent:{}] Resuming with existing context ({} messages).",
                         sessionId, existingContext.size());
             }
+            publisher.publish(AgentEvent.stepComplete(sessionId, 1, EXECUTION_PLAN.get(0), "已回忆并注入上下文"));
 
-            // ── The loop ─────────────────────────────────────────────────────
-            while (true) {
-                session = sessionRepository.findBySessionId(sessionId)
-                        .orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
+            // ── Step 2: 思考与执行 ───────────────────────────────────────────
+            publisher.publish(AgentEvent.stepStart(sessionId, 2, EXECUTION_PLAN.get(1)));
+            String finalAnswer = runThinkAndActLoop(session, sessionId, llmCaller, userId);
+            int lastIteration = sessionRepository.findBySessionId(sessionId)
+                    .map(AgentSession::getIterationCount).orElse(0);
+            publisher.publish(AgentEvent.stepComplete(sessionId, 2, EXECUTION_PLAN.get(1),
+                    finalAnswer != null ? "完成推理" : "达到最大迭代次数"));
 
-                if (session.getStatus() == AgentSession.SessionStatus.PAUSED) {
-                    log.info("[Agent:{}] Paused. Waiting for resume signal...", sessionId);
-                    waitForResume(session);
-                    continue;
-                }
-                if (session.getStatus() != AgentSession.SessionStatus.RUNNING) {
-                    log.info("[Agent:{}] Status={}, exiting loop.", sessionId, session.getStatus());
-                    break;
-                }
+            // ── Step 3: 回答 ──────────────────────────────────────────────────
+            publisher.publish(AgentEvent.stepStart(sessionId, 3, EXECUTION_PLAN.get(2)));
+            session = sessionRepository.findBySessionId(sessionId)
+                    .orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
 
-                int iteration = session.getIterationCount() + 1;
-                publisher.publish(AgentEvent.iterationStart(sessionId, iteration));
-                log.debug("[Agent:{}] Iteration {}", sessionId, iteration);
-
-                // ── THINK (streaming) ────────────────────────────────────────
-                List<Message> context = contextService.load(session);
-                List<Tool>    tools   = loadActiveTools();
-
-                ChatRequest request = ChatRequest.withTools(
-                        "",
-                        context,
-                        tools.isEmpty() ? null : tools
-                );
-
-                final AgentSession finalSession = session;
-                final int          finalIter    = iteration;
-
-                ChatResponse response = llmCaller.apply(request,
-                        token -> publisher.publish(
-                                AgentEvent.thinking(sessionId, token, finalIter)));
-
-                // ── DECIDE ───────────────────────────────────────────────────
-                Message assistantMessage = response.firstMessage();
-
-                if (response.hasToolCalls()) {
-                    // ── ACT ──────────────────────────────────────────────────
-                    contextService.append(finalSession, assistantMessage);
-
-                    for (ToolCall toolCall : assistantMessage.toolCalls()) {
-                        publisher.publish(AgentEvent.toolCall(sessionId, toolCall, finalIter));
-
-                        String toolResult = executeTool(toolCall, sessionId);
-                        publisher.publish(AgentEvent.toolResult(
-                                sessionId, toolCall.function().name(), toolResult, finalIter));
-
-                        contextService.append(finalSession,
-                                Message.toolResult(toolCall.id(), toolResult));
-
-                        // Store significant tool results as episodic memories
-                        maybeRememberToolResult(sessionId, toolCall.function().name(), toolResult, userId);
-                    }
-
-                } else {
-                    // ── DONE — final answer ──────────────────────────────────
-                    String answer = assistantMessage.content();
-
-                    // Reload latest session row to avoid optimistic-lock conflict
-                    // with concurrent context updates (contextService.append).
-                    AgentSession current = sessionRepository.findById(session.getId())
-                            .orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
-                    current.setResult(answer);
-                    current.setStatus(AgentSession.SessionStatus.COMPLETED);
-                    current.setIterationCount(iteration);
-                    sessionRepository.save(current);
-                    session = current;
-
-                    publisher.publish(AgentEvent.finalAnswer(sessionId, answer, iteration));
-                    publisher.publish(AgentEvent.statusChange(sessionId, "COMPLETED"));
-                    log.info("[Agent:{}] Completed in {} iteration(s).", sessionId, iteration);
-
-                    // Store the completed task+answer as a semantic memory
-                    storeCompletionMemory(sessionId, session.getTaskDescription(), answer, userId);
-                    break;
-                }
-
-                // ── Persist iteration progress safely (avoid stale version) ──
-                AgentSession current = sessionRepository.findById(session.getId())
-                        .orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
-                current.setIterationCount(iteration);
-                sessionRepository.save(current);
-                session = current;
-
-                if (iteration >= MAX_ITERATIONS) {
-                    log.warn("[Agent:{}] Max iterations ({}) reached.", sessionId, MAX_ITERATIONS);
-                    failSession(session, "Max iterations (%d) reached without final answer."
-                            .formatted(MAX_ITERATIONS));
-                    publisher.publish(AgentEvent.error(sessionId, "Max iterations reached", iteration));
-                    break;
-                }
+            if (finalAnswer != null) {
+                session.setResult(finalAnswer);
+                session.setStatus(AgentSession.SessionStatus.COMPLETED);
+                sessionRepository.save(session);
+                publisher.publish(AgentEvent.stepComplete(sessionId, 3, EXECUTION_PLAN.get(2), finalAnswer));
+                publisher.publish(AgentEvent.finalAnswer(sessionId, finalAnswer, lastIteration));
+                publisher.publish(AgentEvent.statusChange(sessionId, "COMPLETED"));
+                storeCompletionMemory(sessionId, session.getTaskDescription(), finalAnswer, userId);
+                log.info("[Agent:{}] Completed. Plan executed.", sessionId);
+            } else {
+                failSession(session, "Max iterations (%d) reached without final answer.".formatted(MAX_ITERATIONS));
+                publisher.publish(AgentEvent.stepComplete(sessionId, 3, EXECUTION_PLAN.get(2), "未得到最终回答"));
+                publisher.publish(AgentEvent.error(sessionId, "Max iterations reached", lastIteration));
+                publisher.publish(AgentEvent.statusChange(sessionId, "FAILED"));
             }
 
         } catch (Exception e) {
-            log.error("[Agent:{}] Unhandled exception in loop: {}", sessionId, e.getMessage(), e);
+            log.error("[Agent:{}] Unhandled exception: {}", sessionId, e.getMessage(), e);
             try {
                 session = sessionRepository.findBySessionId(sessionId).orElse(session);
                 failSession(session, e.getMessage());
             } catch (Exception ignored) {}
             publisher.publish(AgentEvent.error(sessionId, e.getMessage(), session.getIterationCount()));
+            publisher.publish(AgentEvent.statusChange(sessionId, "FAILED"));
+        }
+    }
+
+    /**
+     * Inner loop: think (stream) → tool calls or final answer.
+     * Returns the final answer text, or null if max iterations reached.
+     */
+    private String runThinkAndActLoop(AgentSession session, String sessionId,
+                                      java.util.function.BiFunction<ChatRequest, java.util.function.Consumer<String>, ChatResponse> llmCaller,
+                                      Long userId) {
+        int iteration = 0;
+        while (true) {
+            session = sessionRepository.findBySessionId(sessionId)
+                    .orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
+
+            if (session.getStatus() == AgentSession.SessionStatus.PAUSED) {
+                log.info("[Agent:{}] Paused. Waiting for resume...", sessionId);
+                waitForResume(session);
+                continue;
+            }
+            if (session.getStatus() != AgentSession.SessionStatus.RUNNING) {
+                return null;
+            }
+
+            iteration = session.getIterationCount() + 1;
+            publisher.publish(AgentEvent.iterationStart(sessionId, iteration));
+
+            List<Message> context = contextService.load(session);
+            String        queryForTools = lastUserMessageFrom(context, session.getTaskDescription());
+            List<Tool>    tools   = loadRelevantTools(queryForTools, TOP_K_TOOLS, userId);
+            ChatRequest   request = ChatRequest.withTools("", context, tools.isEmpty() ? null : tools);
+            final AgentSession finalSession = session;
+            final int          finalIter   = iteration;
+
+            ChatResponse response = llmCaller.apply(request,
+                    token -> publisher.publish(AgentEvent.thinking(sessionId, token, finalIter)));
+
+            Message assistantMessage = response.firstMessage();
+
+            if (response.hasToolCalls()) {
+                // Append assistant + all tool results in one go. Otherwise the second append()
+                // would load stale session.getContextWindow() (never refreshed after first persist)
+                // and overwrite DB without the assistant message — so the model never sees
+                // that it already called a tool and loops forever.
+                List<Message> toAppend = new ArrayList<>();
+                toAppend.add(assistantMessage);
+                for (ToolCall toolCall : assistantMessage.toolCalls()) {
+                    publisher.publish(AgentEvent.toolCall(sessionId, toolCall, finalIter));
+                    String toolResult = executeTool(toolCall, sessionId, userId);
+                    publisher.publish(AgentEvent.toolResult(
+                            sessionId, toolCall.function().name(), toolResult, finalIter));
+                    toAppend.add(Message.toolResult(toolCall.id(), toolResult));
+                    maybeRememberToolResult(sessionId, toolCall.function().name(), toolResult, userId);
+                }
+                contextService.append(finalSession, toAppend.toArray(new Message[0]));
+            } else {
+                String answer = assistantMessage.content();
+                AgentSession current = sessionRepository.findById(session.getId())
+                        .orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
+                current.setIterationCount(iteration);
+                sessionRepository.save(current);
+                return answer;
+            }
+
+            AgentSession current = sessionRepository.findById(session.getId())
+                    .orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
+            current.setIterationCount(iteration);
+            sessionRepository.save(current);
+            session = current;
+
+            if (iteration >= MAX_ITERATIONS) {
+                log.warn("[Agent:{}] Max iterations ({}) reached.", sessionId, MAX_ITERATIONS);
+                return null;
+            }
         }
     }
 
     // ── Memory integration ───────────────────────────────────────────────────
 
     /**
-     * Build the system prompt enriched with relevant long-term memories.
-     *
-     * We inject two tiers of memory (when available):
-     *   1. User-level semantic profile — stable facts about the user (cross-session)
-     *   2. Session-level episodic memories — events & tool results from this session
+     * Build the system prompt. Memory is not pre-injected; the agent uses
+     * recall_memory when it needs past/user information (intent → recall → answer).
      */
-    private String buildSystemPromptWithMemory(String taskDescription, Long userId, String sessionId) {
-        try {
-            List<MemoryRecord> userMemories =
-                    userId != null
-                            ? memoryService.recallUserSemantic(taskDescription, MEMORY_RECALL_TOP_K, userId)
-                            : List.of();
-            List<MemoryRecord> sessionMemories =
-                    memoryService.recallFromSession(taskDescription, sessionId, MEMORY_RECALL_TOP_K);
-
-            StringBuilder sb = new StringBuilder(BASE_SYSTEM_PROMPT);
-
-            if (!userMemories.isEmpty()) {
-                sb.append("\n\n## User profile (long-term)\n");
-                for (MemoryRecord m : userMemories) {
-                    sb.append("- [")
-                      .append(m.memoryType().name())
-                      .append("] ")
-                      .append(m.content())
-                      .append(" (importance: ")
-                      .append(String.format("%.2f", m.importance()))
-                      .append(")\n");
-                }
-                log.debug("[Agent] Injecting {} user-level memories into system prompt", userMemories.size());
-            }
-
-            if (!sessionMemories.isEmpty()) {
-                String sessionBlock = memoryService.formatForPrompt(sessionMemories);
-                sb.append("\n\n").append(sessionBlock);
-                log.debug("[Agent] Injecting {} session-level memories into system prompt",
-                        sessionMemories.size());
-            }
-
-            return sb.toString();
-        } catch (Exception e) {
-            log.warn("[Agent] Memory recall failed, proceeding without memories: {}", e.getMessage());
-            return BASE_SYSTEM_PROMPT;
-        }
+    private String buildSystemPrompt() {
+        return BASE_SYSTEM_PROMPT;
     }
 
     /**
@@ -351,11 +326,15 @@ public class AgentLoopService {
 
     // ── Tool execution ───────────────────────────────────────────────────────
 
-    private String executeTool(ToolCall toolCall, String sessionId) {
+    private String executeTool(ToolCall toolCall, String sessionId, Long userId) {
         String toolName  = toolCall.function().name();
         String arguments = toolCall.function().arguments();
         log.info("[Agent:{}] Executing tool: {} args={}", sessionId, toolName, arguments);
 
+        // Built-in: recall_memory — retrieve relevant long-term memories (intent → recall → then answer)
+        if ("recall_memory".equals(toolName)) {
+            return executeRecallMemoryTool(sessionId, arguments, userId);
+        }
         // Built-in: store_memory tool (lets Agent explicitly create long-term memories)
         if ("store_memory".equals(toolName)) {
             return executeStoreMemoryTool(sessionId, arguments);
@@ -372,30 +351,76 @@ public class AgentLoopService {
     }
 
     /**
+     * Built-in recall_memory tool: retrieve relevant long-term memories by semantic search.
+     * Flow: AI does intent analysis → calls recall_memory with a query → uses returned memories to answer.
+     */
+    private String executeRecallMemoryTool(String sessionId, String argumentsJson, Long userId) {
+        try {
+            JsonNode args = objectMapper.readTree(argumentsJson);
+            String query = args.path("query").asText("");
+            int topK = args.path("top_k").asInt(10);
+            if (query == null || query.isBlank()) {
+                return "[ToolError] recall_memory requires a non-empty 'query' (e.g. user's name, user preferences, past topic).";
+            }
+            topK = Math.min(20, Math.max(1, topK));
+            List<MemoryRecord> memories = memoryService.recall(query, topK, userId);
+            // 如果主召回路径没有命中（例如索引或阈值问题），退回到与前端相同的 searchMemories 逻辑，
+            // 确保压缩后的记忆、历史记忆都能被 AI 找到。
+            if (memories.isEmpty()) {
+                List<com.openforge.aimate.memory.MemoryItem> items =
+                        memoryService.searchMemories(query, topK, userId);
+                memories = new java.util.ArrayList<>();
+                for (com.openforge.aimate.memory.MemoryItem item : items) {
+                    memories.add(new MemoryRecord(
+                            item.content(),
+                            item.memoryType(),
+                            item.sessionId(),
+                            item.importance(),
+                            item.score() != null ? item.score() : 0.0
+                    ));
+                }
+            }
+            if (memories.isEmpty()) {
+                return "No relevant memories found for this query. You can answer from general knowledge or say you don't recall.";
+            }
+            String block = memoryService.formatForPrompt(memories);
+            log.debug("[Agent:{}] recall_memory returned {} memories for query", sessionId, memories.size());
+            return block != null ? block : "No relevant memories found.";
+        } catch (Exception e) {
+            log.warn("[Agent:{}] recall_memory failed: {}", sessionId, e.getMessage());
+            return "[ToolError] recall_memory failed: " + e.getMessage();
+        }
+    }
+
+    /**
      * Built-in memory tool: the Agent can explicitly decide to remember something.
-     *
-     * Expected arguments JSON:
-     * { "content": "...", "memory_type": "SEMANTIC", "importance": 0.9 }
+     * Deduplication: normalized exact match + same-topic prefix to stop repeated store_memory loops.
      */
     private String executeStoreMemoryTool(String sessionId, String argumentsJson) {
         try {
             JsonNode args = objectMapper.readTree(argumentsJson);
-            String    content    = args.path("content").asText();
-            String    typeStr    = args.path("memory_type").asText("SEMANTIC");
-            float     importance = (float) args.path("importance").asDouble(0.8);
+            String   content    = args.path("content").asText();
+            String   typeStr    = args.path("memory_type").asText("SEMANTIC");
+            float    importance = (float) args.path("importance").asDouble(0.8);
 
             if (content == null || content.isBlank()) {
                 return "[ToolError] store_memory called with empty content — skipping.";
             }
 
-            // Deduplicate: if we've already stored exactly this content for this session
-            // in the current JVM, skip writing it again. This helps models that tend to
-            // over-use the memory tool with identical facts.
-            Set<String> seen =
-                    sessionStoredMemories.computeIfAbsent(sessionId, k -> ConcurrentHashMap.newKeySet());
-            if (!seen.add(content)) {
-                return "Memory already stored previously; skipping duplicate.";
+            String     normalized = normalizeForDedupe(content);
+            Set<String> seen      = sessionStoredMemories.computeIfAbsent(sessionId, k -> ConcurrentHashMap.newKeySet());
+
+            if (seen.contains(normalized)) {
+                return "Memory already stored previously; skipping duplicate. Reply to the user now.";
             }
+            String prefix = prefixOf(normalized, STORE_MEMORY_PREFIX_LEN);
+            for (String existing : seen) {
+                if (prefix.equals(prefixOf(existing, STORE_MEMORY_PREFIX_LEN))) {
+                    log.debug("[Agent:{}] store_memory skipped (same-topic prefix): {}", sessionId, prefix);
+                    return "Already stored similar content. Reply to the user in natural language now.";
+                }
+            }
+            seen.add(normalized);
 
             MemoryType memType;
             try { memType = MemoryType.valueOf(typeStr.toUpperCase()); }
@@ -411,6 +436,16 @@ public class AgentLoopService {
         } catch (Exception e) {
             return "[ToolError] store_memory failed: " + e.getMessage();
         }
+    }
+
+    private static String normalizeForDedupe(String content) {
+        if (content == null) return "";
+        return content.trim().toLowerCase().replaceAll("\\s+", " ");
+    }
+
+    private static String prefixOf(String s, int maxLen) {
+        if (s == null || s.isEmpty()) return "";
+        return s.length() <= maxLen ? s : s.substring(0, maxLen);
     }
 
     private String executeJavaTool(AgentTool tool, String arguments, String sessionId) {
@@ -429,24 +464,88 @@ public class AgentLoopService {
                 .formatted(tool.getToolName(), tool.getToolType(), arguments);
     }
 
-    // ── Tool loading ─────────────────────────────────────────────────────────
+    // ── Tool loading (vectorized: only pass semantically relevant tools) ─────
 
     /**
-     * Load all active tools PLUS the built-in store_memory tool.
-     * Called on every iteration so right-brain-created tools are picked up live.
+     * Returns the last user message content from context, or taskDescription if none.
+     * Used as the query for tool retrieval.
      */
-    private List<Tool> loadActiveTools() {
+    private String lastUserMessageFrom(List<Message> context, String taskDescription) {
+        if (context == null || context.isEmpty()) return taskDescription != null ? taskDescription : "";
+        for (int i = context.size() - 1; i >= 0; i--) {
+            Message m = context.get(i);
+            if ("user".equals(m.role()) && m.content() != null && !m.content().isBlank()) {
+                return m.content();
+            }
+        }
+        return taskDescription != null ? taskDescription : "";
+    }
+
+    /**
+     * Load tools by semantic relevance to the current query (e.g. last user message).
+     * Uses the current user's embedding model for tool search (same as memories).
+     * When the index is unavailable or returns nothing, falls back to all active tools.
+     */
+    private List<Tool> loadRelevantTools(String queryText, int topK, Long userId) {
+        List<String> relevantIds = toolIndexService.searchRelevantTools(queryText, topK, userId);
+        if (relevantIds == null || relevantIds.isEmpty()) {
+            return loadAllTools();
+        }
         List<Tool> tools = new ArrayList<>();
+        Set<String> added = new java.util.LinkedHashSet<>();
+        for (String id : relevantIds) {
+            if (id == null || !added.add(id)) continue;
+            if ("recall_memory".equals(id)) {
+                tools.add(buildRecallMemoryTool());
+            } else if ("store_memory".equals(id)) {
+                tools.add(buildStoreMemoryTool());
+            } else {
+                toolRepository.findByToolName(id).map(this::toTool).ifPresent(tools::add);
+            }
+        }
+        return tools;
+    }
 
-        // Built-in: store_memory — always available
+    /** Fallback: all built-in + all active DB tools (used when tool index is empty or disabled). */
+    private List<Tool> loadAllTools() {
+        List<Tool> tools = new ArrayList<>();
+        tools.add(buildRecallMemoryTool());
         tools.add(buildStoreMemoryTool());
-
-        // Dynamic tools from DB
         toolRepository.findByIsActiveTrue().stream()
                 .map(this::toTool)
                 .forEach(tools::add);
-
         return tools;
+    }
+
+    private Tool buildRecallMemoryTool() {
+        String schema = """
+                {
+                  "type":"object",
+                  "properties":{
+                    "query":{
+                      "type":"string",
+                      "description":"Natural language query for what to recall (e.g. '用户的名字', 'user name', '用户偏好', 'what the user told me before'). Use the user's question or intent in Chinese or English."
+                    },
+                    "top_k":{
+                      "type":"integer",
+                      "minimum":1,
+                      "maximum":20,
+                      "description":"Max number of memories to return (default 10)."
+                    }
+                  },
+                  "required":["query"]
+                }
+                """;
+        try {
+            JsonNode params = objectMapper.readTree(schema);
+            return Tool.ofFunction(new ToolFunction(
+                    "recall_memory",
+                    "Search long-term memory by natural language query. Returns relevant past information (e.g. user profile, name, preferences). Use when you need to look up something that may have been stored before.",
+                    params
+            ));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to build recall_memory tool schema", e);
+        }
     }
 
     private Tool buildStoreMemoryTool() {
@@ -456,7 +555,7 @@ public class AgentLoopService {
                   "properties":{
                     "content":{
                       "type":"string",
-                      "description":"A stable, long-term fact that will be useful in many future tasks (e.g. persistent user preferences, long-term goals). Do NOT store the current question verbatim or trivial restatements."
+                      "description":"A stable, long-term fact that will be useful in many future tasks (e.g. persistent user preferences, long-term goals). ALWAYS rewrite the fact into a clear third-person sentence with an explicit subject before storing it. For example: '用户的名字是 Zed', '智能体的名字是 Forge', '用户是 Java 后端开发人员'. NEVER store ambiguous first-person sentences like '我的名字是 Forge' or 'I am a Java developer' — rewrite them to refer explicitly to the user or the assistant first, then call this tool."
                     },
                     "memory_type":{
                       "type":"string",

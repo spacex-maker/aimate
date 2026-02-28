@@ -43,4 +43,16 @@ public record ChatRequest(
                 .maxTokens(4096)
                 .build();
     }
+
+    /** Force text-only reply (no tool calls). Use after duplicate store_memory skip to break loop. */
+    public static ChatRequest withNoTools(String model, List<Message> messages) {
+        return ChatRequest.builder()
+                .model(model)
+                .messages(messages)
+                .tools(null)
+                .toolChoice("none")
+                .temperature(0.7)
+                .maxTokens(4096)
+                .build();
+    }
 }

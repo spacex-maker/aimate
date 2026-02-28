@@ -51,6 +51,21 @@ public record AgentEvent(
         return new AgentEvent(sessionId, EventType.PLAN_UPDATE, null, plan, iteration, now());
     }
 
+    /** Plan steps (e.g. ["回忆", "思考与执行", "回答"]). payload = List<String>. */
+    public static AgentEvent planReady(String sessionId, java.util.List<String> steps) {
+        return new AgentEvent(sessionId, EventType.PLAN_READY, null, steps, 0, now());
+    }
+
+    public static AgentEvent stepStart(String sessionId, int stepIndex, String title) {
+        return new AgentEvent(sessionId, EventType.STEP_START, null,
+                new StepPayload(stepIndex, title, null), 0, now());
+    }
+
+    public static AgentEvent stepComplete(String sessionId, int stepIndex, String title, String summary) {
+        return new AgentEvent(sessionId, EventType.STEP_COMPLETE, summary,
+                new StepPayload(stepIndex, title, summary), 0, now());
+    }
+
     public static AgentEvent finalAnswer(String sessionId, String answer, int iteration) {
         return new AgentEvent(sessionId, EventType.FINAL_ANSWER, answer, null, iteration, now());
     }
@@ -70,4 +85,7 @@ public record AgentEvent(
     // ── Nested payload types ─────────────────────────────────────────────────
 
     public record ToolResultPayload(String toolName, String output) {}
+
+    /** step_index (1-based), title, optional summary. */
+    public record StepPayload(int stepIndex, String title, String summary) {}
 }

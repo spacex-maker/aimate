@@ -36,9 +36,10 @@ import java.util.Map;
 @Service
 public class LongTermMemoryService {
 
-    private static final float   MIN_SCORE_THRESHOLD = 0.75f;
+    /** Minimum similarity score for recall() results. Set to 0 to always return ranked hits. */
+    private static final float   MIN_SCORE_THRESHOLD = 0.0f;
     private static final List<String> ALL_FIELDS = List.of(
-            "id", "user_id", "session_id", "content", "memory_type", "importance", "create_time_ms");
+            "id", "session_id", "content", "memory_type", "importance", "create_time_ms");
 
     private static final DateTimeFormatter TIME_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
@@ -115,11 +116,6 @@ public class LongTermMemoryService {
             List<Float> vector  = ctx.client().embed(content);
 
             JsonObject row = new JsonObject();
-            if (userId != null) {
-                row.addProperty("user_id", String.valueOf(userId));
-            } else {
-                row.addProperty("user_id", "");
-            }
             row.addProperty("session_id",     sessionId);
             row.addProperty("content",        truncate(content, 4000));
             row.addProperty("memory_type",    memoryType.name());
@@ -149,18 +145,14 @@ public class LongTermMemoryService {
 
     // ── Recall (ANN search) ──────────────────────────────────────────────────
 
-    /** Recall with user-configured embedding model — across all memories for this user. */
+    /** Recall with user-configured embedding model — across all memories for this model/collection. */
     public List<MemoryRecord> recall(String queryText, int topK, @Nullable Long userId) {
         if (milvusUnavailable()) return List.of();
         try {
             EmbeddingContext ctx    = resolveContext(userId);
             List<Float>      vector = ctx.client().embed(queryText);
-            // If we know the user, scope recall to their memories only.
-            String filter = null;
-            if (userId != null) {
-                filter = "user_id == \"%s\"".formatted(userId);
-            }
-            return searchMilvus(vector, topK, filter, ctx.collectionName());
+            // Collection is already chosen via user-specific embedding config, no extra filter needed here.
+            return searchMilvus(vector, topK, null, ctx.collectionName());
         } catch (Exception e) {
             log.warn("[Memory] Recall failed: {}", e.getMessage());
             return List.of();
@@ -172,17 +164,25 @@ public class LongTermMemoryService {
         return recall(queryText, topK, null);
     }
 
-    public List<MemoryRecord> recallFromSession(String queryText, String sessionId, int topK) {
+    public List<MemoryRecord> recallFromSession(String queryText,
+                                                String sessionId,
+                                                int topK,
+                                                @Nullable Long userId) {
         if (milvusUnavailable()) return List.of();
         try {
-            List<Float> queryVector = embeddingClient.embed(queryText);
-            return searchMilvus(queryVector, topK,
-                    "session_id == \"%s\"".formatted(sessionId),
-                    milvusProps.collectionName());
+            EmbeddingContext ctx    = resolveContext(userId);
+            List<Float>      vector = ctx.client().embed(queryText);
+            String filter = "session_id == \"%s\"".formatted(sessionId);
+            return searchMilvus(vector, topK, filter, ctx.collectionName());
         } catch (Exception e) {
             log.warn("[Memory] Session recall failed: {}", e.getMessage());
             return List.of();
         }
+    }
+
+    /** Backward-compatible overload — system embedding + default collection. */
+    public List<MemoryRecord> recallFromSession(String queryText, String sessionId, int topK) {
+        return recallFromSession(queryText, sessionId, topK, null);
     }
 
     /**
@@ -194,8 +194,8 @@ public class LongTermMemoryService {
         try {
             EmbeddingContext ctx    = resolveContext(userId);
             List<Float>      vector = ctx.client().embed(queryText);
-            String filter = "user_id == \"%s\" and memory_type == \"%s\""
-                    .formatted(userId, MemoryType.SEMANTIC.name());
+            // Same collection is shared by this user's memories; filter only by memory_type.
+            String filter = "memory_type == \"%s\"".formatted(MemoryType.SEMANTIC.name());
             return searchMilvus(vector, topK, filter, ctx.collectionName());
         } catch (Exception e) {
             log.warn("[Memory] User semantic recall failed: {}", e.getMessage());
@@ -217,44 +217,76 @@ public class LongTermMemoryService {
 
     /**
      * List memories with optional filters, supporting pagination.
+     * Uses the user's configured collection when userId is set; otherwise default.
      *
      * @param memoryType  null = all types
      * @param sessionId   null = all sessions
      * @param keyword     null = no keyword filter (exact substring in content)
      * @param offset      pagination offset
      * @param limit       page size (max 100)
+     * @param userId      current user (determines which collection to query)
      * @return page of MemoryItem
      */
     public List<MemoryItem> listMemories(MemoryType memoryType,
                                          String sessionId,
                                          String keyword,
                                          long offset,
-                                         int limit) {
+                                         int limit,
+                                         @Nullable Long userId) {
         if (milvusUnavailable()) return List.of();
+        String collectionName = resolveContext(userId).collectionName();
         String filter = buildFilter(memoryType, sessionId, keyword);
 
+        // 为了保证按时间倒序排序，这里不直接依赖 Milvus 的返回顺序，而是：
+        // 1）最多拉取 offset+limit 条记录（上限 1000 条）；
+        // 2）在内存中按 create_time_ms 降序排序；
+        // 3）再做分页切片。
+        long safeOffset = Math.max(0, offset);
+        int pageSize = Math.min(limit, 100);
+        int fetchLimit = (int) Math.min(safeOffset + pageSize, 1000);
+
         QueryReq.QueryReqBuilder builder = QueryReq.builder()
-                .collectionName(milvusProps.collectionName())
+                .collectionName(collectionName)
                 .outputFields(ALL_FIELDS)
-                .offset(offset)
-                .limit(Math.min(limit, 100));
+                .offset(0L)
+                .limit(fetchLimit);
 
         if (filter != null) builder.filter(filter);
 
         QueryResp resp = milvusClient.query(builder.build());
-        return toMemoryItems(resp);
+        if (resp == null || resp.getQueryResults().isEmpty()) return List.of();
+
+        List<MemoryItemWithTime> withTime = new ArrayList<>();
+        for (QueryResp.QueryResult r : resp.getQueryResults()) {
+            Map<String, Object> e = r.getEntity();
+            long createTimeMs = ((Number) e.getOrDefault("create_time_ms", 0L)).longValue();
+            MemoryItem item = toMemoryItem(e.get("id"), e, null);
+            withTime.add(new MemoryItemWithTime(item, createTimeMs));
+        }
+
+        // 按创建时间降序排序（最新的排在最前）
+        withTime.sort((a, b) -> Long.compare(b.createTimeMs, a.createTimeMs));
+
+        int from = (int) Math.min(safeOffset, withTime.size());
+        int to = Math.min(from + pageSize, withTime.size());
+        List<MemoryItem> page = new ArrayList<>(Math.max(to - from, 0));
+        for (int i = from; i < to; i++) {
+            page.add(withTime.get(i).item);
+        }
+        return page;
     }
 
     /**
      * Count total memories (with optional filter).
-     * Uses a COUNT expression query — no data transfer.
+     * Uses the user's configured collection when userId is set.
      */
-    public long countMemories(MemoryType memoryType, String sessionId) {
+    public long countMemories(MemoryType memoryType, String sessionId, @Nullable Long userId) {
         if (milvusUnavailable()) return 0L;
+        String collectionName = resolveContext(userId).collectionName();
         String filter = buildFilter(memoryType, sessionId, null);
 
         QueryReq.QueryReqBuilder builder = QueryReq.builder()
-                .collectionName(milvusProps.collectionName())
+                .collectionName(collectionName)
                 .outputFields(List.of("count(*)"));
 
         if (filter != null) builder.filter(filter);
@@ -268,59 +300,74 @@ public class LongTermMemoryService {
 
     /**
      * Semantic search visible to the user (no threshold applied — returns all results).
+     * Uses the user's configured embedding model + collection when available.
      */
-    public List<MemoryItem> searchMemories(String queryText, int topK) {
+    public List<MemoryItem> searchMemories(String queryText, int topK, @Nullable Long userId) {
         if (milvusUnavailable()) return List.of();
-        List<Float> queryVector = embeddingClient.embed(queryText);
+        try {
+            EmbeddingContext ctx    = resolveContext(userId);
+            List<Float>      vector = ctx.client().embed(queryText);
 
-        SearchResp resp = milvusClient.search(SearchReq.builder()
-                .collectionName(milvusProps.collectionName())
-                .data(List.of(new FloatVec(queryVector)))
-                .annsField("embedding")
-                .topK(topK)
-                .outputFields(ALL_FIELDS)
-                .build());
+            SearchResp resp = milvusClient.search(SearchReq.builder()
+                    .collectionName(ctx.collectionName())
+                    .data(List.of(new FloatVec(vector)))
+                    .annsField("embedding")
+                    .topK(topK)
+                    .outputFields(ALL_FIELDS)
+                    .build());
 
-        List<MemoryItem> results = new ArrayList<>();
-        if (resp == null || resp.getSearchResults() == null) return results;
+            List<MemoryItem> results = new ArrayList<>();
+            if (resp == null || resp.getSearchResults() == null) return results;
 
-        for (List<SearchResp.SearchResult> row : resp.getSearchResults()) {
-            for (SearchResp.SearchResult hit : row) {
-                Float s = hit.getScore();
-                results.add(toMemoryItem(hit.getId(), hit.getEntity(), s == null ? null : s.doubleValue()));
+            for (List<SearchResp.SearchResult> row : resp.getSearchResults()) {
+                for (SearchResp.SearchResult hit : row) {
+                    Float s = hit.getScore();
+                    results.add(toMemoryItem(hit.getId(), hit.getEntity(), s == null ? null : s.doubleValue()));
+                }
             }
+            return results;
+        } catch (Exception e) {
+            log.warn("[Memory] searchMemories failed: {}", e.getMessage());
+            return List.of();
         }
-        return results;
+    }
+
+    /** Backward-compatible overload — system embedding + default collection. */
+    public List<MemoryItem> searchMemories(String queryText, int topK) {
+        return searchMemories(queryText, topK, null);
     }
 
     // ── Delete ───────────────────────────────────────────────────────────────
 
-    /** Delete a single memory by its Milvus auto-generated id. */
-    public void deleteById(long id) {
+    /** Delete a single memory by its Milvus auto-generated id (in user's collection). */
+    public void deleteById(long id, @Nullable Long userId) {
         if (milvusUnavailable()) return;
+        String collectionName = resolveContext(userId).collectionName();
         milvusClient.delete(DeleteReq.builder()
-                .collectionName(milvusProps.collectionName())
+                .collectionName(collectionName)
                 .ids(List.of(id))
                 .build());
         log.info("[Memory] Deleted memory id={}", id);
     }
 
-    /** Delete all memories for a given session. */
-    public long deleteBySession(String sessionId) {
+    /** Delete all memories for a given session (in user's collection). */
+    public long deleteBySession(String sessionId, @Nullable Long userId) {
         if (milvusUnavailable()) return 0L;
+        String collectionName = resolveContext(userId).collectionName();
         milvusClient.delete(DeleteReq.builder()
-                .collectionName(milvusProps.collectionName())
+                .collectionName(collectionName)
                 .filter("session_id == \"%s\"".formatted(sessionId))
                 .build());
         log.info("[Memory] Deleted memories for session {}", sessionId);
-        return 0; // Milvus v2 delete doesn't return count; caller can query before if needed
+        return 0; // Milvus v2 delete doesn't return count
     }
 
-    /** Delete all memories of a given type. */
-    public void deleteByType(MemoryType memoryType) {
+    /** Delete all memories of a given type (in user's collection). */
+    public void deleteByType(MemoryType memoryType, @Nullable Long userId) {
         if (milvusUnavailable()) return;
+        String collectionName = resolveContext(userId).collectionName();
         milvusClient.delete(DeleteReq.builder()
-                .collectionName(milvusProps.collectionName())
+                .collectionName(collectionName)
                 .filter("memory_type == \"%s\"".formatted(memoryType.name()))
                 .build());
         log.info("[Memory] Deleted all {} memories", memoryType);
@@ -334,8 +381,8 @@ public class LongTermMemoryService {
                 .collectionName(collectionName)
                 .data(List.of(new FloatVec(queryVector)))
                 .annsField("embedding")
-                    .topK(topK)
-                    .outputFields(List.of("content", "memory_type", "user_id", "session_id", "importance"));
+                .topK(topK)
+                .outputFields(List.of("content", "memory_type", "session_id", "importance"));
 
         if (filter != null && !filter.isBlank()) builder.filter(filter);
 
@@ -415,6 +462,16 @@ public class LongTermMemoryService {
     private MemoryType memType(Map<String, Object> e) {
         try { return MemoryType.valueOf(str(e, "memory_type")); }
         catch (Exception ex) { return MemoryType.EPISODIC; }
+    }
+
+    private static final class MemoryItemWithTime {
+        final MemoryItem item;
+        final long createTimeMs;
+
+        private MemoryItemWithTime(MemoryItem item, long createTimeMs) {
+            this.item = item;
+            this.createTimeMs = createTimeMs;
+        }
     }
 
     private String truncate(String text, int maxLen) {

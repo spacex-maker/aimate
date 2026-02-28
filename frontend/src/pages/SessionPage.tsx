@@ -1,13 +1,13 @@
 import { useCallback, useReducer, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Pause, Play, StopCircle, ArrowLeft, Copy } from 'lucide-react'
+import { Pause, Play, StopCircle, ArrowLeft, Copy, Send } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { agentApi } from '../api/agent'
 import { useAgentSocket } from '../hooks/useAgentSocket'
 import { ThinkingStream } from '../components/agent/ThinkingStream'
 import { StatusBadge } from '../components/agent/StatusBadge'
-import type { AgentEvent, StreamBlock, ToolCall } from '../types/agent'
+import type { AgentEvent, PlanState, StreamBlock, ToolCall } from '../types/agent'
 
 // ── Block reducer ─────────────────────────────────────────────────────────────
 type Action =
@@ -91,6 +91,7 @@ export function SessionPage() {
   const [blocks, dispatch] = useReducer(reducer, [])
   const statusRef = useRef<string>('PENDING')
   const [followup, setFollowup] = useState('')
+  const [plan, setPlan] = useState<PlanState>({ steps: [], currentStepIndex: 0, stepSummaries: {} })
 
   // 显式传入 /session/undefined 或 /session/null 才视为真正的非法 ID；
   // 其他情况（正常 UUID）一律放行。
@@ -136,6 +137,25 @@ export function SessionPage() {
 
   const handleEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
+      case 'PLAN_READY': {
+        const steps = Array.isArray(event.payload) ? (event.payload as string[]) : []
+        setPlan(prev => ({ ...prev, steps, currentStepIndex: 0, stepSummaries: {} }))
+        break
+      }
+      case 'STEP_START': {
+        const p = event.payload as { stepIndex: number; title: string }
+        if (p?.stepIndex) setPlan(prev => ({ ...prev, currentStepIndex: p.stepIndex }))
+        break
+      }
+      case 'STEP_COMPLETE': {
+        const p = event.payload as { stepIndex: number; title: string; summary?: string }
+        const summary = p?.summary ?? event.content ?? ''
+        if (p?.stepIndex) setPlan(prev => ({
+          ...prev,
+          stepSummaries: { ...prev.stepSummaries, [p.stepIndex]: summary },
+        }))
+        break
+      }
       case 'ITERATION_START':
         dispatch({ type: 'ITERATION_START', iteration: event.iteration })
         break
@@ -264,37 +284,91 @@ export function SessionPage() {
         </div>
       </div>
 
-      {/* Stream */}
-      <ThinkingStream blocks={displayBlocks} isRunning={isRunning} />
+      {/* Plan + Stream */}
+      <div className="flex-1 flex min-h-0">
+        {plan.steps.length > 0 && (
+          <div className="w-52 flex-shrink-0 border-r border-white/10 bg-black/20 flex flex-col">
+            <div className="px-4 py-3 border-b border-white/10">
+              <h3 className="text-xs font-semibold text-white/60 uppercase tracking-wider">执行计划</h3>
+            </div>
+            <ul className="p-3 space-y-2 overflow-y-auto">
+              {plan.steps.map((title, i) => {
+                const stepNum = i + 1
+                const isCurrent = plan.currentStepIndex === stepNum
+                const summary = plan.stepSummaries[stepNum]
+                const isDone = !!summary
+                return (
+                  <li key={stepNum} className="flex gap-2">
+                    <span className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
+                      isDone ? 'bg-green-500/20 text-green-400' : isCurrent ? 'bg-blue-500/30 text-blue-300' : 'bg-white/10 text-white/40'
+                    }`}>
+                      {isDone ? '✓' : stepNum}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-sm truncate ${isCurrent && !isDone ? 'text-white font-medium' : 'text-white/70'}`}>
+                        {title}
+                      </p>
+                      {summary && <p className="text-xs text-white/40 mt-0.5 line-clamp-2">{summary}</p>}
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        )}
+        <div className="flex-1 min-w-0 flex flex-col">
+          <ThinkingStream
+            userMessage={session?.taskDescription ?? null}
+            blocks={displayBlocks}
+            isRunning={isRunning}
+          />
+        </div>
+      </div>
 
-      {/* Follow-up input for multi-turn when session is completed */}
-      {session && session.status === 'COMPLETED' && (
+      {/* Follow-up input: Gemini 风格 — 单条圆角输入条，输入与发送同一行 */}
+      {session && (
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            if (!followup.trim() || !effectiveSessionId) return
+            if (!followup.trim() || !effectiveSessionId || session.status !== 'COMPLETED') return
             continueMutation.mutate(followup.trim())
           }}
-          className="flex-shrink-0 border-t border-white/10 px-6 py-3 bg-black/40"
+          className="flex-shrink-0 px-4 py-4 sm:px-6"
         >
-          <label className="text-xs text-white/40 mb-1.5 block">
-            继续提问（基于当前会话上下文）
-          </label>
-          <div className="flex items-end gap-3">
-            <textarea
-              value={followup}
-              onChange={e => setFollowup(e.target.value)}
-              rows={2}
-              className="flex-1 bg-[#111] border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 resize-none focus:outline-none focus:border-blue-500/60"
-              placeholder="输入你的后续问题..."
-            />
-            <button
-              type="submit"
-              disabled={!followup.trim() || continueMutation.isPending || !effectiveSessionId}
-              className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {continueMutation.isPending ? '发送中...' : '发送'}
-            </button>
+          <div className="max-w-3xl mx-auto w-full">
+            <div className="flex items-end gap-0 rounded-2xl bg-white/[0.06] border border-white/10 shadow-lg focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10 transition-all">
+              <textarea
+                value={followup}
+                onChange={e => setFollowup(e.target.value)}
+                rows={1}
+                className="flex-1 min-h-[52px] max-h-32 py-3 pl-4 pr-2 bg-transparent text-sm text-white placeholder-white/35 resize-none focus:outline-none rounded-l-2xl rounded-r-none"
+                placeholder={
+                  session.status !== 'COMPLETED'
+                    ? '当前正在执行中，等待本轮结束后可继续提问'
+                    : '输入消息，Enter 发送 · Shift+Enter 换行'
+                }
+              />
+              <button
+                type="submit"
+                disabled={
+                  !followup.trim() ||
+                  continueMutation.isPending ||
+                  !effectiveSessionId ||
+                  session.status !== 'COMPLETED'
+                }
+                className="flex-shrink-0 p-3 rounded-l-none rounded-r-2xl text-white/70 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
+                title="发送"
+              >
+                {continueMutation.isPending ? (
+                  <span className="text-xs">发送中</span>
+                ) : (
+                  <Send className="w-5 h-5" />
+                )}
+              </button>
+            </div>
+            <p className="mt-1.5 text-center text-xs text-white/35">
+              {session.status !== 'COMPLETED' ? '需等待本轮回答结束后再发送' : '继续提问将基于当前会话上下文'}
+            </p>
           </div>
         </form>
       )}

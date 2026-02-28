@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, Plus, Trash2, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import { Search, Plus, Trash2, ChevronLeft, ChevronRight, RefreshCw, Merge } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { memoryApi } from '../api/memory'
 import { MemoryTable } from '../components/memory/MemoryTable'
 import { AddMemoryModal } from '../components/memory/AddMemoryModal'
+import { CompressMemoryModal } from '../components/memory/CompressMemoryModal'
 import type { MemoryType, AddMemoryRequest } from '../types/memory'
 
 const PAGE_SIZE = 20
@@ -29,7 +30,8 @@ export function MemoryPage() {
   const [sessionFilter, setSessionFilter] = useState('')
   const [keyword, setKeyword] = useState('')
   const [showAddModal, setShowAddModal] = useState(false)
-  const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [showCompressModal, setShowCompressModal] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   // Search state
   const [searchQ, setSearchQ] = useState('')
@@ -37,7 +39,12 @@ export function MemoryPage() {
 
   // ── Queries ──────────────────────────────────────────────────────────────────
   const browseKey = ['memories', page, typeFilter, sessionFilter, keyword]
-  const { data: browseData, isLoading: browseLoading, refetch } = useQuery({
+  const {
+    data: browseData,
+    isLoading: browseLoading,
+    isFetching: browseFetching,
+    refetch,
+  } = useQuery({
     queryKey: browseKey,
     queryFn: () =>
       memoryApi.list({
@@ -63,13 +70,39 @@ export function MemoryPage() {
 
   // ── Mutations ────────────────────────────────────────────────────────────────
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => memoryApi.deleteById(id),
-    onMutate: (id) => setDeletingId(id),
-    onSuccess: () => {
-      toast.success('已删除')
+    mutationFn: (id: string) => memoryApi.deleteById(id),
+    onMutate: (id: string) => setDeletingId(id),
+    onSuccess: (_data, id) => {
+      // Optimistically更新当前内存列表和搜索结果，避免需要点击两次才能看到变化
+      queryClient.setQueriesData(
+        { queryKey: ['memories'] },
+        (old: unknown) => {
+          const page = old as { items: any[]; total: number; page: number; size: number } | undefined
+          if (!page) return old
+          return {
+            ...page,
+            items: page.items.filter(m => m.id !== id),
+            total: Math.max(0, page.total - 1),
+          }
+        },
+      )
+
+      if (tab === 'search') {
+        queryClient.setQueriesData(
+          { queryKey: ['memory-search'] },
+          (old: unknown) => {
+            const items = old as any[] | undefined
+            if (!Array.isArray(items)) return old
+            return items.filter(m => m.id !== id)
+          },
+        )
+      }
+
       queryClient.invalidateQueries({ queryKey: ['memories'] })
       queryClient.invalidateQueries({ queryKey: ['memory-count'] })
       if (tab === 'search') queryClient.invalidateQueries({ queryKey: ['memory-search'] })
+
+      toast.success('已删除')
     },
     onError: (e: Error) => toast.error(e.message),
     onSettled: () => setDeletingId(null),
@@ -82,6 +115,18 @@ export function MemoryPage() {
       setShowAddModal(false)
       queryClient.invalidateQueries({ queryKey: ['memories'] })
       queryClient.invalidateQueries({ queryKey: ['memory-count'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const compressExecuteMutation = useMutation({
+    mutationFn: (body: { delete_ids: string[]; new_memories: { content: string; memory_type: string; importance: number }[] }) =>
+      memoryApi.compressExecute(body),
+    onSuccess: () => {
+      toast.success('压缩已完成')
+      queryClient.invalidateQueries({ queryKey: ['memories'] })
+      queryClient.invalidateQueries({ queryKey: ['memory-count'] })
+      if (tab === 'search') queryClient.invalidateQueries({ queryKey: ['memory-search'] })
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -101,9 +146,16 @@ export function MemoryPage() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => refetch()}
-            className="p-2 text-white/30 hover:text-white/70 hover:bg-white/5 rounded-lg transition-colors"
+            disabled={browseFetching}
+            className="p-2 text-white/30 hover:text-white/70 hover:bg-white/5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className={clsx('w-4 h-4', browseFetching && 'animate-spin')} />
+          </button>
+          <button
+            onClick={() => setShowCompressModal(true)}
+            className="flex items-center gap-2 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg text-sm font-medium transition-colors border border-white/10"
+          >
+            <Merge className="w-4 h-4" /> 压缩记忆
           </button>
           <button
             onClick={() => setShowAddModal(true)}
@@ -256,6 +308,15 @@ export function MemoryPage() {
           onClose={() => setShowAddModal(false)}
           onSubmit={(data) => addMutation.mutate(data)}
           isLoading={addMutation.isPending}
+        />
+      )}
+
+      {showCompressModal && (
+        <CompressMemoryModal
+          onClose={() => setShowCompressModal(false)}
+          onPrepare={() => memoryApi.compressPrepare()}
+          onExecute={(body) => compressExecuteMutation.mutateAsync(body)}
+          isExecuting={compressExecuteMutation.isPending}
         />
       )}
     </div>

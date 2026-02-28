@@ -16,42 +16,37 @@ export function ToolCallCard({ call, result }: Props) {
   const isPending = result === null
 
   return (
-    <div className="border border-white/10 rounded-lg overflow-hidden animate-fade-in">
-      {/* Header */}
+    <div className="rounded-xl bg-white/[0.04] border border-white/[0.08] overflow-hidden animate-fade-in">
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center gap-3 px-4 py-3 bg-white/5 hover:bg-white/8 transition-colors text-left"
+        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.04] transition-colors text-left"
       >
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <Wrench className="w-4 h-4 text-purple-400 flex-shrink-0" />
-          <span className="text-sm font-mono text-purple-300 font-medium truncate">
-            {call.function.name}
-          </span>
-          {isPending ? (
-            <Loader className="w-3 h-3 text-white/40 animate-spin ml-auto flex-shrink-0" />
-          ) : (
-            <CheckCircle className="w-3 h-3 text-green-400 ml-auto flex-shrink-0" />
-          )}
-        </div>
-        <span className="text-white/30">
+        <Wrench className="w-3.5 h-3.5 text-white/40 flex-shrink-0" />
+        <span className="text-sm text-white/70 truncate flex-1 min-w-0">
+          {call.function.name}
+        </span>
+        {isPending ? (
+          <Loader className="w-3.5 h-3.5 text-white/40 animate-spin flex-shrink-0" />
+        ) : (
+          <CheckCircle className="w-3.5 h-3.5 text-emerald-400/80 flex-shrink-0" />
+        )}
+        <span className="text-white/25 flex-shrink-0">
           {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </span>
       </button>
 
-      {/* Body */}
       {open && (
-        <div className="px-4 py-3 space-y-3 bg-black/20">
+        <div className="px-4 pb-4 pt-0 space-y-3 border-t border-white/[0.06] mt-0 pt-3">
           <div>
-            <div className="text-[10px] font-mono text-white/30 uppercase mb-1">Parameters</div>
-            <pre className="text-xs text-white/70 font-mono bg-black/30 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all">
+            <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">参数</p>
+            <pre className="text-xs text-white/60 font-mono rounded-lg bg-black/20 p-3 overflow-x-auto whitespace-pre-wrap break-all">
               {JSON.stringify(args, null, 2)}
             </pre>
           </div>
-
           {result !== null && (
             <div>
-              <div className="text-[10px] font-mono text-white/30 uppercase mb-1">Result</div>
-              <pre className="text-xs text-green-300/80 font-mono bg-black/30 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-48">
+              <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">结果</p>
+              <pre className="text-xs text-white/70 font-mono rounded-lg bg-black/20 p-3 overflow-x-auto whitespace-pre-wrap break-all max-h-40">
                 {result}
               </pre>
             </div>

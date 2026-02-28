@@ -3,39 +3,42 @@ package com.openforge.aimate.agent.event;
 /**
  * Classifies every event the Agent emits over WebSocket.
  *
- * Frontend rendering hints:
- *   THINKING       → append token to the "thinking bubble"
- *   TOOL_CALL      → show a spinning "Using tool: xxx" card
- *   TOOL_RESULT    → collapse tool card, show result snippet
- *   ITERATION_START→ open a new reasoning block in the UI
- *   PLAN_UPDATE    → render/refresh the step-list sidebar
- *   FINAL_ANSWER   → display the answer panel, mark session done
- *   STATUS_CHANGE  → update session status badge
- *   ERROR          → show error toast
+ * Flow: PLAN_READY → STEP_START(1) → STEP_COMPLETE(1) → STEP_START(2) → … → STEP_COMPLETE(n) → FINAL_ANSWER.
+ *
+ * Frontend: show plan steps; for current step show STEP_START then stream THINKING/TOOL_* then STEP_COMPLETE.
  */
 public enum EventType {
 
-    /** A single token (or small chunk) from the streaming LLM response. */
+    /** Execution plan (step titles) for this session. payload = List<String>. */
+    PLAN_READY,
+
+    /** A step is starting. payload = step index + title. */
+    STEP_START,
+
+    /** A step finished. payload = step index + title + optional summary. */
+    STEP_COMPLETE,
+
+    /** A single token from the streaming LLM (during step 2). */
     THINKING,
 
     /** The Agent is about to invoke a tool. payload = ToolCall. */
     TOOL_CALL,
 
-    /** A tool has returned its output. payload = ToolResultPayload. */
+    /** A tool has returned. payload = ToolResultPayload. */
     TOOL_RESULT,
 
-    /** A new Agent reasoning iteration has started. */
+    /** A new reasoning iteration inside "思考与执行". */
     ITERATION_START,
 
-    /** The planner produced or updated a plan. payload = List<PlanStep>. */
+    /** @deprecated Use PLAN_READY. */
     PLAN_UPDATE,
 
-    /** The Agent has produced a final answer and the session is complete. */
+    /** Final answer; session complete. */
     FINAL_ANSWER,
 
-    /** The session status has changed (e.g. RUNNING → PAUSED). */
+    /** Session status changed (e.g. RUNNING → PAUSED). */
     STATUS_CHANGE,
 
-    /** An unrecoverable error occurred. content = error message. */
+    /** Unrecoverable error. content = message. */
     ERROR
 }

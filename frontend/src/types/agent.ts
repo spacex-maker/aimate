@@ -22,6 +22,9 @@ export interface StartSessionRequest {
 // ── WebSocket Events ─────────────────────────────────────────────────────────
 
 export type EventType =
+  | 'PLAN_READY'
+  | 'STEP_START'
+  | 'STEP_COMPLETE'
   | 'THINKING'
   | 'TOOL_CALL'
   | 'TOOL_RESULT'
@@ -30,6 +33,12 @@ export type EventType =
   | 'FINAL_ANSWER'
   | 'STATUS_CHANGE'
   | 'ERROR'
+
+export interface StepPayload {
+  stepIndex: number
+  title: string
+  summary?: string | null
+}
 
 export interface ToolCall {
   id: string
@@ -56,6 +65,13 @@ export interface AgentEvent {
 
 // ── UI Blocks (render model) ─────────────────────────────────────────────────
 // Each "block" represents a visual unit in the session stream
+
+// Plan + steps (from PLAN_READY, STEP_START, STEP_COMPLETE)
+export interface PlanState {
+  steps: string[]
+  currentStepIndex: number  // 1-based, 0 = not started
+  stepSummaries: Record<number, string>  // stepIndex -> summary
+}
 
 export type StreamBlock =
   | { kind: 'iteration'; number: number; id: string }
