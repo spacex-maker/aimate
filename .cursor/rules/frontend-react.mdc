@@ -1,0 +1,78 @@
+---
+description: 前端 React/TypeScript 编码规范与架构约定
+globs: frontend/src/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# 前端编码规范
+
+## 目录结构
+```
+frontend/src/
+  api/          # 每个资源一个文件，只做 HTTP 调用，不含状态
+  components/   # 按功能子目录，纯展示组件
+  hooks/        # 自定义 Hook（use* 前缀）
+  pages/        # 路由页面组件，含本地状态和 Query/Mutation
+  types/        # 只含 TypeScript interface/type，无逻辑
+```
+
+## 组件规范
+- 使用具名导出函数组件：`export function MyComponent() {}`
+- Props 类型内联在文件中（不用 React.FC<> 泛型）
+- 样式完全使用 TailwindCSS，全局主题为暗色 (`bg-[#0d0d0d] text-white`)
+- 图标统一使用 `lucide-react`
+
+## API 层规范
+```typescript
+// ✅ api/ 层只做 fetch，返回 Promise<T>
+export const agentApi = {
+  startSession: (task: string) =>
+    httpClient.post<SessionResponse>('/api/agent/sessions', { task }),
+  getSession: (id: string) =>
+    httpClient.get<SessionResponse>(`/api/agent/sessions/${id}`),
+}
+
+// ✅ 页面层用 TanStack Query 消费
+const { data } = useQuery({
+  queryKey: ['session', sessionId],
+  queryFn: () => agentApi.getSession(sessionId!),
+})
+```
+
+## WebSocket (STOMP) 规范
+- 所有实时订阅封装在 `useAgentSocket` hook 中，不要在组件里直接用 `Client`
+- 订阅路径：`/topic/agent/{sessionId}`
+- token 从 `localStorage.getItem('ofx_auth_user')` 取，解析后读 `.token` 字段
+- SockJS 用动态 import：`import('sockjs-client')` 避免 CJS/ESM 问题
+
+## 状态管理规范
+- 服务端状态：TanStack Query（queryKey 格式：`[资源名, id]`）
+- 流式 UI 状态（Agent 思考流）：`useReducer`，见 `SessionPage` 的 `reducer` 实现
+- 认证状态：`useAuth` hook（读写 `localStorage 'ofx_auth_user'`）
+- 不使用 Redux / Zustand / Context（除非确有必要）
+
+## 用户提示
+- 成功/失败消息统一用 `react-hot-toast`：`toast.success('xxx')` / `toast.error(e.message)`
+- 按钮操作中加 `disabled={mutation.isPending}` 防重复提交
+
+## 类型定义规范
+```typescript
+// ✅ types/ 下定义，页面/组件直接 import
+export interface AgentEvent {
+  type: EventType
+  sessionId: string
+  iteration?: number
+  content?: string
+  payload?: unknown
+}
+
+// ✅ StreamBlock 使用 discriminated union
+export type StreamBlock =
+  | { kind: 'thinking'; content: string; complete: boolean; id: string }
+  | { kind: 'toolCall'; call: ToolCall; result: string | null; id: string }
+  | { kind: 'finalAnswer'; content: string; id: string }
+```
+
+## 路由保护
+- 受保护路由包裹在 `<RequireAuth>` 组件中
+- 未登录自动跳转 `/login`

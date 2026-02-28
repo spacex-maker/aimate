@@ -1,0 +1,67 @@
+---
+description: 后端 Java/Spring Boot 编码规范与架构约定
+globs: src/main/java/**/*.java
+alwaysApply: false
+---
+
+# 后端编码规范
+
+## 包结构与命名
+- 根包：`com.openforge.aimate`
+- 新功能模块放在独立子包下（同 `agent/`, `llm/`, `memory/` 的平级目录）
+- DTO 放在模块的 `dto/` 子包；事件类放 `event/` 子包
+- Repository 统一放 `repository/` 包
+
+## Java 25 特性使用
+```java
+// ✅ ScopedValue 传递跨层上下文（不用 ThreadLocal）
+public static final ScopedValue<String> SESSION_SCOPE = ScopedValue.newInstance();
+ScopedValue.where(SESSION_SCOPE, sessionId).run(() -> executeLoop(session));
+
+// ✅ Virtual Threads — agentVirtualThreadExecutor 已在 AppConfig 配置好，直接注入使用
+agentVirtualThreadExecutor.submit(() -> agentLoopService.run(session));
+
+// ✅ Text blocks for multi-line strings (system prompts, SQL, JSON schema)
+String prompt = """
+        You are an autonomous AI agent...
+        """;
+```
+
+## Lombok 约定
+- 实体类：`@Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor`
+- Service/Controller：`@RequiredArgsConstructor`（构造器注入，字段用 `final`）
+- 禁止 `@Data` 用于 JPA 实体（equals/hashCode 问题）
+
+## JPA 实体规范
+- 所有实体继承 `BaseEntity`（含 `id`, `createdAt`, `updatedAt`）
+- 大文本字段用 `columnDefinition = "LONGTEXT"` 或 `"TEXT"`
+- 枚举存字符串：`@Enumerated(EnumType.STRING)`
+- 禁止在实体上写业务逻辑
+
+## REST Controller 规范
+- 类级 `@RequestMapping("/api/xxx")` + 方法级 `@GetMapping` / `@PostMapping` 等
+- 返回 `ResponseEntity<T>`，明确 HTTP 状态码（201 Created / 200 OK / 409 Conflict）
+- 异常用 `ResponseStatusException` 抛出，不要自定义全局 ExceptionHandler（除非必要）
+- 从 `SecurityContextHolder` 获取 userId：`auth.getPrincipal() instanceof Long id`
+
+## Service 层规范
+- 每个 Service 方法中使用 `log.info/debug/warn/error` 记录关键节点
+- 调用外部 HTTP（LLM / Embedding）必须加 Resilience4j 熔断保护
+- 异步操作（写 Milvus）加 try-catch，失败只 warn，不影响主流程
+
+## LLM 调用规范
+- 用 `LlmRouter.streamChat()` 做系统级兜底调用
+- 若用户配置了自己的 key，通过 `UserApiKeyResolver.resolveDefaultLlm()` 获取配置，
+  实例化 `new LlmClient(httpClient, objectMapper, config)` 直接调用
+- 流式回调 token → `AgentEventPublisher.publish(AgentEvent.thinking(...))`
+
+## 新增 Agent 工具
+1. 在 `agent_tools` 表插入记录（tool_type = JAVA_NATIVE）
+2. 在 `AgentLoopService.executeTool()` 的 switch 块中添加 case
+3. `inputSchema` 必须是合法 JSON Schema object
+
+## 错误日志格式
+```java
+log.error("[Agent:{}] 描述: {}", sessionId, e.getMessage(), e);
+log.warn("[模块] 非致命错误: {}", e.getMessage());
+```

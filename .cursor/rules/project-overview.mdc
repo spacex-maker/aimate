@@ -1,0 +1,55 @@
+---
+description: AIMate 项目总览 — 技术栈、模块划分与核心架构约定
+alwaysApply: true
+---
+
+# AIMate 项目总览
+
+## 项目定位
+OpenForgeX 自主 AI Agent 平台。后端驱动 Agent 思考循环，前端实时展示推理流程。
+
+## 技术栈
+
+| 层         | 技术                                                                 |
+|------------|----------------------------------------------------------------------|
+| 后端       | Spring Boot 3.5, Java 25 (Virtual Threads, ScopedValue), MySQL, Milvus |
+| 安全       | Spring Security + JJWT 0.12.x (JWT Bearer)                          |
+| 弹性       | Resilience4j (Circuit Breaker + Retry + RateLimiter)                 |
+| 实时推送   | Spring WebSocket + STOMP，前端订阅 `/topic/agent/{sessionId}`        |
+| 前端       | React 18, TypeScript, Vite, TailwindCSS, TanStack Query v5, React Router v6 |
+| 包命名     | `com.openforge.aimate`                                               |
+
+## 核心模块（后端）
+
+- `agent/` — AgentLoopService (RECALL→THINK→DECIDE→ACT 循环), AgentController (REST)
+- `llm/` — LlmClient (SSE 流式), LlmRouter (primary/fallback), LlmProperties
+- `memory/` — LongTermMemoryService, EmbeddingClient, MilvusCollectionManager (Milvus 向量存储)
+- `auth/` — JWT 登录注册，JwtAuthFilter
+- `apikey/` — 用户自定义 LLM API Key（优先于系统 key）
+- `embedding/` — 用户自定义 Embedding 模型配置
+- `websocket/` — AgentEventPublisher，STOMP 事件分发
+
+## Agent 循环顺序（每次迭代）
+1. RECALL — 从 Milvus 召回相关长期记忆
+2. THINK  — 流式调用 LLM，token 推送 WebSocket
+3. DECIDE — 有 tool_call → ACT；否则 → DONE
+4. ACT    — 执行工具，追加结果到上下文
+5. PERSIST — 保存 contextWindow 到 DB
+6. CHECK  — 超过 MAX_ITERATIONS(30) 则终止
+
+## 关键数据模型
+- `AgentSession` — 会话主表，存 contextWindow(LONGTEXT), status, iterationCount, result
+- `AgentTool` — 动态工具注册表 (JAVA_NATIVE / PYTHON_SCRIPT / NODE_SCRIPT / SHELL_CMD)
+- `UserApiKey` — 用户私有 LLM key (provider + model + baseUrl)
+- `UserEmbeddingModel` — 用户私有 Embedding 配置
+
+## WebSocket 事件类型（EventType）
+`ITERATION_START` | `THINKING` | `TOOL_CALL` | `TOOL_RESULT` | `FINAL_ANSWER` | `STATUS_CHANGE` | `ERROR`
+
+## 前端路由结构
+- `/`                  — HomePage (创建/列出 sessions)
+- `/session/:id`       — SessionPage (实时思考流)
+- `/memory`            — MemoryPage (长期记忆管理)
+- `/api-keys`          — ApiKeyPage
+- `/embedding-models`  — EmbeddingModelPage
+- `/login`, `/register` — 公开页面

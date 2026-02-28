@@ -38,7 +38,7 @@ public class LongTermMemoryService {
 
     private static final float   MIN_SCORE_THRESHOLD = 0.75f;
     private static final List<String> ALL_FIELDS = List.of(
-            "id", "session_id", "content", "memory_type", "importance", "create_time_ms");
+            "id", "user_id", "session_id", "content", "memory_type", "importance", "create_time_ms");
 
     private static final DateTimeFormatter TIME_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
@@ -115,6 +115,11 @@ public class LongTermMemoryService {
             List<Float> vector  = ctx.client().embed(content);
 
             JsonObject row = new JsonObject();
+            if (userId != null) {
+                row.addProperty("user_id", String.valueOf(userId));
+            } else {
+                row.addProperty("user_id", "");
+            }
             row.addProperty("session_id",     sessionId);
             row.addProperty("content",        truncate(content, 4000));
             row.addProperty("memory_type",    memoryType.name());
@@ -144,13 +149,18 @@ public class LongTermMemoryService {
 
     // ── Recall (ANN search) ──────────────────────────────────────────────────
 
-    /** Recall with user-configured embedding model. */
+    /** Recall with user-configured embedding model — across all memories for this user. */
     public List<MemoryRecord> recall(String queryText, int topK, @Nullable Long userId) {
         if (milvusUnavailable()) return List.of();
         try {
             EmbeddingContext ctx    = resolveContext(userId);
             List<Float>      vector = ctx.client().embed(queryText);
-            return searchMilvus(vector, topK, null, ctx.collectionName());
+            // If we know the user, scope recall to their memories only.
+            String filter = null;
+            if (userId != null) {
+                filter = "user_id == \"%s\"".formatted(userId);
+            }
+            return searchMilvus(vector, topK, filter, ctx.collectionName());
         } catch (Exception e) {
             log.warn("[Memory] Recall failed: {}", e.getMessage());
             return List.of();
@@ -171,6 +181,24 @@ public class LongTermMemoryService {
                     milvusProps.collectionName());
         } catch (Exception e) {
             log.warn("[Memory] Session recall failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Recall high-level semantic memories for a specific user, independent of session.
+     * Used to build user-level profile in the Agent system prompt.
+     */
+    public List<MemoryRecord> recallUserSemantic(String queryText, int topK, Long userId) {
+        if (milvusUnavailable() || userId == null) return List.of();
+        try {
+            EmbeddingContext ctx    = resolveContext(userId);
+            List<Float>      vector = ctx.client().embed(queryText);
+            String filter = "user_id == \"%s\" and memory_type == \"%s\""
+                    .formatted(userId, MemoryType.SEMANTIC.name());
+            return searchMilvus(vector, topK, filter, ctx.collectionName());
+        } catch (Exception e) {
+            log.warn("[Memory] User semantic recall failed: {}", e.getMessage());
             return List.of();
         }
     }
@@ -306,8 +334,8 @@ public class LongTermMemoryService {
                 .collectionName(collectionName)
                 .data(List.of(new FloatVec(queryVector)))
                 .annsField("embedding")
-                .topK(topK)
-                .outputFields(List.of("content", "memory_type", "session_id", "importance"));
+                    .topK(topK)
+                    .outputFields(List.of("content", "memory_type", "user_id", "session_id", "importance"));
 
         if (filter != null && !filter.isBlank()) builder.filter(filter);
 

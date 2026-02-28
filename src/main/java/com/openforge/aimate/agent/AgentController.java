@@ -1,8 +1,10 @@
 package com.openforge.aimate.agent;
 
+import com.openforge.aimate.agent.dto.ContinueSessionRequest;
 import com.openforge.aimate.agent.dto.SessionResponse;
 import com.openforge.aimate.agent.dto.StartSessionRequest;
 import com.openforge.aimate.domain.AgentSession;
+import com.openforge.aimate.llm.model.Message;
 import com.openforge.aimate.repository.AgentSessionRepository;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -21,11 +23,12 @@ import java.util.concurrent.ExecutorService;
  * REST API for Agent session lifecycle management.
  *
  * Endpoints:
- *   POST   /api/agent/sessions            — create and immediately start a new session
- *   GET    /api/agent/sessions/{id}       — poll current session status / result
- *   POST   /api/agent/sessions/{id}/pause — pause (loop idles between iterations)
- *   POST   /api/agent/sessions/{id}/resume— resume a paused session
- *   DELETE /api/agent/sessions/{id}       — abort and mark as FAILED
+ *   POST   /api/agent/sessions              — create and immediately start a new session
+ *   GET    /api/agent/sessions/{id}         — poll current session status / result
+ *   POST   /api/agent/sessions/{id}/pause   — pause (loop idles between iterations)
+ *   POST   /api/agent/sessions/{id}/resume  — resume a paused session
+ *   POST   /api/agent/sessions/{id}/continue— continue a completed session with a new user message
+ *   DELETE /api/agent/sessions/{id}         — abort and mark as FAILED
  *
  * WebSocket subscription (returned in the create response):
  *   Frontend connects to ws://host/ws, subscribes to /topic/agent/{sessionId},
@@ -44,6 +47,7 @@ import java.util.concurrent.ExecutorService;
 public class AgentController {
 
     private final AgentLoopService       agentLoopService;
+    private final AgentContextService    contextService;
     private final AgentSessionRepository sessionRepository;
     private final ExecutorService        agentVirtualThreadExecutor;
 
@@ -178,6 +182,51 @@ public class AgentController {
         sessionRepository.save(session);
         log.info("[Controller] Aborted session {}", sessionId);
         return ResponseEntity.ok(SessionResponse.from(session));
+    }
+
+    // ── Continue (multi-turn) ────────────────────────────────────────────────
+    /**
+     * Continue an existing session with a new user message.
+     *
+     * Only terminal sessions (COMPLETED / FAILED) can be continued. The new
+     * message is appended to the existing context window, and a fresh Agent
+     * loop is launched on a virtual thread using the accumulated context.
+     */
+    @PostMapping("/{sessionId}/continue")
+    public ResponseEntity<SessionResponse> continueSession(
+            @PathVariable String sessionId,
+            @Valid @RequestBody ContinueSessionRequest request
+    ) {
+        AgentSession session = findOrThrow(sessionId);
+
+        if (session.getStatus() == AgentSession.SessionStatus.RUNNING
+                || session.getStatus() == AgentSession.SessionStatus.PAUSED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Session is still active, current status: " + session.getStatus());
+        }
+
+        // Append the new user message to the existing context.
+        // AgentLoopService will detect non-empty context and skip re-initialization.
+        contextService.append(session, Message.user(request.message()));
+
+        // Reset status & error for the new turn, keep iterationCount monotonic.
+        session.setStatus(AgentSession.SessionStatus.PENDING);
+        session.setErrorMessage(null);
+        sessionRepository.save(session);
+
+        final AgentSession finalSession = session;
+        agentVirtualThreadExecutor.submit(() -> {
+            try {
+                agentLoopService.run(finalSession);
+            } catch (Exception e) {
+                log.error("[Controller] Uncaught exception in loop for session {} (continue): {}",
+                        sessionId, e.getMessage(), e);
+            }
+        });
+
+        log.info("[Controller] Continued session {} with new user message.", sessionId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(SessionResponse.from(session));
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────

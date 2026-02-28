@@ -12,6 +12,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.lang.Nullable;
 
 import java.util.List;
 
@@ -28,6 +29,7 @@ import java.util.List;
  * │ Field            │ Type            │ Notes                               │
  * ├──────────────────┼─────────────────┼─────────────────────────────────────┤
  * │ id               │ INT64 PK        │ auto_id = true                      │
+ * │ user_id          │ VARCHAR(64)     │ which user this memory belongs to   │
  * │ session_id       │ VARCHAR(64)     │ which session created this memory   │
  * │ content          │ VARCHAR(4096)   │ the actual memory text              │
  * │ memory_type      │ VARCHAR(32)     │ EPISODIC / SEMANTIC / PROCEDURAL    │
@@ -46,15 +48,27 @@ import java.util.List;
 public class MilvusConfig {
 
     @Bean(destroyMethod = "close")
+    @Nullable
     public MilvusClientV2 milvusClient(MilvusProperties props) {
-        MilvusClientV2 client = new MilvusClientV2(
-                ConnectConfig.builder()
-                        .uri("http://%s:%d".formatted(props.host(), props.port()))
-                        .build()
-        );
-
-        ensureCollectionExists(client, props);
-        return client;
+        log.info("[Milvus] Connecting to {}:{}...", props.host(), props.port());
+        try {
+            MilvusClientV2 client = new MilvusClientV2(
+                    ConnectConfig.builder()
+                            .uri("http://%s:%d".formatted(props.host(), props.port()))
+                            .connectTimeoutMs(15_000)
+                            .build()
+            );
+            log.info("[Milvus] Connected successfully.");
+            ensureCollectionExists(client, props);
+            return client;
+        } catch (Exception e) {
+            log.warn("[Milvus] Connection failed — long-term memory will be DISABLED. " +
+                     "Cause: {}. " +
+                     "If using FRP, ensure the Milvus port uses [type = tcp] not [type = http]. " +
+                     "To suppress this warning, set agent.milvus.enabled=false.",
+                    e.getMessage());
+            return null;
+        }
     }
 
     // ── Collection bootstrap ─────────────────────────────────────────────────
@@ -81,6 +95,12 @@ public class MilvusConfig {
                 .dataType(DataType.Int64)
                 .isPrimaryKey(true)
                 .autoID(true)
+                .build());
+
+        schema.addField(AddFieldReq.builder()
+                .fieldName("user_id")
+                .dataType(DataType.VarChar)
+                .maxLength(64)
                 .build());
 
         schema.addField(AddFieldReq.builder()
@@ -126,7 +146,12 @@ public class MilvusConfig {
                 .extraParams(java.util.Map.of("M", 16, "efConstruction", 256))
                 .build();
 
-        // ── Scalar index on session_id for filtered recall ───────────────────
+        // ── Scalar index on user_id / session_id for filtered recall ────────
+        IndexParam userIndex = IndexParam.builder()
+                .fieldName("user_id")
+                .indexType(IndexParam.IndexType.TRIE)
+                .build();
+
         IndexParam sessionIndex = IndexParam.builder()
                 .fieldName("session_id")
                 .indexType(IndexParam.IndexType.TRIE)
@@ -135,7 +160,7 @@ public class MilvusConfig {
         client.createCollection(CreateCollectionReq.builder()
                 .collectionName(name)
                 .collectionSchema(schema)
-                .indexParams(List.of(vectorIndex, sessionIndex))
+                .indexParams(List.of(vectorIndex, userIndex, sessionIndex))
                 .build());
 
         log.info("[Milvus] Collection '{}' created successfully.", name);

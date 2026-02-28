@@ -30,8 +30,10 @@ export async function http<T>(url: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(url, { ...init, headers })
 
   if (res.status === 401) {
+    console.error('[HTTP 401]', url)
     localStorage.removeItem(AUTH_KEY)
-    window.location.href = '/login'
+    // 临时关闭自动跳转，便于调试具体 401 原因
+    // window.location.href = '/login'
     throw new Error('未登录，请重新登录')
   }
 

@@ -91,7 +91,38 @@ public class LlmClient {
      * @return assembled ChatResponse with complete message
      */
     public ChatResponse streamChat(ChatRequest request, Consumer<String> tokenCallback) {
-        String requestBody = serializeWithStream(request);
+        if (request == null) {
+            throw new LlmException("ChatRequest must not be null for provider [%s]"
+                    .formatted(config.name()));
+        }
+
+        // 如果上游没有显式指定 model，则自动使用当前 ProviderConfig 的默认模型，
+        // 避免出现 model 为空导致像 DeepSeek 返回 “Model Not Exist” 的情况。
+        String model = request.model();
+        if (model == null || model.isBlank()) {
+            model = config.model();
+        }
+
+        // DeepSeek 对 tools 支持较为严格，如果历史中残留了孤立的 tool 消息
+        // （例如只保留了 tool 结果而裁掉了原始 tool_calls），会直接返回 400。
+        // 为了稳妥起见，对 deepseek 提供方，我们在发送前先过滤掉 role = "tool" 的消息。
+        var messages = request.messages();
+        if (messages != null && "deepseek".equalsIgnoreCase(config.name())) {
+            messages = messages.stream()
+                    .filter(m -> !"tool".equals(m.role()))
+                    .toList();
+        }
+
+        ChatRequest effectiveRequest = ChatRequest.builder()
+                .model(model)
+                .messages(messages)
+                .tools(request.tools())
+                .toolChoice(request.toolChoice())
+                .temperature(request.temperature())
+                .maxTokens(request.maxTokens())
+                .build();
+
+        String requestBody = serializeWithStream(effectiveRequest);
         log.debug("[LlmClient:{}] → streamChat POST body-length={}", config.name(), requestBody.length());
 
         HttpResponse<Stream<String>> httpResponse;
@@ -105,7 +136,32 @@ public class LlmClient {
                     .formatted(config.name()), e);
         }
 
-        checkStreamStatus(httpResponse.statusCode());
+        int status = httpResponse.statusCode();
+        if (status == 429) {
+            throw new LlmRateLimitException(
+                    "Rate-limited by provider [%s].".formatted(config.name()));
+        }
+        if (status < 200 || status >= 300) {
+            // 对于 DeepSeek 等 OpenAI 兼容接口，错误信息通常在 body 里，收集前几行便于排查
+            String bodySnippet = "";
+            Stream<String> lines = httpResponse.body();
+            if (lines != null) {
+                bodySnippet = lines.limit(20).reduce(
+                        new StringBuilder(),
+                        (sb, line) -> {
+                            if (sb.length() > 0) sb.append('\n');
+                            if (sb.length() < 2048) {
+                                sb.append(line);
+                            }
+                            return sb;
+                        },
+                        StringBuilder::append
+                ).toString();
+            }
+            throw new LlmException(
+                    "Provider [%s] returned HTTP %d on stream open: %s"
+                            .formatted(config.name(), status, bodySnippet));
+        }
 
         return assembleStreamingResponse(httpResponse.body(), tokenCallback);
     }
@@ -243,13 +299,6 @@ public class LlmClient {
             throw new LlmException(
                     "Failed to parse response from provider [%s]: %s".formatted(config.name(), body), e);
         }
-    }
-
-    private void checkStreamStatus(int status) {
-        if (status == 429) throw new LlmRateLimitException(
-                "Rate-limited by provider [%s].".formatted(config.name()));
-        if (status < 200 || status >= 300) throw new LlmException(
-                "Provider [%s] returned HTTP %d on stream open.".formatted(config.name(), status));
     }
 
     private String serialize(Object obj) {

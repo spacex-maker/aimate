@@ -4,14 +4,16 @@ spring:
 
   # ── Database ──────────────────────────────────────────────────────────────
   datasource:
-    url: jdbc:mysql://localhost:3306/aimate?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-    username: ${DB_USERNAME:root}
-    password: ${DB_PASSWORD:ayp43520}
+    url: jdbc:mysql://170.106.105.131:3306/aimate?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: admin
+    password: xp43520!@#
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
       connection-timeout: 30000
+      # 避免连接被 MySQL/代理关闭后仍被复用导致 "No operations allowed after connection closed"
+      max-lifetime: 600000   # 10 分钟，单位毫秒
 
   jpa:
     hibernate:
@@ -70,9 +72,9 @@ agent:
   # Long-term memory features will be silently skipped.
   milvus:
     enabled: true
-    host: ${MILVUS_HOST:localhost}
+    host: ${MILVUS_HOST:175.27.255.29}
     port: ${MILVUS_PORT:19530}
-    collection-name: agent_memories
+    collection-name: agent_memories_v2
     vector-dimensions: 1536    # must match embedding dimensions above
 
 # ── Resilience4j ───────────────────────────────────────────────────────────

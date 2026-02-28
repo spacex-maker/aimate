@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { X, Eye, EyeOff } from 'lucide-react'
 import type { ApiKeyRequest, ApiKeyResponse, KeyType } from '../../types/apikey'
-import { PROVIDERS, KEY_TYPE_LABELS } from '../../types/apikey'
+import { PROVIDERS, KEY_TYPE_LABELS, LLM_DEFAULT_MODELS } from '../../types/apikey'
 
 interface Props {
   initial: ApiKeyResponse | null
@@ -29,6 +29,27 @@ export function ApiKeyFormModal({ initial, onClose, onSubmit, isLoading }: Props
     const info = PROVIDERS.find(p => p.value === provider)
     if (info && !isEdit) setBaseUrl(info.baseUrl)
   }, [provider, isEdit])
+
+  // 当服务商 / 用途变化时，为 LLM 自动预填/修正默认模型
+  useEffect(() => {
+    if (keyType !== 'LLM') return
+    const def = LLM_DEFAULT_MODELS[provider]
+    if (!def) return
+
+    // 新增密钥：没填过 model 时直接预填默认模型
+    if (!isEdit && !model) {
+      setModel(def)
+      return
+    }
+
+    // 编辑时：如果之前是别的服务商的默认模型（例如 openai 的 gpt-4o），切到新服务商时同步成新默认
+    if (isEdit && initial) {
+      const prevDef = LLM_DEFAULT_MODELS[initial.provider]
+      if (prevDef && model === prevDef && def !== prevDef) {
+        setModel(def)
+      }
+    }
+  }, [provider, keyType, isEdit, model, initial])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -121,7 +142,7 @@ export function ApiKeyFormModal({ initial, onClose, onSubmit, isLoading }: Props
               <input
                 value={model}
                 onChange={e => setModel(e.target.value)}
-                placeholder="gpt-4o"
+                placeholder={LLM_DEFAULT_MODELS[provider] ?? 'gpt-4o'}
                 className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/20 focus:outline-none focus:border-blue-500/50"
               />
             </div>

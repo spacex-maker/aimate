@@ -30,6 +30,9 @@ import java.net.http.HttpClient;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The Agent's autonomous thinking loop.
@@ -68,9 +71,19 @@ public class AgentLoopService {
     private static final String BASE_SYSTEM_PROMPT =
             """
             You are an autonomous AI agent with access to a set of tools.
-            Think step by step. When you need to perform an action, call the appropriate tool.
-            When you have enough information to answer the user's task completely, provide a final answer
-            WITHOUT calling any more tools.
+            Think step by step. Use tools ONLY when they are clearly helpful.
+
+            Long-term memory:
+            - Use the "store_memory" tool ONLY for information that will be useful across many future tasks
+              (for example: stable user preferences, long-term goals, important facts about the user or system).
+            - Do NOT call "store_memory" repeatedly with the same or very similar content.
+            - Do NOT store trivial restatements of the current question.
+
+            Answering:
+            - When you have enough information to answer the user's task completely, provide a final answer
+              WITHOUT calling any more tools.
+            - Prefer fewer, higher-quality tool calls over many repetitive ones.
+
             Be concise but thorough. Think out loud as you reason.
             """;
 
@@ -83,6 +96,11 @@ public class AgentLoopService {
     private final ObjectMapper           objectMapper;
     private final UserApiKeyResolver     keyResolver;
     private final HttpClient             httpClient;
+
+    // Tracks which exact contents have already been stored via store_memory
+    // in this JVM, per sessionId, to avoid spamming duplicate memories.
+    private final Map<String, Set<String>> sessionStoredMemories =
+            new ConcurrentHashMap<>();
 
     // ── Entry point ──────────────────────────────────────────────────────────
 
@@ -129,12 +147,21 @@ public class AgentLoopService {
             final Long userId = session.getUserId();
 
             // ── RECALL: search long-term memory before first iteration ───────
-            String systemPrompt = buildSystemPromptWithMemory(session.getTaskDescription(), userId);
-
-            contextService.initialize(session, List.of(
-                    Message.system(systemPrompt),
-                    Message.user(session.getTaskDescription())
-            ));
+            // Only initialize context when this is the very first run
+            // (context window is empty). For subsequent runs (multi-turn),
+            // we keep the existing context and simply append new user messages.
+            List<Message> existingContext = contextService.load(session);
+            if (existingContext.isEmpty()) {
+                String systemPrompt = buildSystemPromptWithMemory(
+                        session.getTaskDescription(), userId, sessionId);
+                contextService.initialize(session, List.of(
+                        Message.system(systemPrompt),
+                        Message.user(session.getTaskDescription())
+                ));
+            } else {
+                log.debug("[Agent:{}] Resuming with existing context ({} messages).",
+                        sessionId, existingContext.size());
+            }
 
             // ── The loop ─────────────────────────────────────────────────────
             while (true) {
@@ -196,10 +223,16 @@ public class AgentLoopService {
                 } else {
                     // ── DONE — final answer ──────────────────────────────────
                     String answer = assistantMessage.content();
-                    session.setResult(answer);
-                    session.setStatus(AgentSession.SessionStatus.COMPLETED);
-                    session.setIterationCount(iteration);
-                    sessionRepository.save(session);
+
+                    // Reload latest session row to avoid optimistic-lock conflict
+                    // with concurrent context updates (contextService.append).
+                    AgentSession current = sessionRepository.findById(session.getId())
+                            .orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
+                    current.setResult(answer);
+                    current.setStatus(AgentSession.SessionStatus.COMPLETED);
+                    current.setIterationCount(iteration);
+                    sessionRepository.save(current);
+                    session = current;
 
                     publisher.publish(AgentEvent.finalAnswer(sessionId, answer, iteration));
                     publisher.publish(AgentEvent.statusChange(sessionId, "COMPLETED"));
@@ -210,8 +243,12 @@ public class AgentLoopService {
                     break;
                 }
 
-                session.setIterationCount(iteration);
-                sessionRepository.save(session);
+                // ── Persist iteration progress safely (avoid stale version) ──
+                AgentSession current = sessionRepository.findById(session.getId())
+                        .orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
+                current.setIterationCount(iteration);
+                sessionRepository.save(current);
+                session = current;
 
                 if (iteration >= MAX_ITERATIONS) {
                     log.warn("[Agent:{}] Max iterations ({}) reached.", sessionId, MAX_ITERATIONS);
@@ -237,22 +274,43 @@ public class AgentLoopService {
     /**
      * Build the system prompt enriched with relevant long-term memories.
      *
-     * Recall is performed once at session start.  The memories are formatted
-     * as a "## Relevant memories" block appended to the base system prompt.
-     * If no relevant memories are found (score below threshold), returns the
-     * base prompt unchanged so we don't waste context window space.
+     * We inject two tiers of memory (when available):
+     *   1. User-level semantic profile — stable facts about the user (cross-session)
+     *   2. Session-level episodic memories — events & tool results from this session
      */
-    private String buildSystemPromptWithMemory(String taskDescription, Long userId) {
+    private String buildSystemPromptWithMemory(String taskDescription, Long userId, String sessionId) {
         try {
-            List<MemoryRecord> memories =
-                    memoryService.recall(taskDescription, MEMORY_RECALL_TOP_K, userId);
+            List<MemoryRecord> userMemories =
+                    userId != null
+                            ? memoryService.recallUserSemantic(taskDescription, MEMORY_RECALL_TOP_K, userId)
+                            : List.of();
+            List<MemoryRecord> sessionMemories =
+                    memoryService.recallFromSession(taskDescription, sessionId, MEMORY_RECALL_TOP_K);
 
-            if (memories.isEmpty()) return BASE_SYSTEM_PROMPT;
+            StringBuilder sb = new StringBuilder(BASE_SYSTEM_PROMPT);
 
-            String memoryBlock = memoryService.formatForPrompt(memories);
-            log.debug("[Agent] Injecting {} memories into system prompt", memories.size());
+            if (!userMemories.isEmpty()) {
+                sb.append("\n\n## User profile (long-term)\n");
+                for (MemoryRecord m : userMemories) {
+                    sb.append("- [")
+                      .append(m.memoryType().name())
+                      .append("] ")
+                      .append(m.content())
+                      .append(" (importance: ")
+                      .append(String.format("%.2f", m.importance()))
+                      .append(")\n");
+                }
+                log.debug("[Agent] Injecting {} user-level memories into system prompt", userMemories.size());
+            }
 
-            return BASE_SYSTEM_PROMPT + "\n" + memoryBlock;
+            if (!sessionMemories.isEmpty()) {
+                String sessionBlock = memoryService.formatForPrompt(sessionMemories);
+                sb.append("\n\n").append(sessionBlock);
+                log.debug("[Agent] Injecting {} session-level memories into system prompt",
+                        sessionMemories.size());
+            }
+
+            return sb.toString();
         } catch (Exception e) {
             log.warn("[Agent] Memory recall failed, proceeding without memories: {}", e.getMessage());
             return BASE_SYSTEM_PROMPT;
@@ -278,6 +336,12 @@ public class AgentLoopService {
      */
     private void maybeRememberToolResult(String sessionId, String toolName, String result, Long userId) {
         if (result == null || result.startsWith("[STUB]") || result.startsWith("[ToolError]")) return;
+
+        // 内置的 store_memory 已经在 executeStoreMemoryTool 中把真正重要的内容
+        // 以 SEMANTIC/PROCEDURAL 方式写入长期记忆，这里如果再按「工具结果」
+        // 统一存 EPISODIC 会造成同一条画像被重复记录多次，看起来像在无限记忆。
+        // 因此对 store_memory 直接跳过，不再额外写 EPISODIC。
+        if ("store_memory".equals(toolName)) return;
         if (result.length() < 50) return;  // too short to be meaningful
 
         String content = "Tool '%s' returned: %s".formatted(
@@ -319,6 +383,19 @@ public class AgentLoopService {
             String    content    = args.path("content").asText();
             String    typeStr    = args.path("memory_type").asText("SEMANTIC");
             float     importance = (float) args.path("importance").asDouble(0.8);
+
+            if (content == null || content.isBlank()) {
+                return "[ToolError] store_memory called with empty content — skipping.";
+            }
+
+            // Deduplicate: if we've already stored exactly this content for this session
+            // in the current JVM, skip writing it again. This helps models that tend to
+            // over-use the memory tool with identical facts.
+            Set<String> seen =
+                    sessionStoredMemories.computeIfAbsent(sessionId, k -> ConcurrentHashMap.newKeySet());
+            if (!seen.add(content)) {
+                return "Memory already stored previously; skipping duplicate.";
+            }
 
             MemoryType memType;
             try { memType = MemoryType.valueOf(typeStr.toUpperCase()); }
@@ -374,13 +451,31 @@ public class AgentLoopService {
 
     private Tool buildStoreMemoryTool() {
         String schema = """
-                {"type":"object","properties":{"content":{"type":"string","description":"The text to remember"},"memory_type":{"type":"string","enum":["EPISODIC","SEMANTIC","PROCEDURAL"]},"importance":{"type":"number","minimum":0,"maximum":1}},"required":["content"]}
+                {
+                  "type":"object",
+                  "properties":{
+                    "content":{
+                      "type":"string",
+                      "description":"A stable, long-term fact that will be useful in many future tasks (e.g. persistent user preferences, long-term goals). Do NOT store the current question verbatim or trivial restatements."
+                    },
+                    "memory_type":{
+                      "type":"string",
+                      "enum":["EPISODIC","SEMANTIC","PROCEDURAL"]
+                    },
+                    "importance":{
+                      "type":"number",
+                      "minimum":0,
+                      "maximum":1
+                    }
+                  },
+                  "required":["content"]
+                }
                 """;
         try {
             JsonNode params = objectMapper.readTree(schema);
             return Tool.ofFunction(new ToolFunction(
                     "store_memory",
-                    "Store an important piece of information into long-term memory for future sessions.",
+                    "Store an IMPORTANT, long-term piece of information into memory for future sessions. Use sparingly. Only call this for facts that will matter across many tasks, not for one-off details.",
                     params
             ));
         } catch (JsonProcessingException e) {

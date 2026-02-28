@@ -32,9 +32,21 @@ export function HomePage() {
     queryKey: ['recent-sessions'],
     queryFn: async (): Promise<SessionResponse[]> => {
       // The backend doesn't have a list endpoint yet; load from localStorage
-      const ids: string[] = JSON.parse(localStorage.getItem('sessionIds') || '[]')
+      const raw = localStorage.getItem('sessionIds') || '[]'
+      let ids: unknown[]
+      try { ids = JSON.parse(raw) } catch { ids = [] }
+      // 过滤掉 null/undefined/空字符串 等非法值，避免请求 /api/agent/sessions/null 或 /undefined
+      const cleanIds = (ids as unknown[])
+        .filter((id): id is string =>
+          typeof id === 'string' && id.length > 0 && id !== 'null' && id !== 'undefined'
+        )
+
+      // 如果修复前曾经写入过无效 ID，这里顺便把本地存储纠正一下
+      if (cleanIds.length !== ids.length) {
+        localStorage.setItem('sessionIds', JSON.stringify(cleanIds))
+      }
       const results = await Promise.allSettled(
-        ids.slice(0, 10).map(id => agentApi.getSession(id))
+        cleanIds.slice(0, 10).map(id => agentApi.getSession(id))
       )
       return results
         .filter((r): r is PromiseFulfilledResult<SessionResponse> => r.status === 'fulfilled')

@@ -126,11 +126,19 @@ public class AgentContextService {
 
     // ── Persist ──────────────────────────────────────────────────────────────
 
+    /**
+     * Persist context to DB. Always reloads the session by id so we work with the
+     * current row (and version), avoiding ObjectOptimisticLockingFailureException
+     * when the session reference passed in is detached or stale (e.g. from another
+     * transaction or thread).
+     */
     private void persist(AgentSession session, List<Message> context) {
         try {
             String json = objectMapper.writeValueAsString(context);
-            session.setContextWindow(json);
-            sessionRepository.save(session);
+            AgentSession current = sessionRepository.findById(session.getId())
+                    .orElseThrow(() -> new IllegalStateException("Session not found: " + session.getSessionId()));
+            current.setContextWindow(json);
+            sessionRepository.save(current);
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to serialize context for session "
                     + session.getSessionId(), e);

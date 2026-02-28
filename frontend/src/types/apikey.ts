@@ -34,6 +34,16 @@ export const PROVIDERS = [
   { value: 'custom',    label: '自定义',      baseUrl: '' },
 ]
 
+// 针对对话模型的默认 model，供前端表单预填使用
+export const LLM_DEFAULT_MODELS: Record<string, string> = {
+  openai:    'gpt-4o',
+  deepseek:  'deepseek-chat',
+  anthropic: 'claude-3-5-sonnet-20241022',
+  moonshot:  'moonshot-v1-8k',
+  zhipu:     'glm-4',
+  qwen:      'qwen-plus',
+}
+
 export const KEY_TYPE_LABELS: Record<KeyType, string> = {
   LLM:       '对话模型',
   EMBEDDING: '向量嵌入',
