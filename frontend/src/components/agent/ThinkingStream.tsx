@@ -12,9 +12,11 @@ interface Props {
   canRetry?: boolean
   /** 点击重试：用同一任务发起新会话（由父组件跳转） */
   onRetry?: (task: string) => void
+  /** 重试请求进行中时禁用按钮 */
+  isRetrying?: boolean
 }
 
-export function ThinkingStream({ userMessage, blocks, isRunning, canRetry, onRetry }: Props) {
+export function ThinkingStream({ userMessage, blocks, isRunning, canRetry, onRetry, isRetrying }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {

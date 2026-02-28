@@ -135,6 +135,18 @@ export function SessionPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const retryMutation = useMutation({
+    mutationFn: (task: string) => agentApi.startSession({ task }),
+    onSuccess: (newSession) => {
+      const ids: string[] = JSON.parse(localStorage.getItem('sessionIds') || '[]')
+      localStorage.setItem('sessionIds', JSON.stringify([newSession.sessionId, ...ids].slice(0, 50)))
+      queryClient.invalidateQueries({ queryKey: ['recent-sessions'] })
+      navigate(`/session/${newSession.sessionId}`)
+      toast.success('已用相同问题发起新会话')
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
   const handleEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
       case 'PLAN_READY': {
@@ -321,6 +333,9 @@ export function SessionPage() {
             userMessage={session?.taskDescription ?? null}
             blocks={displayBlocks}
             isRunning={isRunning}
+            canRetry={isTerminal}
+            onRetry={(task) => retryMutation.mutate(task)}
+            isRetrying={retryMutation.isPending}
           />
         </div>
       </div>
