@@ -5,15 +5,18 @@ import type { ToolCall } from '../../types/agent'
 interface Props {
   call: ToolCall
   result: string | null
+  /** 执行中时实时输出的日志片段（如 run_container_cmd 的 stdout） */
+  streamingOutput?: string
 }
 
-export function ToolCallCard({ call, result }: Props) {
+export function ToolCallCard({ call, result, streamingOutput }: Props) {
   const [open, setOpen] = useState(false)
 
   let args: unknown
   try { args = JSON.parse(call.function.arguments) } catch { args = call.function.arguments }
 
   const isPending = result === null
+  const hasLiveOutput = isPending && (streamingOutput != null && streamingOutput.length > 0)
 
   return (
     <div className="rounded-xl bg-white/[0.04] border border-white/[0.08] overflow-hidden animate-fade-in">
@@ -43,6 +46,19 @@ export function ToolCallCard({ call, result }: Props) {
               {JSON.stringify(args, null, 2)}
             </pre>
           </div>
+          {isPending && (
+            <div>
+              <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1 flex items-center gap-2">
+                {hasLiveOutput ? '执行中（实时输出）' : '运行中…'}
+                <span className="inline-block w-2 h-2 rounded-full bg-amber-400/80 animate-pulse" />
+              </p>
+              {hasLiveOutput && (
+                <pre className="text-xs text-white/70 font-mono rounded-lg bg-black/20 p-3 overflow-x-auto whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
+                  {streamingOutput}
+                </pre>
+              )}
+            </div>
+          )}
           {result !== null && (
             <div>
               <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">结果</p>

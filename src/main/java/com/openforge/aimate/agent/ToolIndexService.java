@@ -2,7 +2,6 @@ package com.openforge.aimate.agent;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import com.openforge.aimate.domain.AgentTool;
 import com.openforge.aimate.embedding.UserEmbeddingResolver;
 import com.openforge.aimate.memory.EmbeddingClient;
 import com.openforge.aimate.memory.MilvusCollectionManager;
@@ -18,6 +17,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
+
+import com.openforge.aimate.domain.AgentTool;
 
 import java.net.http.HttpClient;
 import java.util.ArrayList;
@@ -64,31 +65,25 @@ public class ToolIndexService {
         try {
             EmbeddingClient client;
             int dimension;
-            boolean useUserEmbedding = false;
             if (userId != null) {
                 var resolved = embeddingResolver.resolveDefault(userId);
                 if (resolved.isPresent()) {
                     var r = resolved.get();
                     dimension = r.dimension();
                     client = new EmbeddingClient(httpClient, objectMapper, r.props());
-                    useUserEmbedding = true;
                 } else {
                     dimension = milvusProperties.vectorDimensions();
-                    client = null; // skip system embedding to avoid OpenAI 401 when user has no config
+                    client = embeddingClient; // 用户未配置时使用系统默认（127.0.0.1 产线向量服务）
                 }
             } else {
                 dimension = milvusProperties.vectorDimensions();
-                client = null;
-            }
-
-            if (client == null) {
-                return List.of();
+                client = embeddingClient;
             }
 
             String collectionName = MilvusCollectionManager.toolIndexCollectionName(dimension);
             if (!collectionManager.ensureToolIndexCollection(dimension)) return List.of();
 
-            if (useUserEmbedding && !populatedDimensions.contains(dimension)) {
+            if (!populatedDimensions.contains(dimension)) {
                 indexAllToolsWith(client, dimension);
                 populatedDimensions.add(dimension);
             }
@@ -116,14 +111,47 @@ public class ToolIndexService {
         }
     }
 
+    /**
+     * Index a single tool by name (e.g. after create_tool). Uses the same embedding resolution as
+     * searchRelevantTools so the tool is findable in the next semantic search.
+     */
+    public void indexToolByName(String toolName, @Nullable Long userId) {
+        if (milvusClient == null || toolName == null || toolName.isBlank()) return;
+        var opt = toolRepository.findByToolName(toolName);
+        if (opt.isEmpty()) return;
+        AgentTool t = opt.get();
+        EmbeddingClient client;
+        int dimension;
+        try {
+            if (userId != null) {
+                var resolved = embeddingResolver.resolveDefault(userId);
+                if (resolved.isPresent()) {
+                    var r = resolved.get();
+                    dimension = r.dimension();
+                    client = new EmbeddingClient(httpClient, objectMapper, r.props());
+                } else {
+                    dimension = milvusProperties.vectorDimensions();
+                    client = embeddingClient; // 用户未配置时使用系统默认（127.0.0.1）
+                }
+            } else {
+                dimension = milvusProperties.vectorDimensions();
+                client = embeddingClient;
+            }
+        } catch (Exception e) {
+            log.warn("[ToolIndex] Cannot resolve embedding for indexToolByName: {}", e.getMessage());
+            return;
+        }
+        if (!collectionManager.ensureToolIndexCollection(dimension)) return;
+        String coll = MilvusCollectionManager.toolIndexCollectionName(dimension);
+        String schemaText = t.getInputSchema() != null && t.getInputSchema().length() <= 2000
+                ? t.getInputSchema()
+                : (t.getInputSchema() != null ? t.getInputSchema().substring(0, 2000) + "..." : "");
+        indexToolInto(client, coll, t.getToolName(), t.getToolName(), t.getToolDescription(), schemaText);
+        log.debug("[ToolIndex] Indexed tool: {}", toolName);
+    }
+
     private void indexAllToolsWith(EmbeddingClient client, int dimension) {
         String coll = MilvusCollectionManager.toolIndexCollectionName(dimension);
-        indexToolInto(client, coll, "recall_memory", "recall_memory",
-                "Search long-term memory by natural language query. Returns relevant past information (e.g. user profile, name, preferences). Use when you need to look up something that may have been stored before.",
-                "query: string (required). top_k: optional integer, default 10.");
-        indexToolInto(client, coll, "store_memory", "store_memory",
-                "Store an IMPORTANT, long-term piece of information into memory for future sessions. Use sparingly. Only call this for facts that will matter across many tasks, not for one-off details.",
-                "content: string (required). memory_type: EPISODIC | SEMANTIC | PROCEDURAL. importance: 0-1.");
         toolRepository.findByIsActiveTrue().forEach(t -> {
             String schemaText = t.getInputSchema() != null && t.getInputSchema().length() <= 2000
                     ? t.getInputSchema()

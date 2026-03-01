@@ -20,7 +20,7 @@ import java.util.concurrent.Executors;
  * Core infrastructure beans:
  *  - Virtual-Thread executor  → every blocking LLM call gets a free OS-thread-like experience
  *  - Java HttpClient          → the ONLY HTTP engine; no WebClient, no RestTemplate
- *  - Jackson ObjectMapper     → snake_case ↔ camelCase, Java 8 time, tolerant deserialization
+ *  - Jackson ObjectMapper     → camelCase（无下划线）, Java 8 time, tolerant deserialization
  *
  * JDK 25 notes:
  *  - Virtual Threads are stable since JDK 21; no changes needed here.
@@ -71,16 +71,16 @@ public class AppConfig {
     }
 
     /**
-     * Shared ObjectMapper configured for OpenAI-compatible JSON:
-     *  - snake_case property names (tool_calls, finish_reason …)
-     *  - ISO-8601 dates, NOT timestamps
-     *  - Unknown properties silently ignored (API can add fields without breaking us)
+     * Shared ObjectMapper for REST API (VO/DTO 序列化):
+     *  - camelCase 属性名，与前端约定一致，无下划线
+     *  - ISO-8601 日期，非时间戳
+     *  - 未知属性忽略，便于接口扩展
      */
     @Bean
     public ObjectMapper objectMapper() {
         return new ObjectMapper()
                 .registerModule(new JavaTimeModule())
-                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+                .setPropertyNamingStrategy(PropertyNamingStrategies.LOWER_CAMEL_CASE)
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
                 .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
     }

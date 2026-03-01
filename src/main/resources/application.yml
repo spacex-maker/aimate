@@ -3,17 +3,18 @@ spring:
     name: aimate
 
   # ── Database ──────────────────────────────────────────────────────────────
+  # 若 MySQL 报 "Too many connections"，可：1) 调小本池；2) 在 MySQL 调大 max_connections
   datasource:
     url: jdbc:mysql://170.106.105.131:3306/aimate?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: admin
     password: xp43520!@#
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
-      maximum-pool-size: 20
-      minimum-idle: 5
+      maximum-pool-size: 8
+      minimum-idle: 2
       connection-timeout: 30000
-      # 避免连接被 MySQL/代理关闭后仍被复用导致 "No operations allowed after connection closed"
-      max-lifetime: 600000   # 10 分钟，单位毫秒
+      max-lifetime: 600000   # 10 分钟，避免复用时连接已被服务端关闭
+      idle-timeout: 300000   # 5 分钟空闲即回收，减轻服务端压力
 
   jpa:
     hibernate:
@@ -39,7 +40,7 @@ spring:
 
 # ── Server ─────────────────────────────────────────────────────────────────
 server:
-  port: 8080
+  port: 9299
 
 # ── LLM Provider Configuration ─────────────────────────────────────────────
 agent:
@@ -54,28 +55,55 @@ agent:
       name: deepseek-chat
       base-url: https://api.deepseek.com/v1
       api-key: ${FALLBACK_LLM_API_KEY:sk-placeholder}
+      # 使用思考模式时改为 deepseek-reasoner，会返回 reasoning_content（思考）与 content（回答）两路流
       model: deepseek-chat
       timeout-seconds: 120
 
-  # ── Embedding (OpenAI text-embedding-3-small) ──────────────────────────
-  # Reuses the same API key as the primary LLM by default.
-  # Override EMBEDDING_API_KEY to use a dedicated embedding key.
+  # ── Embedding（用户未配置时使用：产线在 127.0.0.1 部署向量模型，如 Ollama bge-m3）────
+  # 可通过 EMBEDDING_BASE_URL 覆盖（如不同端口或远程服务）
   embedding:
-    base-url: https://api.openai.com/v1
-    api-key: ${EMBEDDING_API_KEY:${PRIMARY_LLM_API_KEY:sk-placeholder}}
-    model: text-embedding-3-small
-    dimensions: 1536
+    base-url: ${EMBEDDING_BASE_URL:http://127.0.0.1:11434/v1}
+    api-key: ${EMBEDDING_API_KEY:ollama}
+    model: ${EMBEDDING_MODEL:bge-m3}
+    dimensions: ${EMBEDDING_DIMENSIONS:1024}
     timeout-seconds: 30
+
+  # ── Script tool interpreters (optional) ───────────────────────────────────
+  # 当系统 PATH 中找不到 python/node/bash 时，可在此指定完整路径
+  script:
+    # python-path: C:\Python311\python.exe
+    # node-path: ""
+    # shell-path: ""
+    # 每用户一个独立 Linux 容器：隔离环境，可安装并执行任意软件；空闲超过 idle-minutes 后自动回收
+    # 镜像为最小化 Linux（如 debian:bookworm-slim）；python3/node 等由 AI 通过 install_container_package 在容器内安装
+    # 标准做法：资源限制（memory/cpus）、只读根盘+tmpfs、非 root 运行
+    docker:
+      enabled: true
+      idle-minutes: 30
+      image: debian:bookworm-slim
+      memory-limit: 4g
+      cpu-limit: 2
+      read-only-rootfs: false
+      # run-as-user: "1000:1000"
+      # run_container_cmd 单条命令最长执行时间（秒），长任务可调大避免超时
+      run-container-cmd-timeout-seconds: 300
+      # 连续无输出超过此时长视为卡住并终止；有输出会重置计时，便于区分「正在下载/安装」与「真卡住」
+      run-container-cmd-idle-timeout-seconds: 90
+      # 容器内脚本工具（Python/Shell 等）最长执行时间（秒）；有输出时不会单纯因总时长超时
+      script-timeout-seconds: 300
+      # 脚本连续无输出超过此时长视为卡住；有输出会重置计时
+      script-idle-timeout-seconds: 90
 
   # ── Milvus Vector Database ─────────────────────────────────────────────
   # Set enabled: false to start the app without a running Milvus instance.
   # Long-term memory features will be silently skipped.
+  # vector-dimensions 需与 embedding 默认维度一致（用户未配置时用系统 embedding）
   milvus:
     enabled: true
     host: ${MILVUS_HOST:175.27.255.29}
     port: ${MILVUS_PORT:19530}
     collection-name: agent_memories_v2
-    vector-dimensions: 1536    # must match embedding dimensions above
+    vector-dimensions: ${MILVUS_VECTOR_DIMENSIONS:1024}
 
 # ── Resilience4j ───────────────────────────────────────────────────────────
 # Fine-tuning is done programmatically in Resilience4jConfig.

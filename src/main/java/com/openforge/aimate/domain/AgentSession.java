@@ -35,12 +35,26 @@ import lombok.*;
 )
 public class AgentSession extends BaseEntity {
 
+    /**
+     * 会话状态 = 是否有存活线程，与单轮成败无关。
+     * IDLE=静默（无线程，可收新任务），ACTIVE=在线执行，PAUSED=暂停。
+     * 单轮结果在 result / error_message。
+     */
     public enum SessionStatus {
-        PENDING,
-        RUNNING,
+        /** 静默：无 Agent 线程，可发送新消息开始新一轮 */
+        IDLE,
+        /** 在线：有线程在跑（思考/执行工具） */
+        ACTIVE,
+        /** 已暂停：线程存活但挂起，可恢复 */
         PAUSED,
-        COMPLETED,
-        FAILED
+        /** @deprecated 兼容旧数据，视为 IDLE */
+        @Deprecated PENDING,
+        /** @deprecated 兼容旧数据，视为 ACTIVE */
+        @Deprecated RUNNING,
+        /** @deprecated 兼容旧数据，视为 IDLE */
+        @Deprecated COMPLETED,
+        /** @deprecated 兼容旧数据，视为 IDLE */
+        @Deprecated FAILED
     }
 
     /** Owner of this session — FK to users.id (nullable for backward compat). */
@@ -58,7 +72,7 @@ public class AgentSession extends BaseEntity {
     @Builder.Default
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 32)
-    private SessionStatus status = SessionStatus.PENDING;
+    private SessionStatus status = SessionStatus.IDLE;
 
     /**
      * JSON-serialized List<PlanStep>.
@@ -78,11 +92,15 @@ public class AgentSession extends BaseEntity {
     @Column(name = "iteration_count", nullable = false)
     private Integer iterationCount = 0;
 
-    /** Populated when status = COMPLETED. */
+    /** 上一轮回答正文（单轮成功时有值） */
     @Column(name = "result", columnDefinition = "TEXT")
     private String result;
 
-    /** Populated when status = FAILED. */
+    /** 上一轮错误信息（单轮失败或中断时有值） */
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
+
+    /** 当前正在回答的 assistant 占位消息 id，可被用户中断后更新为 INTERRUPTED。 */
+    @Column(name = "current_assistant_message_id")
+    private Long currentAssistantMessageId;
 }

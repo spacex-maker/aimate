@@ -80,4 +80,9 @@ public class AgentTool extends BaseEntity {
     @Builder.Default
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
+
+    /** 系统工具（如 recall_memory/store_memory/tavily_search 等）：仅本机执行，不走 Docker。 */
+    @Builder.Default
+    @Column(name = "is_system", nullable = false)
+    private Boolean isSystem = false;
 }

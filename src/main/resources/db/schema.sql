@@ -138,6 +138,7 @@ CREATE TABLE IF NOT EXISTS agent_tools (
     entry_point     VARCHAR(256)             COMMENT 'JAVA_NATIVE: Spring bean 名; 脚本类型: 建议文件名',
 
     is_active       TINYINT(1)      NOT NULL DEFAULT 1 COMMENT '软删除标志；0 = 禁用但保留历史',
+    is_system       TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '1=系统工具，仅本机执行不走 Docker（如 recall_memory/store_memory/tavily_search）',
 
     -- ── 审计 + 乐观锁凭证 ────────────────────────────────
     version         INT             NOT NULL DEFAULT 0 COMMENT 'JPA @Version 乐观锁计数器',
@@ -174,8 +175,9 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
     context_window   LONGTEXT                COMMENT 'JSON 序列化的 List<Message>；每轮迭代追加后写回',
 
     iteration_count  INT            NOT NULL DEFAULT 0 COMMENT 'Agent 循环计数，防止无限循环',
-    result           TEXT                    COMMENT 'status=COMPLETED 时的最终答案',
-    error_message    TEXT                    COMMENT 'status=FAILED 时的错误堆栈摘要',
+    result           TEXT                    COMMENT '上一轮最终答案',
+    error_message    TEXT                    COMMENT '上一轮错误或中断说明',
+    current_assistant_message_id BIGINT NULL COMMENT 'FK → agent_session_messages.id，当前回答中的占位条，可被用户中断',
 
     -- ── 审计 + 乐观锁凭证 ────────────────────────────────
     version          INT            NOT NULL DEFAULT 0 COMMENT 'JPA @Version 乐观锁计数器',
@@ -190,3 +192,75 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_unicode_ci
   COMMENT='Agent 思考会话状态表；Java 进程无状态，全量持久化于此';
+
+
+-- ------------------------------------------------------------
+-- agent_session_messages
+--
+-- 会话内对话消息表，按条存储，便于分页、检索与归档。
+-- 与 agent_sessions.context_window 可并存：context_window 为当前上下文
+-- 的紧凑快照，本表为完整历史；也可逐步改为仅从本表构建 context。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS agent_session_messages (
+    id                BIGINT          NOT NULL AUTO_INCREMENT,
+
+    agent_session_id  BIGINT          NOT NULL COMMENT 'FK → agent_sessions.id',
+    seq               INT             NOT NULL COMMENT '会话内顺序，从 0 开始',
+
+    role              VARCHAR(20)     NOT NULL COMMENT 'system | user | assistant | tool',
+    content           LONGTEXT        NULL     COMMENT '正文；assistant 仅 tool_calls 时可为空',
+    tool_call_id      VARCHAR(64)     NULL     COMMENT 'role=tool 时对应 ToolCall.id',
+    tool_calls_json   TEXT            NULL     COMMENT 'role=assistant 时的 tool_calls 数组 JSON',
+    message_status    VARCHAR(20)     NULL     COMMENT '仅 assistant 使用: ANSWERING=回答中 DONE=已完成 INTERRUPTED=已中断',
+    thinking_content  LONGTEXT        NULL     COMMENT '仅 assistant：思考过程正文，前端可折叠展示',
+    reply_to_message_id BIGINT        NULL     COMMENT '归属某条 assistant 回复（工具消息等）；NULL=主序消息',
+
+    version           INT             NOT NULL DEFAULT 0,
+    create_time       DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time       DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_session_seq (agent_session_id, seq),
+    INDEX idx_agent_session_id (agent_session_id),
+    INDEX idx_reply_to (reply_to_message_id),
+    CONSTRAINT fk_msg_session FOREIGN KEY (agent_session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    CONSTRAINT fk_msg_reply_to FOREIGN KEY (reply_to_message_id) REFERENCES agent_session_messages(id) ON DELETE CASCADE
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci
+  COMMENT='会话内消息表；reply_to_message_id 标识归属某条回复（并行多轮）';
+
+-- ------------------------------------------------------------
+-- agent_assistant_message_versions
+-- assistant 回复的多版本；上下文给 AI 时始终用每条消息的最新版本（session_messages.content）。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS agent_assistant_message_versions (
+    id                     BIGINT    NOT NULL AUTO_INCREMENT,
+    agent_session_message_id BIGINT   NOT NULL COMMENT 'FK → agent_session_messages.id（assistant 条）',
+    version                 INT       NOT NULL COMMENT '版本号，从 1 递增',
+    content                 LONGTEXT NOT NULL,
+    create_time             DATETIME  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    INDEX idx_message (agent_session_message_id),
+    CONSTRAINT fk_version_message FOREIGN KEY (agent_session_message_id) REFERENCES agent_session_messages(id) ON DELETE CASCADE
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci
+  COMMENT='assistant 回复历史版本；当前展示与上下文均用 session_messages.content（最新）';
+
+-- ------------------------------------------------------------
+-- system_config
+-- 系统配置表：全局 Key 等（如 TAVILY_API_KEY）
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS system_config (
+    id              BIGINT          NOT NULL AUTO_INCREMENT,
+    config_key      VARCHAR(128)    NOT NULL COMMENT '配置键，如 TAVILY_API_KEY',
+    config_value    VARCHAR(2048)   NULL     COMMENT '配置值',
+    description     VARCHAR(256)   NULL     COMMENT '说明',
+    version         INT             NOT NULL DEFAULT 0,
+    create_time     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_system_config_key (config_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='系统配置表';

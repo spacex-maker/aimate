@@ -1,6 +1,7 @@
 package com.openforge.aimate.websocket;
 
 import com.openforge.aimate.agent.event.AgentEvent;
+import com.openforge.aimate.agent.event.EventType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -32,12 +33,22 @@ public class AgentEventPublisher {
      * Publish an event to all WebSocket subscribers of the given session.
      * Fire-and-forget — the caller is never blocked by slow consumers.
      */
+    /**
+     * 发送到 /topic/agent/{sessionId}，前端需 SUBSCRIBE 同一 destination 才能收到。
+     * 若前端连接/订阅晚于 Agent 开始，会漏事件，需在 onConnected 时用 HTTP 拉会话+消息做兜底。
+     */
     public void publish(AgentEvent event) {
         String destination = TOPIC_PREFIX + event.sessionId();
         try {
             messagingTemplate.convertAndSend(destination, event);
+            if (log.isDebugEnabled()) {
+                log.debug("[WS] 发送 {} -> {}", event.type(), destination);
+            }
+            if (event.type() == EventType.FINAL_ANSWER || event.type() == EventType.STATUS_CHANGE) {
+                log.info("[WS] 发送 {} -> {} (content length {})", event.type(), destination,
+                        event.content() != null ? event.content().length() : 0);
+            }
         } catch (Exception e) {
-            // Don't let WebSocket delivery failures crash the Agent loop
             log.warn("[Publisher] Failed to deliver {} event to {}: {}",
                     event.type(), destination, e.getMessage());
         }

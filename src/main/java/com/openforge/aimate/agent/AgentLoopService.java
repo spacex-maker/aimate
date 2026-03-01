@@ -3,19 +3,23 @@ package com.openforge.aimate.agent;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.openforge.aimate.agent.dto.SessionResponse;
 import com.openforge.aimate.agent.event.AgentEvent;
 import com.openforge.aimate.apikey.UserApiKeyResolver;
 import com.openforge.aimate.domain.AgentSession;
 import com.openforge.aimate.domain.AgentTool;
+import com.openforge.aimate.domain.SessionMessage;
 import com.openforge.aimate.llm.LlmClient;
 import com.openforge.aimate.llm.LlmProperties;
 import com.openforge.aimate.llm.LlmRouter;
+import com.openforge.aimate.llm.StreamCallbacks;
 import com.openforge.aimate.llm.model.ChatRequest;
 import com.openforge.aimate.llm.model.ChatResponse;
 import com.openforge.aimate.llm.model.Message;
 import com.openforge.aimate.llm.model.Tool;
 import com.openforge.aimate.llm.model.ToolCall;
 import com.openforge.aimate.llm.model.ToolFunction;
+import com.openforge.aimate.config.SystemConfigService;
 import com.openforge.aimate.memory.LongTermMemoryService;
 import com.openforge.aimate.memory.MemoryRecord;
 import com.openforge.aimate.memory.MemoryType;
@@ -27,18 +31,24 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.net.http.HttpClient;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * The Agent's autonomous thinking loop.
  *
  * Loop shape (with long-term memory):
- *   while RUNNING:
+ *   while ACTIVE:
  *     1. RECALL    — search Milvus for memories relevant to current task
  *     2. PERCEIVE  — inject recalled memories into system prompt
  *     3. THINK     — stream LLM response, pushing each token to WebSocket
@@ -78,6 +88,21 @@ public class AgentLoopService {
             Tools (use only when you judge it helps):
             - recall_memory: search long-term memory by query (e.g. user name, preferences, past facts). Use when the user's question might be answered from something you stored before.
             - store_memory: save a fact for future sessions. Use at most once per distinct, important fact; then reply in natural language.
+            - tavily_search: search the web for real-time or factual information. Use when the user asks about current events, news, or facts you need to look up.
+            - create_tool: register a new tool (script-based: PYTHON_SCRIPT, NODE_SCRIPT, SHELL_CMD). Use when the user asks you to create a tool, add a capability, or write a reusable script/function that the agent can call later. Provide tool_name, tool_description, input_schema (JSON string), tool_type, and optionally script_content and entry_point.
+            - install_container_package: install system packages (e.g. python3, nodejs) inside the user's isolated Linux container. Call this BEFORE running script tools that need an interpreter: the container starts as a minimal Linux and does not include python3/node by default. Use when a script tool fails with "command not found" (exit 127) or when you are about to run a Python/Node/shell script and have not installed the runtime yet. Pass "packages" as a space-separated list (e.g. "python3" or "python3 nodejs").
+            - run_container_cmd: run short shell command(s) only (e.g. apt-get, chmod +x, mkdir). Do NOT pass a long heredoc or multi-line script here—it will be truncated. To create a script file, use write_container_file with chunked content (max 600 chars per call, append=true for continuation).
+            - write_container_file: write content to a file in the user's container. path=container path (one line). content=file body (max 600 chars per call; use \\n for newlines). append=true to append. Content is piped via stdin—no shell escaping. For scripts longer than ~600 chars you MUST split: 1st call path+content (first chunk), 2nd call same path+content (next chunk)+append=true, repeat until done. Never put a whole long script in one content—it will be rejected or truncated.
+            
+            Creating script files in the container (MANDATORY—do not suggest user to do it manually):
+            - NEVER use run_container_cmd with cat/heredoc to write script content—it will be truncated and fail. NEVER suggest the user to "manually paste" or "run in terminal" to create the script; you MUST complete the task yourself.
+            - To create any script file: use write_container_file only. If script fits in ≤600 chars, one call with path and content. If longer: call write_container_file(path, first ~600 chars), then write_container_file(path, next ~600 chars, append=true), repeat until the whole script is written. Each content chunk must be under 600 characters. Then run_container_cmd("chmod +x " + path). Example for a 1500-char script: 1) write_container_file path=/home/workspace/scripts/foo.sh content=chars 1–600; 2) write_container_file path=/home/workspace/scripts/foo.sh content=chars 601–1200 append=true; 3) write_container_file path=/home/workspace/scripts/foo.sh content=chars 1201–1500 append=true; 4) run_container_cmd chmod +x /home/workspace/scripts/foo.sh. You must actually perform these calls until the file is complete—do not give up and ask the user to do it.
+            
+            Script execution environment (IMPORTANT):
+            - To run ANY command inside the user's container, you MUST use run_container_cmd only. There is no other way to execute commands in the container—do not assume other tools or APIs can run shell commands there; only run_container_cmd does.
+            - When writing scripts that run long-running commands (npm install, apt-get, pip install, etc.): do NOT capture the subprocess stdout/stderr (e.g. in Python do not use capture_output=True or stdout=subprocess.PIPE for the long-running part). Let the subprocess write directly to the script's stdout so the user sees real-time output; otherwise the output is buffered and only appears when the command finishes.
+            - Non-system script tools (those created with create_tool or custom scripts) run inside the user's dedicated, isolated Linux container—not on the host. That environment is a minimal Linux (e.g. Debian); it does not pre-install python3, nodejs, etc. You MUST use install_container_package to install required runtimes (e.g. python3 for PYTHON_SCRIPT, nodejs for NODE_SCRIPT) before calling those script tools.
+            - When a script tool returns "[ToolError] Script exited with code 127" (or the tool result contains "退出码 127" or "必须处理"), you MUST NOT report failure to the user yet. You MUST first call install_container_package with the appropriate package (python3 for Python scripts, nodejs for Node scripts, bash is usually present), wait for success, then call the same script tool again. Only if it still fails after installing and retrying may you explain the error to the user. Never skip the install-and-retry step when you see exit 127.
             
             Memory writing rules (VERY IMPORTANT):
             - When calling store_memory, ALWAYS rewrite the fact into a clear, third-person sentence with an explicit subject.
@@ -96,6 +121,13 @@ public class AgentLoopService {
     private final AgentToolRepository    toolRepository;
     private final LongTermMemoryService  memoryService;
     private final ToolIndexService       toolIndexService;
+    private final SessionMessageService  sessionMessageService;
+    private final SystemConfigService   systemConfigService;
+    private final TavilySearchService   tavilySearchService;
+    private final ScriptToolExecutor    scriptToolExecutor;
+    private final UserContainerManager  userContainerManager;
+    private final ScriptDockerProperties scriptDockerProperties;
+    private final ExecutorService        agentVirtualThreadExecutor;
     private final ObjectMapper           objectMapper;
     private final UserApiKeyResolver     keyResolver;
     private final HttpClient             httpClient;
@@ -107,9 +139,25 @@ public class AgentLoopService {
 
     // ── Entry point ──────────────────────────────────────────────────────────
 
+    /** 单条消息独立 run：绑定占位条 id，可多轮并行；中断仅影响该条。 */
+    public void run(AgentSession session, long placeholderId) {
+        ScopedValue.where(SESSION_SCOPE, session.getSessionId())
+                .run(() -> executeLoopForPlaceholder(session, placeholderId));
+    }
+
+    /** 兼容入口：无 placeholder 时先确保消息表有首轮、创建占位，再按占位 run。 */
     public void run(AgentSession session) {
         ScopedValue.where(SESSION_SCOPE, session.getSessionId())
                 .run(() -> executeLoop(session));
+    }
+
+    /**
+     * 重试某条用户消息：用该条之前的上下文重新跑 AI，更新下一条 assistant 回复并写入新版本。
+     * @param userMessageId 用户消息 id（该条之前的上下文 + 记忆作为 context）
+     */
+    public void runForRetry(AgentSession session, long userMessageId) {
+        ScopedValue.where(SESSION_SCOPE, session.getSessionId())
+                .run(() -> executeLoopForRetry(session, userMessageId));
     }
 
     // ── Main loop ────────────────────────────────────────────────────────────
@@ -120,92 +168,184 @@ public class AgentLoopService {
      * Returns a lambda that calls the user's own LLM key if configured,
      * otherwise delegates to the system-level LlmRouter (fallback).
      */
-    private java.util.function.BiFunction<ChatRequest, java.util.function.Consumer<String>, ChatResponse>
+    private java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse>
     buildCaller(AgentSession session) {
         return keyResolver.resolveDefaultLlm(session.getUserId())
                 .map(config -> {
                     LlmClient userClient = new LlmClient(httpClient, objectMapper, config);
                     log.info("[Agent:{}] Using user key — provider={} model={}",
                             session.getSessionId(), config.name(), config.model());
-                    return (java.util.function.BiFunction<ChatRequest, java.util.function.Consumer<String>, ChatResponse>)
-                            (req, cb) -> userClient.streamChat(req, cb);
+                    return (java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse>)
+                            (req, callbacks) -> userClient.streamChat(req, callbacks);
                 })
                 .orElseGet(() -> {
                     log.info("[Agent:{}] No user key found — using system LlmRouter", session.getSessionId());
-                    return (req, cb) -> llmRouter.streamChat(req, cb);
+                    return (req, callbacks) -> llmRouter.streamChat(req, callbacks);
                 });
     }
 
     private static final List<String> EXECUTION_PLAN = List.of("回忆", "思考与执行", "回答");
 
+    /** 当模型只返回 reasoning 流、未返回 content 时的兜底展示文案（不写入完成记忆） */
+    private static final String FALLBACK_EMPTY_ANSWER = "（模型未返回文字内容，仅返回了思考过程；可查看上方思考内容或重试。）";
+
+    /** 按占位条执行单条回复：从消息表构建 context，可与其他条并行；中断仅影响本占位条。 */
+    private void executeLoopForPlaceholder(AgentSession session, long placeholderId) {
+        String sessionId = session.getSessionId();
+        SessionMessage placeholder = sessionMessageService.findById(placeholderId)
+                .orElseThrow(() -> new IllegalStateException("Placeholder not found: " + placeholderId));
+        if (!SessionMessage.STATUS_ANSWERING.equals(placeholder.getMessageStatus())) {
+            log.debug("[Agent:{}] Placeholder {} no longer ANSWERING, skip run.", sessionId, placeholderId);
+            return;
+        }
+        log.info("[Agent:{}] Run for placeholder {} (message-level).", sessionId, placeholderId);
+
+        try {
+            session.setStatus(AgentSession.SessionStatus.ACTIVE);
+            sessionRepository.save(session);
+            publisher.publish(AgentEvent.statusChange(sessionId, "ACTIVE", SessionResponse.from(session)));
+
+            var llmCaller = buildCaller(session);
+            Long userId = session.getUserId();
+            List<Message> context = sessionMessageService.loadContextForReply(session, placeholder);
+            context = trimTrailingEmptyAssistant(context);
+
+            publisher.publish(AgentEvent.planReady(sessionId, new ArrayList<>(EXECUTION_PLAN)));
+            publisher.publish(AgentEvent.stepStart(sessionId, 1, EXECUTION_PLAN.get(0)));
+            publisher.publish(AgentEvent.stepComplete(sessionId, 1, EXECUTION_PLAN.get(0), "已加载上下文"));
+            publisher.publish(AgentEvent.stepStart(sessionId, 2, EXECUTION_PLAN.get(1)));
+
+            RunResult result = runThinkAndActLoopForPlaceholder(session, sessionId, placeholderId, context, llmCaller, userId);
+
+            publisher.publish(AgentEvent.stepComplete(sessionId, 2, EXECUTION_PLAN.get(1),
+                    result.finalAnswer() != null ? "完成推理" : "达到最大迭代或已中断"));
+            publisher.publish(AgentEvent.stepStart(sessionId, 3, EXECUTION_PLAN.get(2)));
+
+            if (result.finalAnswer() != null || result.thinkingContent() != null) {
+                String displayAnswer = (result.finalAnswer() != null && !result.finalAnswer().isBlank())
+                        ? result.finalAnswer()
+                        : (result.thinkingContent() != null && !result.thinkingContent().isEmpty() ? FALLBACK_EMPTY_ANSWER : "");
+                sessionMessageService.saveNewVersion(placeholderId, displayAnswer, result.thinkingContent());
+                session = sessionRepository.findBySessionId(sessionId).orElseThrow();
+                session.setResult(displayAnswer);
+                publisher.publish(AgentEvent.stepComplete(sessionId, 3, EXECUTION_PLAN.get(2), displayAnswer));
+                publisher.publish(AgentEvent.finalAnswer(sessionId, displayAnswer, 0, placeholderId));
+                if (!FALLBACK_EMPTY_ANSWER.equals(displayAnswer) && displayAnswer != null && !displayAnswer.isBlank()) {
+                    storeCompletionMemory(sessionId, session.getTaskDescription(), displayAnswer, userId);
+                }
+            } else {
+                sessionMessageService.updateAssistantMessage(placeholderId, null, SessionMessage.STATUS_INTERRUPTED);
+            }
+
+            session = sessionRepository.findBySessionId(sessionId).orElseThrow();
+            if (!sessionMessageService.hasAnyAnswering(session.getId())) {
+                session.setStatus(AgentSession.SessionStatus.IDLE);
+                session.setCurrentAssistantMessageId(null);
+                sessionRepository.save(session);
+                publisher.publish(AgentEvent.statusChange(sessionId, "IDLE", SessionResponse.from(session)));
+            }
+        } catch (Exception e) {
+            log.error("[Agent:{}] Exception in placeholder run {}: {}", sessionId, placeholderId, e.getMessage(), e);
+            sessionMessageService.updateAssistantMessage(placeholderId, null, SessionMessage.STATUS_INTERRUPTED);
+            session = sessionRepository.findBySessionId(sessionId).orElse(session);
+            if (!sessionMessageService.hasAnyAnswering(session.getId())) {
+                failSession(session, e.getMessage());
+                publisher.publish(AgentEvent.statusChange(sessionId, "IDLE", SessionResponse.from(session)));
+            }
+        }
+    }
+
+    /**
+     * 重试：用 user 消息之前的上下文重新生成下一条 assistant；若下一条已存在则更新内容并追加版本。
+     */
+    private void executeLoopForRetry(AgentSession session, long userMessageId) {
+        String sessionId = session.getSessionId();
+        SessionMessage userMsg = sessionMessageService.findById(userMessageId)
+                .orElseThrow(() -> new IllegalStateException("User message not found: " + userMessageId));
+        if (!"user".equals(userMsg.getRole())) {
+            throw new IllegalArgumentException("Message " + userMessageId + " is not a user message");
+        }
+        int userSeq = userMsg.getSeq();
+        SessionMessage assistantMsg = sessionMessageService.findBySessionAndSeq(session.getId(), userSeq + 1)
+                .orElseThrow(() -> new IllegalStateException("No assistant reply found after user message seq " + userSeq));
+        if (!"assistant".equals(assistantMsg.getRole())) {
+            throw new IllegalStateException("Message at seq " + (userSeq + 1) + " is not assistant");
+        }
+        long assistantId = assistantMsg.getId();
+        log.info("[Agent:{}] Retry for user msg {} → update assistant {}", sessionId, userMessageId, assistantId);
+
+        sessionMessageService.updateAssistantMessage(assistantId, null, SessionMessage.STATUS_ANSWERING);
+
+        try {
+            session.setStatus(AgentSession.SessionStatus.ACTIVE);
+            sessionRepository.save(session);
+            publisher.publish(AgentEvent.statusChange(sessionId, "ACTIVE", SessionResponse.from(session)));
+
+            var llmCaller = buildCaller(session);
+            Long userId = session.getUserId();
+            List<Message> context = sessionMessageService.loadContextUpToSeq(session, userSeq);
+            context = trimTrailingEmptyAssistant(context);
+
+            publisher.publish(AgentEvent.planReady(sessionId, new ArrayList<>(EXECUTION_PLAN)));
+            publisher.publish(AgentEvent.stepStart(sessionId, 1, EXECUTION_PLAN.get(0)));
+            publisher.publish(AgentEvent.stepComplete(sessionId, 1, EXECUTION_PLAN.get(0), "已加载上下文（重试）"));
+            publisher.publish(AgentEvent.stepStart(sessionId, 2, EXECUTION_PLAN.get(1)));
+
+            RunResult result = runThinkAndActLoopForPlaceholder(session, sessionId, assistantId, context, llmCaller, userId);
+
+            publisher.publish(AgentEvent.stepComplete(sessionId, 2, EXECUTION_PLAN.get(1),
+                    result.finalAnswer() != null ? "完成推理" : "达到最大迭代或已中断"));
+            publisher.publish(AgentEvent.stepStart(sessionId, 3, EXECUTION_PLAN.get(2)));
+
+            if (result.finalAnswer() != null || result.thinkingContent() != null) {
+                String displayAnswer = (result.finalAnswer() != null && !result.finalAnswer().isBlank())
+                        ? result.finalAnswer()
+                        : (result.thinkingContent() != null && !result.thinkingContent().isEmpty() ? FALLBACK_EMPTY_ANSWER : "");
+                sessionMessageService.saveNewVersion(assistantId, displayAnswer, result.thinkingContent());
+                session = sessionRepository.findBySessionId(sessionId).orElseThrow();
+                session.setResult(displayAnswer);
+                publisher.publish(AgentEvent.stepComplete(sessionId, 3, EXECUTION_PLAN.get(2), displayAnswer));
+                publisher.publish(AgentEvent.finalAnswer(sessionId, displayAnswer, 0, assistantId));
+                if (!FALLBACK_EMPTY_ANSWER.equals(displayAnswer) && displayAnswer != null && !displayAnswer.isBlank()) {
+                    storeCompletionMemory(sessionId, session.getTaskDescription(), displayAnswer, userId);
+                }
+            } else {
+                sessionMessageService.updateAssistantMessage(assistantId, assistantMsg.getContent(), SessionMessage.STATUS_DONE);
+            }
+
+            session = sessionRepository.findBySessionId(sessionId).orElseThrow();
+            if (!sessionMessageService.hasAnyAnswering(session.getId())) {
+                session.setStatus(AgentSession.SessionStatus.IDLE);
+                session.setCurrentAssistantMessageId(null);
+                sessionRepository.save(session);
+                publisher.publish(AgentEvent.statusChange(sessionId, "IDLE", SessionResponse.from(session)));
+            }
+        } catch (Exception e) {
+            log.error("[Agent:{}] Exception in retry {}: {}", sessionId, userMessageId, e.getMessage(), e);
+            sessionMessageService.updateAssistantMessage(assistantId, assistantMsg.getContent(), SessionMessage.STATUS_DONE);
+            session = sessionRepository.findBySessionId(sessionId).orElse(session);
+            if (!sessionMessageService.hasAnyAnswering(session.getId())) {
+                failSession(session, e.getMessage());
+                publisher.publish(AgentEvent.statusChange(sessionId, "IDLE", SessionResponse.from(session)));
+            }
+        }
+    }
+
+    /** 首轮或兼容入口：确保消息表有首条（system+user），创建占位，再按占位执行。 */
     private void executeLoop(AgentSession session) {
         String sessionId = session.getSessionId();
         log.info("[Agent:{}] Loop started. Task: {}", sessionId, session.getTaskDescription());
-
-        try {
-            session.setStatus(AgentSession.SessionStatus.RUNNING);
-            sessionRepository.save(session);
-            publisher.publish(AgentEvent.statusChange(sessionId, "RUNNING"));
-
-            var llmCaller = buildCaller(session);
-            final Long userId = session.getUserId();
-
-            // ── 1. Output plan to frontend ────────────────────────────────────
-            publisher.publish(AgentEvent.planReady(sessionId, new ArrayList<>(EXECUTION_PLAN)));
-
-            // ── Step 1: 回忆 ──────────────────────────────────────────────────
-            publisher.publish(AgentEvent.stepStart(sessionId, 1, EXECUTION_PLAN.get(0)));
-            List<Message> existingContext = contextService.load(session);
-            if (existingContext.isEmpty()) {
-                String systemPrompt = buildSystemPrompt();
-                contextService.initialize(session, List.of(
-                        Message.system(systemPrompt),
-                        Message.user(session.getTaskDescription())
-                ));
-            } else {
-                log.debug("[Agent:{}] Resuming with existing context ({} messages).",
-                        sessionId, existingContext.size());
-            }
-            publisher.publish(AgentEvent.stepComplete(sessionId, 1, EXECUTION_PLAN.get(0), "已回忆并注入上下文"));
-
-            // ── Step 2: 思考与执行 ───────────────────────────────────────────
-            publisher.publish(AgentEvent.stepStart(sessionId, 2, EXECUTION_PLAN.get(1)));
-            String finalAnswer = runThinkAndActLoop(session, sessionId, llmCaller, userId);
-            int lastIteration = sessionRepository.findBySessionId(sessionId)
-                    .map(AgentSession::getIterationCount).orElse(0);
-            publisher.publish(AgentEvent.stepComplete(sessionId, 2, EXECUTION_PLAN.get(1),
-                    finalAnswer != null ? "完成推理" : "达到最大迭代次数"));
-
-            // ── Step 3: 回答 ──────────────────────────────────────────────────
-            publisher.publish(AgentEvent.stepStart(sessionId, 3, EXECUTION_PLAN.get(2)));
-            session = sessionRepository.findBySessionId(sessionId)
-                    .orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
-
-            if (finalAnswer != null) {
-                session.setResult(finalAnswer);
-                session.setStatus(AgentSession.SessionStatus.COMPLETED);
-                sessionRepository.save(session);
-                publisher.publish(AgentEvent.stepComplete(sessionId, 3, EXECUTION_PLAN.get(2), finalAnswer));
-                publisher.publish(AgentEvent.finalAnswer(sessionId, finalAnswer, lastIteration));
-                publisher.publish(AgentEvent.statusChange(sessionId, "COMPLETED"));
-                storeCompletionMemory(sessionId, session.getTaskDescription(), finalAnswer, userId);
-                log.info("[Agent:{}] Completed. Plan executed.", sessionId);
-            } else {
-                failSession(session, "Max iterations (%d) reached without final answer.".formatted(MAX_ITERATIONS));
-                publisher.publish(AgentEvent.stepComplete(sessionId, 3, EXECUTION_PLAN.get(2), "未得到最终回答"));
-                publisher.publish(AgentEvent.error(sessionId, "Max iterations reached", lastIteration));
-                publisher.publish(AgentEvent.statusChange(sessionId, "FAILED"));
-            }
-
-        } catch (Exception e) {
-            log.error("[Agent:{}] Unhandled exception: {}", sessionId, e.getMessage(), e);
-            try {
-                session = sessionRepository.findBySessionId(sessionId).orElse(session);
-                failSession(session, e.getMessage());
-            } catch (Exception ignored) {}
-            publisher.publish(AgentEvent.error(sessionId, e.getMessage(), session.getIterationCount()));
-            publisher.publish(AgentEvent.statusChange(sessionId, "FAILED"));
+        session = sessionRepository.findBySessionId(sessionId).orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
+        List<Message> existing = sessionMessageService.load(session);
+        if (existing.isEmpty()) {
+            String systemPrompt = buildSystemPrompt();
+            sessionMessageService.replaceAll(session, List.of(
+                    Message.system(systemPrompt),
+                    Message.user(session.getTaskDescription())
+            ));
         }
+        SessionMessage placeholder = sessionMessageService.createPlaceholderAssistant(session);
+        executeLoopForPlaceholder(session, placeholder.getId());
     }
 
     /**
@@ -213,7 +353,7 @@ public class AgentLoopService {
      * Returns the final answer text, or null if max iterations reached.
      */
     private String runThinkAndActLoop(AgentSession session, String sessionId,
-                                      java.util.function.BiFunction<ChatRequest, java.util.function.Consumer<String>, ChatResponse> llmCaller,
+                                      java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse> llmCaller,
                                       Long userId) {
         int iteration = 0;
         while (true) {
@@ -225,7 +365,7 @@ public class AgentLoopService {
                 waitForResume(session);
                 continue;
             }
-            if (session.getStatus() != AgentSession.SessionStatus.RUNNING) {
+            if (session.getStatus() != AgentSession.SessionStatus.ACTIVE && session.getStatus() != AgentSession.SessionStatus.RUNNING) {
                 return null;
             }
 
@@ -239,8 +379,11 @@ public class AgentLoopService {
             final AgentSession finalSession = session;
             final int          finalIter   = iteration;
 
-            ChatResponse response = llmCaller.apply(request,
-                    token -> publisher.publish(AgentEvent.thinking(sessionId, token, finalIter)));
+            StreamCallbacks callbacks = new StreamCallbacks(
+                    token -> publisher.publish(AgentEvent.thinking(sessionId, token, finalIter)),
+                    t -> publisher.publish(AgentEvent.thinking(sessionId, t, finalIter))
+            );
+            ChatResponse response = llmCaller.apply(request, callbacks);
 
             Message assistantMessage = response.firstMessage();
 
@@ -253,7 +396,7 @@ public class AgentLoopService {
                 toAppend.add(assistantMessage);
                 for (ToolCall toolCall : assistantMessage.toolCalls()) {
                     publisher.publish(AgentEvent.toolCall(sessionId, toolCall, finalIter));
-                    String toolResult = executeTool(toolCall, sessionId, userId);
+                    String toolResult = executeTool(toolCall, sessionId, userId, finalIter);
                     publisher.publish(AgentEvent.toolResult(
                             sessionId, toolCall.function().name(), toolResult, finalIter));
                     toAppend.add(Message.toolResult(toolCall.id(), toolResult));
@@ -278,6 +421,103 @@ public class AgentLoopService {
             if (iteration >= MAX_ITERATIONS) {
                 log.warn("[Agent:{}] Max iterations ({}) reached.", sessionId, MAX_ITERATIONS);
                 return null;
+            }
+        }
+    }
+
+    /** 单条回复的 think 循环返回：最终回答 + 思考过程（供入库展示）。 */
+    private record RunResult(String finalAnswer, String thinkingContent) {}
+
+    /**
+     * 单条回复的 think 循环：context 来自消息表且可变，追加写回 appendToRun；每轮检查占位条是否被中断。
+     * 使用 StreamCallbacks：reasoning 流（如 DeepSeek reasoning_content）→ THINKING 事件 + thinking_content 入库；
+     * content 流仅作为最终回答，不写入思考。若 LLM 不返回 reasoning_content，思考为空。
+     */
+    private RunResult runThinkAndActLoopForPlaceholder(AgentSession session, String sessionId, long placeholderId,
+                                                       List<Message> context,
+                                                       java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse> llmCaller,
+                                                       Long userId) {
+        StringBuilder thinkingContent = new StringBuilder();
+        int iteration = 0;
+        Set<String> toolsCreatedThisRun = new java.util.LinkedHashSet<>();
+        while (true) {
+            SessionMessage p = sessionMessageService.findById(placeholderId).orElse(null);
+            if (p == null || !SessionMessage.STATUS_ANSWERING.equals(p.getMessageStatus())) {
+                log.info("[Agent:{}] Placeholder {} interrupted or gone, exit loop.", sessionId, placeholderId);
+                return new RunResult(null, thinkingContent.isEmpty() ? null : thinkingContent.toString());
+            }
+
+            iteration++;
+            publisher.publish(AgentEvent.iterationStart(sessionId, iteration));
+
+            String queryForTools = lastUserMessageFrom(context, session.getTaskDescription());
+            List<Tool> tools = loadRelevantTools(queryForTools, TOP_K_TOOLS, userId);
+            java.util.Set<String> haveNames = new java.util.HashSet<>();
+            for (Tool t : tools) haveNames.add(t.function().name());
+            for (String name : toolsCreatedThisRun) {
+                if (!haveNames.contains(name)) {
+                    toolRepository.findByToolName(name).map(this::toTool).ifPresent(t -> {
+                        tools.add(t);
+                        haveNames.add(name);
+                    });
+                }
+            }
+            ChatRequest request = ChatRequest.withTools("", context, tools.isEmpty() ? null : tools);
+            final int finalIter = iteration;
+            StringBuilder currentIterReasoning = new StringBuilder();
+
+            StreamCallbacks callbacks = new StreamCallbacks(
+                    t -> { /* content 仅由 LlmClient 累积并作为 firstMessage().content() 返回，不推思考 */ },
+                    t -> {
+                        publisher.publish(AgentEvent.thinking(sessionId, t, finalIter));
+                        currentIterReasoning.append(t);
+                        thinkingContent.append(t);
+                    }
+            );
+            ChatResponse response = llmCaller.apply(request, callbacks);
+
+            Message assistantMessage = response.firstMessage();
+
+            if (response.hasToolCalls()) {
+                List<Message> toAppend = new ArrayList<>();
+                Message assistantWithReasoning = Message.builder()
+                        .role("assistant")
+                        .content(assistantMessage.content())
+                        .toolCalls(assistantMessage.toolCalls())
+                        .reasoningContent(currentIterReasoning.isEmpty() ? "" : currentIterReasoning.toString())
+                        .build();
+                toAppend.add(assistantWithReasoning);
+                for (ToolCall toolCall : assistantMessage.toolCalls()) {
+                    publisher.publish(AgentEvent.toolCall(sessionId, toolCall, finalIter));
+                    String toolResult = executeTool(toolCall, sessionId, userId, finalIter);
+                    if ("create_tool".equals(toolCall.function().name()) && toolResult != null && !toolResult.startsWith("[ToolError]")) {
+                        String createdName = parseToolNameFromCreateToolArgs(toolCall.function().arguments());
+                        if (createdName != null && !createdName.isBlank()) {
+                            toolsCreatedThisRun.add(createdName);
+                            toolIndexService.indexToolByName(createdName, userId);
+                        }
+                    }
+                    publisher.publish(AgentEvent.toolResult(
+                            sessionId, toolCall.function().name(), toolResult, finalIter));
+                    toAppend.add(Message.toolResult(toolCall.id(), toolResult));
+                    maybeRememberToolResult(sessionId, toolCall.function().name(), toolResult, userId);
+                }
+                context.addAll(toAppend);
+                sessionMessageService.appendToRun(session, placeholderId, toAppend.toArray(new Message[0]));
+            } else {
+                String answer = (assistantMessage.content() != null && !assistantMessage.content().isBlank())
+                        ? assistantMessage.content() : "";
+                // 部分模型（如 DeepSeek 思考模式）可能只返回 reasoning 流、不返回 content 流，导致 content 为空
+                if (answer.isEmpty() && !thinkingContent.isEmpty()) {
+                    log.debug("[Agent:{}] LLM returned empty content but had reasoning ({} chars), using fallback.", sessionId, thinkingContent.length());
+                    answer = FALLBACK_EMPTY_ANSWER;
+                }
+                return new RunResult(answer, thinkingContent.isEmpty() ? null : thinkingContent.toString());
+            }
+
+            if (iteration >= MAX_ITERATIONS) {
+                log.warn("[Agent:{}] Max iterations ({}) reached for placeholder {}.", sessionId, MAX_ITERATIONS, placeholderId);
+                return new RunResult(null, thinkingContent.isEmpty() ? null : thinkingContent.toString());
             }
         }
     }
@@ -326,7 +566,7 @@ public class AgentLoopService {
 
     // ── Tool execution ───────────────────────────────────────────────────────
 
-    private String executeTool(ToolCall toolCall, String sessionId, Long userId) {
+    private String executeTool(ToolCall toolCall, String sessionId, Long userId, int iteration) {
         String toolName  = toolCall.function().name();
         String arguments = toolCall.function().arguments();
         log.info("[Agent:{}] Executing tool: {} args={}", sessionId, toolName, arguments);
@@ -339,6 +579,26 @@ public class AgentLoopService {
         if ("store_memory".equals(toolName)) {
             return executeStoreMemoryTool(sessionId, arguments);
         }
+        // Built-in: tavily_search — web search via Tavily API (key from system_config)
+        if ("tavily_search".equals(toolName)) {
+            return executeTavilySearchTool(arguments);
+        }
+        // Built-in: create_tool — 编写工具的工具，将新工具注册到 agent_tools 表
+        if ("create_tool".equals(toolName)) {
+            return executeCreateTool(arguments);
+        }
+        // Built-in: install_container_package — 在用户隔离的 Linux 容器内安装软件（如 python3、nodejs）
+        if ("install_container_package".equals(toolName)) {
+            return executeInstallContainerPackage(sessionId, arguments, userId, toolCall.id(), iteration);
+        }
+        // Built-in: run_container_cmd — 在用户容器内执行任意 shell 命令（如安装 JDK、配置环境）
+        if ("run_container_cmd".equals(toolName)) {
+            return executeRunContainerCmd(sessionId, arguments, userId, toolCall.id(), iteration);
+        }
+        // Built-in: write_container_file — 通过 stdin 写内容到容器内文件，不经过 shell 转义，支持任意符号
+        if ("write_container_file".equals(toolName)) {
+            return executeWriteContainerFile(sessionId, arguments, userId);
+        }
 
         AgentTool tool = toolRepository.findByToolName(toolName).orElse(null);
         if (tool == null) return "[ToolError] Unknown tool: " + toolName;
@@ -346,7 +606,7 @@ public class AgentLoopService {
         return switch (tool.getToolType()) {
             case JAVA_NATIVE  -> executeJavaTool(tool, arguments, sessionId);
             case PYTHON_SCRIPT, NODE_SCRIPT, SHELL_CMD ->
-                    executeScriptTool(tool, arguments, sessionId);
+                    executeScriptTool(tool, arguments, sessionId, userId, toolCall.id(), iteration);
         };
     }
 
@@ -438,6 +698,381 @@ public class AgentLoopService {
         }
     }
 
+    /**
+     * Built-in tavily_search tool: web search via Tavily API.
+     * API Key 从系统配置表 system_config 的 TAVILY_API_KEY 读取。
+     */
+    private String executeTavilySearchTool(String argumentsJson) {
+        try {
+            JsonNode args = objectMapper.readTree(argumentsJson);
+            String query = args.path("query").asText("");
+            int maxResults = args.path("max_results").asInt(5);
+            String searchDepth = args.path("search_depth").asText("basic");
+            String topic = args.path("topic").asText("general");
+            String apiKey = systemConfigService.getTavilyApiKey().orElse(null);
+            return tavilySearchService.search(apiKey, query, maxResults, searchDepth, topic);
+        } catch (Exception e) {
+            log.warn("[Agent] tavily_search failed: {}", e.getMessage());
+            return "[ToolError] tavily_search failed: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Built-in create_tool: 编写工具的工具。将新工具注册到 agent_tools 表，仅支持脚本类型（PYTHON_SCRIPT / NODE_SCRIPT / SHELL_CMD）。
+     * 执行逻辑仍为占位，后续可接入真实脚本执行引擎。
+     */
+    private String executeCreateTool(String argumentsJson) {
+        try {
+            JsonNode args = objectMapper.readTree(argumentsJson);
+            String toolName = args.path("tool_name").asText("").trim();
+            String toolDescription = args.path("tool_description").asText("").trim();
+            String inputSchemaRaw = args.path("input_schema").asText("").trim();
+            String toolTypeStr = args.path("tool_type").asText("").toUpperCase();
+            String scriptContent = args.has("script_content") ? args.path("script_content").asText("") : "";
+            String entryPoint = args.has("entry_point") ? args.path("entry_point").asText("").trim() : null;
+
+            if (toolName.isEmpty()) return "[ToolError] create_tool 需要非空的 tool_name（仅字母、数字、下划线，如 get_weather）。";
+            if (!toolName.matches("[a-zA-Z][a-zA-Z0-9_]*")) return "[ToolError] tool_name 须以字母开头，仅含字母、数字、下划线。";
+            if (Set.of("recall_memory", "store_memory", "tavily_search", "create_tool", "install_container_package", "run_container_cmd", "write_container_file").contains(toolName)) {
+                return "[ToolError] tool_name 不能与内置工具重名: " + toolName;
+            }
+            if (toolDescription.isEmpty()) return "[ToolError] create_tool 需要非空的 tool_description。";
+            if (inputSchemaRaw.isEmpty()) return "[ToolError] create_tool 需要非空的 input_schema（JSON 对象字符串）。";
+
+            AgentTool.ToolType toolType;
+            try {
+                toolType = AgentTool.ToolType.valueOf(toolTypeStr);
+            } catch (Exception e) {
+                return "[ToolError] tool_type 须为 PYTHON_SCRIPT、NODE_SCRIPT 或 SHELL_CMD 之一。";
+            }
+            if (toolType == AgentTool.ToolType.JAVA_NATIVE) {
+                return "[ToolError] 不允许通过 create_tool 创建 JAVA_NATIVE 工具，仅支持 PYTHON_SCRIPT / NODE_SCRIPT / SHELL_CMD。";
+            }
+            if (scriptContent == null) scriptContent = "";
+            if (entryPoint == null || entryPoint.isEmpty()) {
+                String ext = switch (toolType) {
+                    case PYTHON_SCRIPT -> ".py";
+                    case NODE_SCRIPT -> ".js";
+                    case SHELL_CMD -> ".sh";
+                    default -> "";
+                };
+                entryPoint = toolName + ext;
+            }
+
+            objectMapper.readTree(inputSchemaRaw);
+
+            AgentTool entity = toolRepository.findByToolName(toolName).orElse(null);
+            if (entity != null) {
+                entity.setToolDescription(toolDescription);
+                entity.setInputSchema(inputSchemaRaw);
+                entity.setToolType(toolType);
+                entity.setScriptContent(scriptContent.isEmpty() ? null : scriptContent);
+                entity.setEntryPoint(entryPoint);
+                entity.setIsActive(true);
+                toolRepository.save(entity);
+                log.info("[Agent] create_tool: 已更新工具 {}", toolName);
+                return "工具已更新: " + toolName + "。后续对话中可调用此工具。";
+            }
+            entity = AgentTool.builder()
+                    .toolName(toolName)
+                    .toolDescription(toolDescription)
+                    .inputSchema(inputSchemaRaw)
+                    .toolType(toolType)
+                    .scriptContent(scriptContent.isEmpty() ? null : scriptContent)
+                    .entryPoint(entryPoint)
+                    .isActive(true)
+                    .build();
+            toolRepository.save(entity);
+            log.info("[Agent] create_tool: 已注册新工具 {}", toolName);
+            return "工具已注册: " + toolName + "。后续对话中可调用此工具。注意：脚本类工具当前为占位执行，实际运行需接入执行引擎。";
+        } catch (JsonProcessingException e) {
+            return "[ToolError] input_schema 须为合法 JSON 对象: " + e.getMessage();
+        } catch (Exception e) {
+            log.warn("[Agent] create_tool failed: {}", e.getMessage());
+            return "[ToolError] create_tool 执行失败: " + e.getMessage();
+        }
+    }
+
+    /**
+     * 在用户隔离的 Linux 容器内执行 apt-get install，供 AI 在运行脚本前安装 python3、nodejs 等。
+     * 仅当 Docker 启用且 userId 存在时可用；容器需具备网络（apt-get update）。
+     */
+    /**
+     * 在用户容器内执行 apt-get 安装；输出实时推送到前端（TOOL_OUTPUT_CHUNK），与 run_container_cmd/脚本一致。
+     */
+    private String executeInstallContainerPackage(String sessionId, String argumentsJson, Long userId, String toolCallId, int iteration) {
+        if (!scriptDockerProperties.enabled()) {
+            return "[ToolError] install_container_package 仅在启用 Docker 用户隔离时可用。请在配置中开启 agent.script.docker.enabled。";
+        }
+        if (userId == null) {
+            return "[ToolError] install_container_package 需要已登录用户（无法确定用户容器）。";
+        }
+        try {
+            JsonNode args = objectMapper.readTree(argumentsJson);
+            String packagesStr = args.path("packages").asText("").trim();
+            if (packagesStr.isEmpty()) {
+                return "[ToolError] install_container_package 需要非空的 packages 参数，例如 \"python3\" 或 \"python3 nodejs\"。";
+            }
+            List<String> packages = new ArrayList<>();
+            for (String s : packagesStr.split("[,\\s]+")) {
+                String p = s.trim();
+                if (p.isEmpty()) continue;
+                if (!p.matches("[a-zA-Z0-9.+-]+")) {
+                    return "[ToolError] 非法包名: " + p + "。仅允许字母、数字、点、加号、连字符。";
+                }
+                packages.add(p);
+            }
+            if (packages.isEmpty()) {
+                return "[ToolError] install_container_package 需要至少一个合法包名，例如 \"python3\"。";
+            }
+            String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
+            if (containerIdOrName == null) {
+                return "[ToolError] 无法获取或创建用户 Linux 容器，请确认 Docker 已启动。";
+            }
+            String pkgList = String.join(" ", packages);
+            ProcessBuilder pb = new ProcessBuilder(
+                    "docker", "exec", containerIdOrName,
+                    "sh", "-c", "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y " + pkgList
+            );
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            StringBuilder outBuilder = new StringBuilder();
+            AtomicLong lastOutputTime = new AtomicLong(System.currentTimeMillis());
+            Thread reader = new Thread(() -> readProcessOutputWithStreaming(
+                    outBuilder, p.getInputStream(), 50_000,
+                    lastOutputTime, chunk -> publisher.publish(AgentEvent.toolOutputChunk(sessionId, toolCallId, chunk, iteration))
+            ));
+            reader.start();
+            int idleSec = scriptDockerProperties.runContainerCmdIdleTimeoutSeconds();
+            long idleMs = idleSec * 1000L;
+            while (p.isAlive() && !p.waitFor(500, TimeUnit.MILLISECONDS)) {
+                if (p.isAlive() && (System.currentTimeMillis() - lastOutputTime.get() >= idleMs)) {
+                    p.destroyForcibly();
+                    try { reader.join(2000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                    return "[ToolError] install_container_package 在 " + idleSec + "s 内无新输出，视为卡住已终止。\n" + (outBuilder.length() > 800 ? outBuilder.substring(0, 800) + "..." : outBuilder.toString());
+                }
+            }
+            try { reader.join(2000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+            String output = outBuilder.toString().trim();
+            int exit = p.exitValue();
+            if (exit != 0) {
+                return "[ToolError] 容器内安装失败 (exit " + exit + "): " + (output.length() > 1500 ? output.substring(0, 1500) + "..." : output);
+            }
+            log.info("[Agent:{}] install_container_package 已安装: {}", sessionId, pkgList);
+            return "已在该用户 Linux 容器内安装: " + pkgList + "。\n" + (output.length() > 800 ? output.substring(0, 800) + "..." : output);
+        } catch (Exception e) {
+            log.warn("[Agent:{}] install_container_package failed: {}", sessionId, e.getMessage());
+            return "[ToolError] install_container_package 执行失败: " + e.getMessage();
+        }
+    }
+
+    private static final int RUN_CONTAINER_CMD_MAX_OUTPUT_CHARS = 8000;
+
+    /**
+     * 在用户隔离的 Linux 容器内执行任意 shell 命令。实时推送 stdout 到前端（TOOL_OUTPUT_CHUNK），
+     * 超时策略：有输出则重置「空闲计时」；仅当连续无输出超过 idleTimeout 或总时长超过 maxTimeout 才判超时。
+     */
+    private String executeRunContainerCmd(String sessionId, String argumentsJson, Long userId, String toolCallId, int iteration) {
+        if (!scriptDockerProperties.enabled()) {
+            return "[ToolError] run_container_cmd 仅在启用 Docker 用户隔离时可用。";
+        }
+        if (userId == null) {
+            return "[ToolError] run_container_cmd 需要已登录用户（无法确定用户容器）。";
+        }
+        try {
+            JsonNode args = objectMapper.readTree(argumentsJson);
+            List<String> commandsToRun = new ArrayList<>();
+            if (args.has("commands") && args.get("commands").isArray()) {
+                for (JsonNode c : args.get("commands")) {
+                    String s = c.asText("").trim();
+                    if (!s.isEmpty()) commandsToRun.add(s);
+                }
+            }
+            if (commandsToRun.isEmpty()) {
+                String single = args.path("command").asText("").trim();
+                if (!single.isEmpty()) commandsToRun.add(single);
+            }
+            if (commandsToRun.isEmpty()) {
+                return "[ToolError] run_container_cmd 需要非空的 command 或 commands（字符串数组）参数。";
+            }
+            for (String cmd : commandsToRun) {
+                if (cmd.length() > 800) {
+                    return "[ToolError] run_container_cmd 单条命令不得超过 800 字符（当前 " + cmd.length() + "）。长脚本请用 write_container_file 分块写入：每次 content 不超过 600 字符，多次调用 append=true，再用本工具 chmod +x 并执行。";
+                }
+            }
+            String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
+            if (containerIdOrName == null) {
+                return "[ToolError] 无法获取或创建用户 Linux 容器，请确认 Docker 已启动。";
+            }
+            int idleSec = scriptDockerProperties.runContainerCmdIdleTimeoutSeconds();
+            long idleMs = idleSec * 1000L;
+            StringBuilder allOutput = new StringBuilder();
+            for (int i = 0; i < commandsToRun.size(); i++) {
+                String command = commandsToRun.get(i);
+                ProcessBuilder pb = new ProcessBuilder(
+                        "docker", "exec", containerIdOrName,
+                        "sh", "-c", command
+                );
+                pb.redirectErrorStream(true);
+                Process p = pb.start();
+                StringBuilder outBuilder = new StringBuilder();
+                AtomicLong lastOutputTime = new AtomicLong(System.currentTimeMillis());
+                Thread reader = new Thread(() -> readProcessOutputWithStreaming(
+                        outBuilder, p.getInputStream(), RUN_CONTAINER_CMD_MAX_OUTPUT_CHARS,
+                        lastOutputTime, chunk -> publisher.publish(AgentEvent.toolOutputChunk(sessionId, toolCallId, chunk, iteration))
+                ));
+                reader.start();
+                // 不设总时长：仅当连续无输出超过 idleSec 才视为卡住；长时间有输出（如几小时下载）会一直跑
+                while (p.isAlive() && !p.waitFor(500, TimeUnit.MILLISECONDS)) {
+                    if (p.isAlive()) {
+                        long now = System.currentTimeMillis();
+                        long sinceLastOutput = now - lastOutputTime.get();
+                        if (sinceLastOutput >= idleMs) {
+                            p.destroyForcibly();
+                            try { reader.join(2000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                            String output = outBuilder.toString().trim();
+                            return "[ToolError] 第 " + (i + 1) + "/" + commandsToRun.size() + " 条命令在 " + idleSec + "s 内无新输出，视为卡住已终止。\n已捕获输出:\n" + (allOutput.length() > 1500 ? allOutput.substring(0, 1500) + "..." : allOutput) + "\n" + (output.length() > 500 ? output.substring(0, 500) + "..." : output);
+                        }
+                    }
+                }
+                try { reader.join(2000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                String output = outBuilder.toString().trim();
+                int exit = p.exitValue();
+                if (exit != 0) {
+                    return "[ToolError] 第 " + (i + 1) + "/" + commandsToRun.size() + " 条命令退出码 " + exit + ":\n" + (output.length() > 3000 ? output.substring(0, 3000) + "..." : output);
+                }
+                if (!output.isEmpty()) {
+                    if (allOutput.length() > 0) allOutput.append("\n");
+                    allOutput.append(output);
+                }
+            }
+            log.info("[Agent:{}] run_container_cmd 执行成功, {} 条命令", sessionId, commandsToRun.size());
+            String result = allOutput.toString().trim();
+            return result.isEmpty() ? "(共 " + commandsToRun.size() + " 条命令执行成功，无输出)" : result;
+        } catch (Exception e) {
+            log.warn("[Agent:{}] run_container_cmd failed: {}", sessionId, e.getMessage());
+            return "[ToolError] run_container_cmd 执行失败: " + e.getMessage();
+        }
+    }
+
+    /** 读取进程输出并按行/块推送；每有内容就更新 lastOutputTime，供「无输出即卡住」超时判断。 */
+    private void readProcessOutputWithStreaming(StringBuilder sb, java.io.InputStream in, int maxChars,
+                                                 AtomicLong lastOutputTime, java.util.function.Consumer<String> onChunk) {
+        try (var r = new java.io.BufferedReader(new java.io.InputStreamReader(in, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = r.readLine()) != null && sb.length() < maxChars) {
+                sb.append(line).append("\n");
+                lastOutputTime.set(System.currentTimeMillis());
+                if (!line.isEmpty()) {
+                    try { onChunk.accept(line + "\n"); } catch (Exception ignored) { }
+                }
+            }
+            if (sb.length() >= maxChars) sb.append("\n... (输出已截断)");
+        } catch (Exception ignored) { }
+    }
+
+    /** 单次 content 上限，避免模型输出过长被截断；长脚本必须分块多次调用 append=true */
+    private static final int WRITE_CONTAINER_FILE_MAX_CONTENT_CHARS = 600;
+
+    /**
+     * 标准做法：通过 stdin 将内容管道进容器写文件，不经过 shell 参数，故无需转义任何符号（引号、$、反引号等）。
+     * 容器内执行 read -r path 读第一行作为路径，cat > "$path" 或 cat >> "$path" 写剩余 stdin。
+     * 单次 content 不得超过 WRITE_CONTAINER_FILE_MAX_CONTENT_CHARS，长脚本分多次调用、append=true 追加。
+     */
+    private String executeWriteContainerFile(String sessionId, String argumentsJson, Long userId) {
+        if (!scriptDockerProperties.enabled()) {
+            return "[ToolError] write_container_file 仅在启用 Docker 用户隔离时可用。";
+        }
+        if (userId == null) {
+            return "[ToolError] write_container_file 需要已登录用户。";
+        }
+        Path tempFile = null;
+        try {
+            JsonNode args = objectMapper.readTree(argumentsJson);
+            String path = args.path("path").asText("").trim();
+            String content = args.has("content") ? args.get("content").asText("") : "";
+            boolean append = args.path("append").asBoolean(false);
+            if (path.isEmpty()) {
+                return "[ToolError] write_container_file 需要非空的 path（容器内文件路径，不要包含换行）。";
+            }
+            if (path.contains("\n") || path.contains("\r")) {
+                return "[ToolError] write_container_file 的 path 不能包含换行符。";
+            }
+            if (content.length() > WRITE_CONTAINER_FILE_MAX_CONTENT_CHARS) {
+                return "[ToolError] write_container_file 单次 content 不得超过 " + WRITE_CONTAINER_FILE_MAX_CONTENT_CHARS + " 字符（当前 " + content.length() + "），否则会被截断。必须分块：第一次 path + content（前 ~600 字符），后续多次 path + content（下一块）+ append=true，直到写完整个脚本。";
+            }
+            String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
+            if (containerIdOrName == null) {
+                return "[ToolError] 无法获取或创建用户 Linux 容器。";
+            }
+            tempFile = Files.createTempFile("aimate_wcf_", ".dat");
+            Files.writeString(tempFile, path + "\n" + content, StandardCharsets.UTF_8);
+            String shellCmd = append ? "read -r path; cat >> \"$path\"" : "read -r path; cat > \"$path\"";
+            ProcessBuilder pb = new ProcessBuilder(
+                    "docker", "exec", "-i", containerIdOrName,
+                    "sh", "-c", shellCmd
+            );
+            pb.redirectInput(ProcessBuilder.Redirect.from(tempFile.toFile()));
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            StringBuilder outBuilder = new StringBuilder();
+            Thread reader = new Thread(() -> readProcessOutputInto(outBuilder, p.getInputStream(), 4000));
+            reader.start();
+            boolean finished = p.waitFor(60, java.util.concurrent.TimeUnit.SECONDS);
+            try { reader.join(2000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+            if (!finished) {
+                p.destroyForcibly();
+                return "[ToolError] write_container_file 超时（60s）。";
+            }
+            int exit = p.exitValue();
+            if (exit != 0) {
+                return "[ToolError] write_container_file 失败 exit " + exit + ": " + outBuilder.toString().trim();
+            }
+            log.info("[Agent:{}] write_container_file 已写入 {} (append={})", sessionId, path, append);
+            return "已写入容器内文件: " + path + " (" + (append ? "追加" : "覆盖") + "), " + content.length() + " 字节。";
+        } catch (Exception e) {
+            log.warn("[Agent:{}] write_container_file failed: {}", sessionId, e.getMessage());
+            return "[ToolError] write_container_file 执行失败: " + e.getMessage();
+        } finally {
+            if (tempFile != null) {
+                try { Files.deleteIfExists(tempFile); } catch (Exception ignored) { }
+            }
+        }
+    }
+
+    private static void readProcessOutputInto(StringBuilder sb, java.io.InputStream in, int maxChars) {
+        try (var r = new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8)) {
+            char[] buf = new char[1024];
+            int n;
+            while ((n = r.read(buf)) != -1 && sb.length() < maxChars) sb.append(buf, 0, n);
+            if (sb.length() >= maxChars) sb.append("\n... (输出已截断)");
+        } catch (Exception ignored) { }
+    }
+
+    private static String readProcessOutput(Process p) {
+        try (var r = new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8)) {
+            StringBuilder sb = new StringBuilder();
+            char[] buf = new char[1024];
+            int n;
+            while ((n = r.read(buf)) != -1) sb.append(buf, 0, n);
+            return sb.toString().trim();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** 从 create_tool 的 arguments JSON 中解析出 tool_name，用于本轮循环内刷新工具列表。 */
+    private String parseToolNameFromCreateToolArgs(String argumentsJson) {
+        if (argumentsJson == null || argumentsJson.isBlank()) return null;
+        try {
+            JsonNode args = objectMapper.readTree(argumentsJson);
+            String name = args.path("tool_name").asText(null);
+            return (name != null && !name.isBlank()) ? name.trim() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private static String normalizeForDedupe(String content) {
         if (content == null) return "";
         return content.trim().toLowerCase().replaceAll("\\s+", " ");
@@ -456,12 +1091,11 @@ public class AgentLoopService {
                 .formatted(tool.getToolName(), arguments);
     }
 
-    private String executeScriptTool(AgentTool tool, String arguments, String sessionId) {
-        log.debug("[Agent:{}] Script tool '{}' type={}",
+    private String executeScriptTool(AgentTool tool, String arguments, String sessionId, Long userId, String toolCallId, int iteration) {
+        log.debug("[Agent:{}] Executing script tool '{}' type={}",
                 sessionId, tool.getToolName(), tool.getToolType());
-        // TODO (Phase 3): ProcessBuilder sandbox execution
-        return "[STUB] Script tool '%s' (%s) would execute here. args=%s"
-                .formatted(tool.getToolName(), tool.getToolType(), arguments);
+        return scriptToolExecutor.execute(tool, arguments, userId,
+                chunk -> publisher.publish(AgentEvent.toolOutputChunk(sessionId, toolCallId, chunk, iteration)));
     }
 
     // ── Tool loading (vectorized: only pass semantically relevant tools) ─────
@@ -470,6 +1104,18 @@ public class AgentLoopService {
      * Returns the last user message content from context, or taskDescription if none.
      * Used as the query for tool retrieval.
      */
+    /** 发给 LLM 前去掉末尾的「空占位 assistant」，避免 API 报 content/tool_calls 必填。 */
+    private List<Message> trimTrailingEmptyAssistant(List<Message> context) {
+        if (context == null || context.isEmpty()) return context;
+        Message last = context.get(context.size() - 1);
+        if ("assistant".equals(last.role())
+                && (last.content() == null || last.content().isBlank())
+                && (last.toolCalls() == null || last.toolCalls().isEmpty())) {
+            return new ArrayList<>(context.subList(0, context.size() - 1));
+        }
+        return new ArrayList<>(context);
+    }
+
     private String lastUserMessageFrom(List<Message> context, String taskDescription) {
         if (context == null || context.isEmpty()) return taskDescription != null ? taskDescription : "";
         for (int i = context.size() - 1; i >= 0; i--) {
@@ -491,30 +1137,48 @@ public class AgentLoopService {
         if (relevantIds == null || relevantIds.isEmpty()) {
             return loadAllTools();
         }
-        List<Tool> tools = new ArrayList<>();
+        List<Tool> fromSearch = new ArrayList<>();
         Set<String> added = new java.util.LinkedHashSet<>();
         for (String id : relevantIds) {
             if (id == null || !added.add(id)) continue;
-            if ("recall_memory".equals(id)) {
-                tools.add(buildRecallMemoryTool());
-            } else if ("store_memory".equals(id)) {
-                tools.add(buildStoreMemoryTool());
-            } else {
-                toolRepository.findByToolName(id).map(this::toTool).ifPresent(tools::add);
-            }
+            toolRepository.findByToolName(id).map(this::toTool).ifPresent(fromSearch::add);
         }
+        List<Tool> tools = ensureSystemToolsFirst(fromSearch);
+        tools.add(buildCreateToolTool());
         return tools;
     }
 
-    /** Fallback: all built-in + all active DB tools (used when tool index is empty or disabled). */
+    /** 从 agent_tools 表加载所有启用工具；若表为空则退回内置三件套。系统三件套始终排在最前，保证 recall_memory 等可被调用。 */
     private List<Tool> loadAllTools() {
-        List<Tool> tools = new ArrayList<>();
-        tools.add(buildRecallMemoryTool());
-        tools.add(buildStoreMemoryTool());
-        toolRepository.findByIsActiveTrue().stream()
+        List<Tool> base = toolRepository.findByIsActiveTrue().stream()
                 .map(this::toTool)
-                .forEach(tools::add);
-        return tools;
+                .toList();
+        List<Tool> result = new ArrayList<>(base);
+        if (result.isEmpty()) {
+            log.debug("[Agent] agent_tools 表为空，使用内置工具（可执行 seed_builtin_tools.sql 将内置工具入库）");
+        }
+        result = ensureSystemToolsFirst(result);
+        result.add(buildInstallContainerPackageTool());
+        result.add(buildRunContainerCmdTool());
+        result.add(buildWriteContainerFileTool());
+        result.add(buildCreateToolTool());
+        return result;
+    }
+
+    private static final Set<String> SYSTEM_TOOL_NAMES_SET = Set.of("recall_memory", "store_memory", "tavily_search");
+    /** 由代码直接构建、不从 DB 重复加载的工具名 */
+    private static final Set<String> CODE_BUILT_TOOL_NAMES = Set.of("recall_memory", "store_memory", "tavily_search", "create_tool", "install_container_package", "run_container_cmd", "write_container_file");
+
+    /** 将 recall_memory / store_memory / tavily_search 置于列表最前，缺则补上；过滤掉由代码构建的工具避免重复。 */
+    private List<Tool> ensureSystemToolsFirst(List<Tool> tools) {
+        List<Tool> out = new ArrayList<>();
+        out.add(buildRecallMemoryTool());
+        out.add(buildStoreMemoryTool());
+        out.add(buildTavilySearchTool());
+        for (Tool t : tools) {
+            if (!CODE_BUILT_TOOL_NAMES.contains(t.function().name())) out.add(t);
+        }
+        return out;
     }
 
     private Tool buildRecallMemoryTool() {
@@ -582,6 +1246,181 @@ public class AgentLoopService {
         }
     }
 
+    private Tool buildTavilySearchTool() {
+        String schema = """
+                {
+                  "type":"object",
+                  "properties":{
+                    "query":{
+                      "type":"string",
+                      "description":"Search query in natural language (e.g. 'Spring Boot 3.2 release notes', '今日天气'). Use when you need real-time or factual information from the web."
+                    },
+                    "max_results":{
+                      "type":"integer",
+                      "minimum":1,
+                      "maximum":20,
+                      "description":"Max number of search results to return (default 5)."
+                    },
+                    "search_depth":{
+                      "type":"string",
+                      "enum":["basic","advanced","fast","ultra-fast"],
+                      "description":"basic=balanced; advanced=higher relevance; fast/ultra-fast=lower latency. Default: basic."
+                    },
+                    "topic":{
+                      "type":"string",
+                      "enum":["general","news","finance"],
+                      "description":"Search category. general=default; news=recent events; finance=financial. Default: general."
+                    }
+                  },
+                  "required":["query"]
+                }
+                """;
+        try {
+            JsonNode params = objectMapper.readTree(schema);
+            return Tool.ofFunction(new ToolFunction(
+                    "tavily_search",
+                    "Search the web for real-time or factual information via Tavily. Use when the user asks about current events, recent news, or facts you are unsure about. Prefer recall_memory for the user's own stored information.",
+                    params
+            ));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to build tavily_search tool schema", e);
+        }
+    }
+
+    private Tool buildInstallContainerPackageTool() {
+        String schema = """
+                {
+                  "type":"object",
+                  "properties":{
+                    "packages":{
+                      "type":"string",
+                      "description":"Space- or comma-separated list of Debian/apt package names to install in the user's Linux container. E.g. 'python3' for Python scripts, 'nodejs' for Node scripts. Install runtimes BEFORE calling script tools that need them."
+                    }
+                  },
+                  "required":["packages"]
+                }
+                """;
+        try {
+            JsonNode params = objectMapper.readTree(schema);
+            return Tool.ofFunction(new ToolFunction(
+                    "install_container_package",
+                    "Install system packages (e.g. python3, nodejs) inside the user's isolated Linux container. Call this BEFORE running script tools that need an interpreter—the container is minimal and does not include python3/node by default. Use when a script fails with exit 127 (command not found) or when you are about to run a Python/Node script. Example: packages='python3' or 'python3 nodejs'.",
+                    params
+            ));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to build install_container_package schema", e);
+        }
+    }
+
+    private Tool buildRunContainerCmdTool() {
+        String schema = """
+                {
+                  "type":"object",
+                  "properties":{
+                    "command":{
+                      "type":"string",
+                      "description":"Single shell command to run (e.g. apt-get install -y openjdk-17-jdk). Use for short one-off commands."
+                    },
+                    "commands":{
+                      "type":"array",
+                      "items":{"type":"string"},
+                      "description":"List of shell commands to run in sequence. PREFERRED for long scripts: one command per line, e.g. echo 'line1' > file, echo 'line2' >> file, to avoid truncation."
+                    }
+                  }
+                }
+                """;
+        try {
+            JsonNode params = objectMapper.readTree(schema);
+            return Tool.ofFunction(new ToolFunction(
+                    "run_container_cmd",
+                    "Run shell command(s) in the user's Linux container. This is the ONLY way to execute any command inside the container—use this tool for all in-container commands. Use 'command' for a single short command. Use 'commands' (array of strings) for long scripts: pass one command per line. Timeout per command is configurable (default 300s).",
+                    params
+            ));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to build run_container_cmd schema", e);
+        }
+    }
+
+    private Tool buildWriteContainerFileTool() {
+        String schema = """
+                {
+                  "type":"object",
+                  "properties":{
+                    "path":{
+                      "type":"string",
+                      "description":"Absolute or relative path of the file inside the container (e.g. /home/workspace/scripts/foo.sh). Must be a single line, no newlines."
+                    },
+                    "content":{
+                      "type":"string",
+                      "description":"File content for this chunk. MAX 600 characters per call. Use \\n for newlines. For long scripts, pass first ~600 chars here, then call again with next ~600 chars and append=true, repeat. No shell escaping needed."
+                    },
+                    "append":{
+                      "type":"boolean",
+                      "description":"If true, append to existing file; otherwise overwrite. Default false."
+                    }
+                  },
+                  "required":["path","content"]
+                }
+                """;
+        try {
+            JsonNode params = objectMapper.readTree(schema);
+            return Tool.ofFunction(new ToolFunction(
+                    "write_container_file",
+                    "Write content to a file in the user's container. path=container path. content=at most 600 chars per call (use \\n for newlines). append=true to append. For scripts longer than 600 chars you MUST call multiple times: 1st path+content, then same path+next content+append=true, until done. Never put entire long script in one call—backend rejects >600 chars. Then run_container_cmd chmod +x path.",
+                    params
+            ));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to build write_container_file schema", e);
+        }
+    }
+
+    /** 编写工具的工具：AI 可调用此工具将新工具注册到 agent_tools 表（仅支持脚本类型）。 */
+    private Tool buildCreateToolTool() {
+        String schema = """
+                {
+                  "type":"object",
+                  "properties":{
+                    "tool_name":{
+                      "type":"string",
+                      "description":"Unique identifier for the new tool (letters, numbers, underscores only; e.g. get_weather, calc_sum). Must start with a letter."
+                    },
+                    "tool_description":{
+                      "type":"string",
+                      "description":"Natural language description for when the LLM should call this tool. Be clear and specific."
+                    },
+                    "input_schema":{
+                      "type":"string",
+                      "description":"JSON Schema object as a string. Example: { \\\"type\\\": \\\"object\\\", \\\"properties\\\": { \\\"city\\\": { \\\"type\\\": \\\"string\\\" } }, \\\"required\\\": [ \\\"city\\\" ] }. Must be valid JSON."
+                    },
+                    "tool_type":{
+                      "type":"string",
+                      "enum":["PYTHON_SCRIPT","NODE_SCRIPT","SHELL_CMD"],
+                      "description":"Script type: PYTHON_SCRIPT, NODE_SCRIPT, or SHELL_CMD. JAVA_NATIVE is not allowed via this tool."
+                    },
+                    "script_content":{
+                      "type":"string",
+                      "description":"Source code of the script. Optional for registration; can be filled later. For PYTHON_SCRIPT use Python; NODE_SCRIPT use JavaScript; SHELL_CMD use shell commands."
+                    },
+                    "entry_point":{
+                      "type":"string",
+                      "description":"Suggested filename (e.g. get_weather.py). Optional; defaults to tool_name + extension."
+                    }
+                  },
+                  "required":["tool_name","tool_description","input_schema","tool_type"]
+                }
+                """;
+        try {
+            JsonNode params = objectMapper.readTree(schema);
+            return Tool.ofFunction(new ToolFunction(
+                    "create_tool",
+                    "Create or update a new tool that the agent can call later. Use when the user asks you to 'create a tool', 'add a capability', 'write a tool for X', or to implement a reusable script/function. You must provide tool_name (unique id), tool_description (when to use it), input_schema (JSON Schema string), and tool_type (PYTHON_SCRIPT, NODE_SCRIPT, or SHELL_CMD). Optionally provide script_content (source code) and entry_point (filename). Only script-based tools can be created; JAVA_NATIVE is not allowed.",
+                    params
+            ));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to build create_tool schema", e);
+        }
+    }
+
     private Tool toTool(AgentTool agentTool) {
         JsonNode parameters;
         try {
@@ -600,10 +1439,10 @@ public class AgentLoopService {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private void failSession(AgentSession session, String reason) {
-        session.setStatus(AgentSession.SessionStatus.FAILED);
+        session.setStatus(AgentSession.SessionStatus.IDLE);
         session.setErrorMessage(reason);
         sessionRepository.save(session);
-        publisher.publish(AgentEvent.statusChange(session.getSessionId(), "FAILED"));
+        publisher.publish(AgentEvent.statusChange(session.getSessionId(), "IDLE", SessionResponse.from(session)));
     }
 
     private void waitForResume(AgentSession session) {

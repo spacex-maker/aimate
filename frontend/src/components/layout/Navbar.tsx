@@ -63,12 +63,12 @@ export function Navbar() {
             {/* Avatar placeholder */}
             <div className="w-7 h-7 rounded-full bg-blue-600/30 border border-blue-500/30 flex items-center justify-center flex-shrink-0">
               <span className="text-[11px] font-bold text-blue-300 uppercase">
-                {user.displayName.charAt(0)}
+                {(user.displayName ?? user.username ?? '?').charAt(0)}
               </span>
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-xs text-white/80 font-medium truncate">{user.displayName}</div>
-              <div className="text-[10px] text-white/30 truncate">@{user.username}</div>
+              <div className="text-xs text-white/80 font-medium truncate">{user.displayName ?? user.username ?? ''}</div>
+              <div className="text-[10px] text-white/30 truncate">@{user.username ?? ''}</div>
             </div>
             <button
               onClick={handleLogout}

@@ -1,6 +1,7 @@
 package com.openforge.aimate.llm.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
 
@@ -33,7 +34,7 @@ public record StreamingChunk(
     public record ChunkChoice(
             int index,
             DeltaMessage delta,
-            String finishReason
+            @JsonProperty("finish_reason") String finishReason
     ) {
         /** True when this is the frame that signals end-of-generation. */
         public boolean isDone() {
@@ -45,11 +46,13 @@ public record StreamingChunk(
      * Sparse message delta — only the fields that changed in this chunk
      * are non-null.  The first chunk usually carries {"role":"assistant"},
      * subsequent chunks carry {"content":"token"} or {"tool_calls":[...]}.
+     * DeepSeek thinking mode also sends {@code reasoning_content} (CoT) separately from {@code content}.
      */
     public record DeltaMessage(
             String role,
             String content,
-            List<ToolCallDelta> toolCalls
+            @JsonProperty("reasoning_content") String reasoningContent,
+            @JsonProperty("tool_calls") List<ToolCallDelta> toolCalls
     ) {}
 
     /**

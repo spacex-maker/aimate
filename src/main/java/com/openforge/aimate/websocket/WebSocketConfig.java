@@ -9,16 +9,15 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
 /**
  * Spring STOMP/WebSocket configuration.
  *
- * Frontend connection flow:
- *   1. Connect to  ws://host/ws  (or SockJS fallback: http://host/ws)
- *   2. STOMP SUBSCRIBE /topic/agent/{sessionId}
- *   3. Receive AgentEvent JSON frames in real-time as the Agent thinks
+ * 链路（与前端 useAgentSocket 对应）：
+ *   1. 前端 SockJS(/ws) 握手 → 本端 /ws（SecurityConfig 放行 /ws/**）
+ *   2. 前端 STOMP CONNECT（可带 Authorization header）→ CONNECTED
+ *   3. 前端 SUBSCRIBE destination=/topic/agent/{sessionId}
+ *   4. 后端 Agent 循环里 AgentEventPublisher.publish(event) → convertAndSend("/topic/agent/"+sessionId, event)
+ *   5. 前端在 subscribe 回调里收 MESSAGE frame，body 为 AgentEvent JSON
  *
- * Topic design:
- *   /topic/agent/{sessionId}  — broadcast stream for a single Agent session
- *
- * The in-memory simple broker is sufficient for single-node deployments.
- * For multi-node, replace with a RabbitMQ/Redis relay broker.
+ * 注意：若前端连接/订阅晚于 Agent 开始（如先 POST 创建会话再跳转），会漏事件；
+ * 前端 onConnected 时需用 HTTP 拉会话+消息做兜底。
  */
 @Configuration
 @EnableWebSocketMessageBroker

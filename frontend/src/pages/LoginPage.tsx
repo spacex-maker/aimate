@@ -18,8 +18,8 @@ export function LoginPage() {
   const mutation = useMutation({
     mutationFn: () => authApi.login({ identifier, password }),
     onSuccess: (data) => {
-      setAuthUser({ userId: data.user_id, username: data.username, displayName: data.display_name, token: data.token })
-      toast.success(`欢迎回来，${data.display_name}`)
+      setAuthUser({ userId: data.userId, username: data.username, displayName: data.displayName, token: data.token })
+      toast.success(`欢迎回来，${data.displayName ?? data.username ?? '用户'}`)
       navigate(from, { replace: true })
     },
     onError: (e: Error) => toast.error(e.message),

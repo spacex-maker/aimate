@@ -9,6 +9,20 @@ import { useAuth } from '../hooks/useAuth'
 import { StatusBadge } from '../components/agent/StatusBadge'
 import type { SessionResponse } from '../types/agent'
 
+function formatSessionTime(iso: string): string {
+  try {
+    const d = new Date(iso)
+    const now = new Date()
+    const diff = now.getTime() - d.getTime()
+    if (diff < 60_000) return '刚刚'
+    if (diff < 3600_000) return `${Math.floor(diff / 60_000)} 分钟前`
+    if (diff < 86400_000) return `${Math.floor(diff / 3600_000)} 小时前`
+    return d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+  } catch {
+    return ''
+  }
+}
+
 const EXAMPLES = [
   '用 Python 写一个能批量压缩图片的脚本，并解释每一步',
   '研究一下 Spring Boot 3.5 的新特性，给我一份简洁的总结',
@@ -23,45 +37,22 @@ export function HomePage() {
 
   const { data: apiKeys = [] } = useQuery({
     queryKey: ['api-keys', user?.userId],
-    queryFn: () => apikeyApi.list(user!.userId),
+    queryFn: () => (user?.userId != null ? apikeyApi.list(user.userId) : Promise.resolve([])),
     enabled: !!user?.userId,
   })
-  const hasDefaultLlmKey = apiKeys.some(k => k.key_type === 'LLM' && k.is_default)
+  const hasDefaultLlmKey = apiKeys.some(k => k.keyType === 'LLM' && k.isDefault)
 
-  const { data: recentSessions } = useQuery({
-    queryKey: ['recent-sessions'],
-    queryFn: async (): Promise<SessionResponse[]> => {
-      // The backend doesn't have a list endpoint yet; load from localStorage
-      const raw = localStorage.getItem('sessionIds') || '[]'
-      let ids: unknown[]
-      try { ids = JSON.parse(raw) } catch { ids = [] }
-      // 过滤掉 null/undefined/空字符串 等非法值，避免请求 /api/agent/sessions/null 或 /undefined
-      const cleanIds = (ids as unknown[])
-        .filter((id): id is string =>
-          typeof id === 'string' && id.length > 0 && id !== 'null' && id !== 'undefined'
-        )
-
-      // 如果修复前曾经写入过无效 ID，这里顺便把本地存储纠正一下
-      if (cleanIds.length !== ids.length) {
-        localStorage.setItem('sessionIds', JSON.stringify(cleanIds))
-      }
-      const results = await Promise.allSettled(
-        cleanIds.slice(0, 10).map(id => agentApi.getSession(id))
-      )
-      return results
-        .filter((r): r is PromiseFulfilledResult<SessionResponse> => r.status === 'fulfilled')
-        .map(r => r.value)
-        .sort((a, b) => b.createTime.localeCompare(a.createTime))
-    },
-    refetchInterval: 5000,
+  // 最近会话：请求接口获取当前用户详细会话列表（状态、轮数、创建时间等）
+  const { data: recentSessions = [], isLoading: recentLoading } = useQuery({
+    queryKey: ['recent-sessions', user?.userId],
+    queryFn: () => agentApi.getRecentSessions(10),
+    enabled: !!user?.userId,
+    refetchInterval: 30_000,
   })
 
   const startMutation = useMutation({
     mutationFn: (t: string) => agentApi.startSession({ task: t }),
     onSuccess: (session) => {
-      // Persist session ID locally
-      const ids: string[] = JSON.parse(localStorage.getItem('sessionIds') || '[]')
-      localStorage.setItem('sessionIds', JSON.stringify([session.sessionId, ...ids].slice(0, 50)))
       queryClient.invalidateQueries({ queryKey: ['recent-sessions'] })
       navigate(`/session/${session.sessionId}`)
     },
@@ -139,32 +130,39 @@ export function HomePage() {
         </div>
       </div>
 
-      {/* Recent sessions */}
-      {recentSessions && recentSessions.length > 0 && (
+      {/* Recent sessions：来自接口的详细会话列表 */}
+      {(recentLoading || recentSessions.length > 0) && (
         <div className="space-y-2">
           <p className="text-xs text-white/30 font-medium uppercase tracking-wider">最近会话</p>
-          <div className="space-y-2">
-            {recentSessions.map(s => (
-              <button
-                key={s.sessionId}
-                onClick={() => navigate(`/session/${s.sessionId}`)}
-                className="w-full flex items-center gap-4 px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] rounded-lg transition-colors group"
-              >
-                <StatusBadge status={s.status} />
-                <div className="flex-1 min-w-0 text-left">
-                  <div className="text-sm text-white/75 truncate">{s.taskDescription}</div>
-                  <div className="flex items-center gap-3 mt-0.5">
-                    <span className="text-[10px] text-white/25 font-mono">{s.sessionId.slice(0, 8)}…</span>
-                    <span className="flex items-center gap-1 text-[10px] text-white/25">
-                      <Clock className="w-2.5 h-2.5" />
-                      {s.iterationCount} 轮
-                    </span>
+          {recentLoading ? (
+            <div className="text-center py-8 text-white/25 text-sm">加载中...</div>
+          ) : (
+            <div className="space-y-2">
+              {recentSessions.map(s => (
+                <button
+                  key={s.sessionId}
+                  onClick={() => navigate(`/session/${s.sessionId}`)}
+                  className="w-full flex items-center gap-4 px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] rounded-lg transition-colors group"
+                >
+                  <StatusBadge status={s.status} />
+                  <div className="flex-1 min-w-0 text-left">
+                    <div className="text-sm text-white/75 truncate">{s.taskDescription || '会话'}</div>
+                    <div className="flex items-center gap-3 mt-0.5">
+                      <span className="text-[10px] text-white/25 font-mono">{s.sessionId.slice(0, 8)}…</span>
+                      <span className="flex items-center gap-1 text-[10px] text-white/25">
+                        <Clock className="w-2.5 h-2.5" />
+                        {s.iterationCount} 轮
+                      </span>
+                      {s.createTime && (
+                        <span className="text-[10px] text-white/20">{formatSessionTime(s.createTime)}</span>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/40 flex-shrink-0" />
-              </button>
-            ))}
-          </div>
+                  <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/40 flex-shrink-0" />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

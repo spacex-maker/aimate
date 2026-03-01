@@ -1,9 +1,10 @@
 import type { AuthResponse, LoginRequest, RegisterRequest } from '../types/auth'
+import { fullUrl } from './httpClient'
 
 const BASE = '/api/auth'
 
 async function request<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
+  const res = await fetch(fullUrl(url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

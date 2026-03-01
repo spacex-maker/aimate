@@ -21,10 +21,7 @@
     <properties>
         <java.version>25</java.version>
         <resilience4j.version>2.3.0</resilience4j.version>
-        <!--
-            Spring Boot 3.5.x BOM 管理的 Lombok 版本已支持 JDK 25。
-            显式覆盖确保在任何 CI/CD 环境下版本锁定。
-        -->
+        <!-- Spring Boot 3.5.x + JDK 25，Lombok 显式版本 -->
         <lombok.version>1.18.42</lombok.version>
     </properties>
 
@@ -160,17 +157,12 @@
     <build>
         <plugins>
 
-            <!-- Explicitly pin the compiler to Java 25 so both Maven CLI and
-                 IntelliJ pick up the correct release flag without relying on
-                 the parent POM's default property resolution. -->
+            <!-- 固定使用 Java 25，与 IntelliJ/Maven 使用的 JDK 一致 -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
                     <release>25</release>
-                    <compilerArgs>
-                        <!-- ScopedValue, StructuredTaskScope are standard in Java 25 -->
-                    </compilerArgs>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.projectlombok</groupId>

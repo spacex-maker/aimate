@@ -39,7 +39,7 @@ export function RegisterPage() {
       displayName: displayName || undefined,
     }),
     onSuccess: (data) => {
-      setAuthUser({ userId: data.user_id, username: data.username, displayName: data.display_name, token: data.token })
+      setAuthUser({ userId: data.userId, username: data.username, displayName: data.displayName, token: data.token })
       toast.success('注册成功，欢迎！')
       navigate('/', { replace: true })
     },

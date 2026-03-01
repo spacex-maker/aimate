@@ -2,9 +2,11 @@ import clsx from 'clsx'
 import type { SessionStatus } from '../../types/agent'
 
 const config: Record<SessionStatus, { label: string; dot: string; text: string }> = {
+  IDLE:      { label: '静默',   dot: 'bg-slate-400',            text: 'text-slate-400' },
+  ACTIVE:    { label: '运行中', dot: 'bg-green-400 animate-pulse', text: 'text-green-400' },
+  PAUSED:    { label: '已暂停', dot: 'bg-orange-400',           text: 'text-orange-400' },
   PENDING:   { label: '等待中', dot: 'bg-yellow-400',           text: 'text-yellow-400' },
   RUNNING:   { label: '运行中', dot: 'bg-green-400 animate-pulse', text: 'text-green-400' },
-  PAUSED:    { label: '已暂停', dot: 'bg-orange-400',           text: 'text-orange-400' },
   COMPLETED: { label: '已完成', dot: 'bg-blue-400',             text: 'text-blue-400' },
   FAILED:    { label: '失败',   dot: 'bg-red-400',              text: 'text-red-400' },
 }

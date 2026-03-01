@@ -1,16 +1,17 @@
 export type KeyType = 'LLM' | 'EMBEDDING' | 'VECTOR_DB' | 'OTHER'
 
+/** 与后端返回的 camelCase 一致（全局 ObjectMapper 为 camelCase） */
 export interface ApiKeyResponse {
   id: number
   provider: string
-  key_type: KeyType
+  keyType: KeyType
   label: string | null
-  masked_key: string
-  base_url: string | null
+  maskedKey: string
+  baseUrl: string | null
   model: string | null
-  is_default: boolean
-  is_active: boolean
-  create_time: string | null
+  isDefault: boolean
+  isActive: boolean
+  createTime: string | null
 }
 
 export interface ApiKeyRequest {

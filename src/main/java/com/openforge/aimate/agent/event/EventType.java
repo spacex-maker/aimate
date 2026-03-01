@@ -27,6 +27,9 @@ public enum EventType {
     /** A tool has returned. payload = ToolResultPayload. */
     TOOL_RESULT,
 
+    /** Streaming output from a long-running tool (e.g. run_container_cmd). payload = { toolCallId, chunk }. */
+    TOOL_OUTPUT_CHUNK,
+
     /** A new reasoning iteration inside "思考与执行". */
     ITERATION_START,
 

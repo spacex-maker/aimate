@@ -12,6 +12,8 @@ import org.springframework.stereotype.Component;
 import java.net.http.HttpClient;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * High-availability LLM request router.
@@ -30,11 +32,11 @@ import java.util.function.Supplier;
  *   continues without human intervention.
  *
  * Streaming note:
- *   Circuit breakers trip on the HTTP connection phase.  If the primary
- *   provider opens the stream but then drops mid-way, the exception bubbles
- *   out of assembleStreamingResponse() and falls through to the fallback.
- *   The tokenCallback may have already fired for partial content; the Agent
- *   loop should treat this as a partial thought and continue from fallback.
+ *   If the primary stream fails mid-way, the tokenCallback may have already
+ *   been invoked for partial content. If we then pass the same callback to
+ *   fallback, fallback will stream from the start again → duplicate tokens.
+ *   So on fallback we pass a callback that only accumulates; when fallback
+ *   completes we invoke the original callback once with the full content.
  */
 @Slf4j
 @Component
@@ -87,26 +89,42 @@ public class LlmRouter {
     }
 
     /**
-     * Streaming variant of {@link #chat} — identical resilience wrapping,
-     * but delegates to {@link LlmClient#streamChat} so each token is
-     * forwarded to the WebSocket callback in real-time.
-     *
-     * @param request        standard ChatRequest (stream flag injected internally)
-     * @param tokenCallback  called once per content token on the current virtual thread
-     * @return fully assembled ChatResponse after stream ends
+     * Streaming variant with a single content callback (legacy).
      */
     public ChatResponse streamChat(ChatRequest request, Consumer<String> tokenCallback) {
+        return streamChat(request, StreamCallbacks.contentOnly(tokenCallback));
+    }
+
+    /**
+     * Streaming variant of {@link #chat} — supports separate content and reasoning streams
+     * (e.g. DeepSeek reasoning_content). On fallback, only content is replayed once.
+     *
+     * @param request  standard ChatRequest (stream flag injected internally)
+     * @param callbacks onContent = final answer tokens; onReasoning = CoT tokens when provider sends them
+     * @return fully assembled ChatResponse after stream ends
+     */
+    public ChatResponse streamChat(ChatRequest request, StreamCallbacks callbacks) {
         try {
             ChatRequest primaryRequest = overrideModel(request, primaryClient.modelName());
             return executeWithResilience(primaryCb, primaryRetry,
-                    () -> primaryClient.streamChat(primaryRequest, tokenCallback), "primary");
+                    () -> primaryClient.streamChat(primaryRequest, callbacks), "primary");
         } catch (Exception primaryException) {
             log.warn("[LlmRouter] Primary stream failed ({}), engaging fallback. Cause: {}",
                     primaryException.getClass().getSimpleName(), primaryException.getMessage());
 
             ChatRequest fallbackRequest = overrideModel(request, fallbackClient.modelName());
-            return executeWithResilience(fallbackCb, fallbackRetry,
-                    () -> fallbackClient.streamChat(fallbackRequest, tokenCallback), "fallback");
+            List<String> fallbackContent = new ArrayList<>();
+            StreamCallbacks fallbackAccumulate = new StreamCallbacks(
+                    t -> fallbackContent.add(t),
+                    t -> {}
+            );
+            ChatResponse fallbackResponse = executeWithResilience(fallbackCb, fallbackRetry,
+                    () -> fallbackClient.streamChat(fallbackRequest, fallbackAccumulate), "fallback");
+            String fullContent = String.join("", fallbackContent);
+            if (!fullContent.isEmpty()) {
+                callbacks.onContent().accept(fullContent);
+            }
+            return fallbackResponse;
         }
     }
 

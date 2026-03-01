@@ -16,12 +16,12 @@ export function ApiKeyFormModal({ initial, onClose, onSubmit, isLoading }: Props
   const isEdit = !!initial
 
   const [provider, setProvider]   = useState(initial?.provider ?? 'openai')
-  const [keyType, setKeyType]     = useState<KeyType>(initial?.key_type ?? 'LLM')
+  const [keyType, setKeyType]     = useState<KeyType>(initial?.keyType ?? 'LLM')
   const [label, setLabel]         = useState(initial?.label ?? '')
   const [keyValue, setKeyValue]   = useState('')          // never pre-fill for security
-  const [baseUrl, setBaseUrl]     = useState(initial?.base_url ?? '')
+  const [baseUrl, setBaseUrl]     = useState(initial?.baseUrl ?? '')
   const [model, setModel]         = useState(initial?.model ?? '')
-  const [isDefault, setIsDefault] = useState(initial?.is_default ?? false)
+  const [isDefault, setIsDefault] = useState(initial?.isDefault ?? false)
   const [showKey, setShowKey]     = useState(false)
 
   // Auto-fill base URL when selecting a known provider

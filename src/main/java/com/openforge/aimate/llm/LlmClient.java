@@ -88,10 +88,19 @@ public class LlmClient {
      * it would with a non-streaming response.
      *
      * @param request       ChatRequest (stream flag is forced to true internally)
-     * @param tokenCallback invoked with each non-empty content token
+     * @param tokenCallback invoked with each non-empty content token (legacy single-stream)
      * @return assembled ChatResponse with complete message
      */
     public ChatResponse streamChat(ChatRequest request, Consumer<String> tokenCallback) {
+        return streamChat(request, StreamCallbacks.contentOnly(tokenCallback));
+    }
+
+    /**
+     * Streaming chat with separate content and reasoning callbacks.
+     * When the provider sends {@code delta.reasoning_content} (e.g. DeepSeek thinking mode),
+     * {@code callbacks.onReasoning()} is invoked; {@code delta.content} goes to {@code callbacks.onContent()}.
+     */
+    public ChatResponse streamChat(ChatRequest request, StreamCallbacks callbacks) {
         if (request == null) {
             throw new LlmException("ChatRequest must not be null for provider [%s]"
                     .formatted(config.name()));
@@ -159,7 +168,7 @@ public class LlmClient {
                             .formatted(config.name(), status, bodySnippet));
         }
 
-        return assembleStreamingResponse(httpResponse.body(), tokenCallback);
+        return assembleStreamingResponse(httpResponse.body(), callbacks);
     }
 
     /** The model name configured for this provider (e.g. "gpt-4o"). */
@@ -179,7 +188,7 @@ public class LlmClient {
      *   complete ToolCall objects at the end.
      */
     private ChatResponse assembleStreamingResponse(Stream<String> lines,
-                                                   Consumer<String> tokenCallback) {
+                                                   StreamCallbacks callbacks) {
         StringBuilder contentBuilder = new StringBuilder();
         // index → {id, type, name, argumentsBuilder}
         Map<Integer, ToolCallAccumulator> toolCallMap = new HashMap<>();
@@ -211,10 +220,24 @@ public class LlmClient {
             StreamingChunk.DeltaMessage delta = choice.delta();
             if (delta == null) continue;
 
-            // ── Content token ────────────────────────────────────────────────
+            // ── Reasoning token (e.g. DeepSeek reasoning_content) ─────────────
+            if (delta.reasoningContent() != null && !delta.reasoningContent().isEmpty()) {
+                callbacks.onReasoning().accept(delta.reasoningContent());
+            }
+
+            // ── Content token (final answer) ──────────────────────────────────
             if (delta.content() != null && !delta.content().isEmpty()) {
-                contentBuilder.append(delta.content());
-                tokenCallback.accept(delta.content());
+                String contentDelta = delta.content();
+                if (contentBuilder.length() > 0 && contentDelta.startsWith(contentBuilder.toString())) {
+                    // 部分接口返回累积内容而非增量，只追加新增部分并只回调新部分，避免重复
+                    String newPart = contentDelta.substring(contentBuilder.length());
+                    contentBuilder.setLength(0);
+                    contentBuilder.append(contentDelta);
+                    if (!newPart.isEmpty()) callbacks.onContent().accept(newPart);
+                } else {
+                    contentBuilder.append(contentDelta);
+                    callbacks.onContent().accept(contentDelta);
+                }
             }
 
             // ── Tool-call delta ──────────────────────────────────────────────

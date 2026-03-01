@@ -46,6 +46,7 @@ public class AgentContextService {
 
     private final ObjectMapper             objectMapper;
     private final AgentSessionRepository   sessionRepository;
+    private final SessionMessageService    sessionMessageService;
 
     // ── Load ─────────────────────────────────────────────────────────────────
 
@@ -83,6 +84,7 @@ public class AgentContextService {
         }
         trim(context);
         persist(session, context);
+        sessionMessageService.append(session, messages);
     }
 
     /**
@@ -94,6 +96,7 @@ public class AgentContextService {
         List<Message> context = new ArrayList<>(messages);
         trim(context);
         persist(session, context);
+        sessionMessageService.replaceAll(session, context);
     }
 
     // ── Trim ─────────────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@ import { ApiKeyFormModal } from '../components/apikey/ApiKeyFormModal'
 export function ApiKeyPage() {
   const { user } = useAuth()
   const queryClient = useQueryClient()
-  const userId = user!.userId
+  const userId = user?.userId
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<ApiKeyResponse | null>(null)
@@ -20,35 +20,41 @@ export function ApiKeyPage() {
 
   const { data: keys = [], isLoading, refetch } = useQuery({
     queryKey: ['api-keys', userId],
-    queryFn: () => apikeyApi.list(userId),
+    queryFn: () => (userId != null ? apikeyApi.list(userId) : Promise.resolve([])),
     enabled: !!userId,
   })
 
   const createMutation = useMutation({
-    mutationFn: (body: ApiKeyRequest) => apikeyApi.create(userId, body),
-    onSuccess: () => { toast.success('密钥已保存'); setModalOpen(false); queryClient.invalidateQueries({ queryKey: ['api-keys'] }) },
+    mutationFn: (body: ApiKeyRequest) => apikeyApi.create(userId!, body),
+    onSuccess: () => { toast.success('密钥已保存'); setModalOpen(false); if (userId != null) queryClient.invalidateQueries({ queryKey: ['api-keys', userId] }) },
     onError: (e: Error) => toast.error(e.message),
   })
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, body }: { id: number; body: ApiKeyRequest }) => apikeyApi.update(userId, id, body),
-    onSuccess: () => { toast.success('密钥已更新'); setEditing(null); queryClient.invalidateQueries({ queryKey: ['api-keys'] }) },
+    mutationFn: ({ id, body }: { id: number; body: ApiKeyRequest }) => apikeyApi.update(userId!, id, body),
+    onSuccess: () => { toast.success('密钥已更新'); setEditing(null); if (userId != null) queryClient.invalidateQueries({ queryKey: ['api-keys', userId] }) },
     onError: (e: Error) => toast.error(e.message),
   })
 
   const defaultMutation = useMutation({
-    mutationFn: (id: number) => apikeyApi.setDefault(userId, id),
-    onSuccess: () => { toast.success('已设为默认'); queryClient.invalidateQueries({ queryKey: ['api-keys'] }) },
+    mutationFn: (id: number) => apikeyApi.setDefault(userId!, id),
+    onSuccess: () => { toast.success('已设为默认'); if (userId != null) queryClient.invalidateQueries({ queryKey: ['api-keys', userId] }) },
     onError: (e: Error) => toast.error(e.message),
   })
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => apikeyApi.delete(userId, id),
+    mutationFn: (id: number) => apikeyApi.delete(userId!, id),
     onMutate: (id) => setDeletingId(id),
-    onSuccess: () => { toast.success('已删除'); queryClient.invalidateQueries({ queryKey: ['api-keys'] }) },
+    onSuccess: () => { toast.success('已删除'); if (userId != null) queryClient.invalidateQueries({ queryKey: ['api-keys', userId] }) },
     onError: (e: Error) => toast.error(e.message),
     onSettled: () => setDeletingId(null),
   })
+
+  if (userId == null) {
+    return (
+      <div className="h-full flex items-center justify-center text-white/40 text-sm">加载用户信息中…</div>
+    )
+  }
 
   // Group by provider for display
   const grouped = keys.reduce<Record<string, ApiKeyResponse[]>>((acc, k) => {
@@ -173,34 +179,34 @@ function KeyRow({
     <div className="flex items-center gap-4 px-4 py-3 hover:bg-white/[0.02] group transition-colors">
       <div className="flex-1 min-w-0 space-y-0.5">
         <div className="flex items-center gap-2">
-          {k.is_default && (
+          {k.isDefault && (
             <span className="text-[10px] font-mono border border-yellow-500/30 text-yellow-400 bg-yellow-400/10 px-1.5 py-0.5 rounded">
               默认
             </span>
           )}
           <span className="text-xs font-mono text-white/60 bg-black/30 px-2 py-0.5 rounded">
-            {k.masked_key}
+            {k.maskedKey}
           </span>
           <span className={clsx(
             'text-[10px] px-1.5 py-0.5 rounded border font-mono',
-            k.key_type === 'LLM'       && 'text-blue-400 bg-blue-400/10 border-blue-400/30',
-            k.key_type === 'EMBEDDING' && 'text-purple-400 bg-purple-400/10 border-purple-400/30',
-            k.key_type === 'VECTOR_DB' && 'text-green-400 bg-green-400/10 border-green-400/30',
-            k.key_type === 'OTHER'     && 'text-white/40 bg-white/5 border-white/10',
+            k.keyType === 'LLM'       && 'text-blue-400 bg-blue-400/10 border-blue-400/30',
+            k.keyType === 'EMBEDDING' && 'text-purple-400 bg-purple-400/10 border-purple-400/30',
+            k.keyType === 'VECTOR_DB' && 'text-green-400 bg-green-400/10 border-green-400/30',
+            k.keyType === 'OTHER'     && 'text-white/40 bg-white/5 border-white/10',
           )}>
-            {KEY_TYPE_LABELS[k.key_type]}
+            {KEY_TYPE_LABELS[k.keyType]}
           </span>
         </div>
         <div className="flex items-center gap-3 text-[10px] text-white/25">
           {k.label && <span>{k.label}</span>}
           {k.model && <span>模型: {k.model}</span>}
-          {k.base_url && <span className="truncate max-w-[200px]">{k.base_url}</span>}
+          {k.baseUrl && <span className="truncate max-w-[200px]">{k.baseUrl}</span>}
         </div>
       </div>
 
       {/* Actions */}
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        {!k.is_default && (
+        {!k.isDefault && (
           <button
             onClick={onSetDefault}
             title="设为默认"

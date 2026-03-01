@@ -8,6 +8,8 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- sockjs-client 等依赖在浏览器中会访问 global，需先挂到 window -->
+    <script>window.global = window.globalThis || window;</script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

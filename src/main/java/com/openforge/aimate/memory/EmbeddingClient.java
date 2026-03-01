@@ -74,8 +74,11 @@ public class EmbeddingClient {
         HttpResponse<String> response;
         try {
             response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        } catch (IOException | InterruptedException e) {
+        } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            throw new EmbeddingException("Embedding request interrupted", e);
+        } catch (IOException e) {
+            // Do NOT set interrupt: network/timeout failure must not poison the thread for later DB use
             throw new EmbeddingException("Network error calling embedding API", e);
         }
 

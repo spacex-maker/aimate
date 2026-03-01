@@ -1,8 +1,8 @@
-// Backend uses SNAKE_CASE (Spring Jackson global config)
+// 与后端 AuthResponse 一致，Jackson 默认输出驼峰
 export interface AuthResponse {
-  user_id: number
+  userId: number
   username: string
-  display_name: string
+  displayName: string
   token: string
 }
 

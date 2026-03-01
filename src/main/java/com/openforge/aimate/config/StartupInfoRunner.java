@@ -1,5 +1,7 @@
 package com.openforge.aimate.config;
 
+import com.openforge.aimate.agent.DockerDetector;
+import com.openforge.aimate.agent.ScriptDockerProperties;
 import com.openforge.aimate.llm.LlmProperties;
 import com.openforge.aimate.memory.EmbeddingProperties;
 import com.openforge.aimate.memory.MilvusProperties;
@@ -28,88 +30,115 @@ import java.sql.Connection;
 @RequiredArgsConstructor
 public class StartupInfoRunner implements ApplicationRunner {
 
-    private final DataSource       dataSource;
-    private final LlmProperties    llmProperties;
-    private final EmbeddingProperties embeddingProperties;
-    private final MilvusProperties milvusProperties;
-    private final Environment      env;
+    private final DataSource            dataSource;
+    private final LlmProperties         llmProperties;
+    private final EmbeddingProperties   embeddingProperties;
+    private final MilvusProperties      milvusProperties;
+    private final Environment           env;
+    private final DockerDetector        dockerDetector;
+    private final ScriptDockerProperties scriptDockerProperties;
+
+    private static final int W = 84;
+    private static final int LABEL_W = 14;
 
     @Override
     public void run(ApplicationArguments args) {
-        String dbStatus    = probeDatabase();
+        String dbStatus    = probeDatabaseShort();
         String port        = env.getProperty("server.port", "8080");
         String javaVersion = System.getProperty("java.version");
         boolean vtEnabled  = Boolean.parseBoolean(
                 env.getProperty("spring.threads.virtual.enabled", "false"));
+        String milvusOn    = env.getProperty("agent.milvus.enabled", "true");
+        String pk          = maskKey(llmProperties.primary().apiKey());
+        String fk          = maskKey(llmProperties.fallback().apiKey());
 
-        String milvusEnabled = env.getProperty("agent.milvus.enabled", "true");
+        String sep = "═".repeat(W);
 
-        log.info("""
+        StringBuilder b = new StringBuilder();
+        b.append("\n");
+        b.append("╔").append(sep).append("╗\n");
+        b.append("║").append(center("AIMate — Startup Summary", W)).append("║\n");
+        b.append("╠").append(sep).append("╣\n");
 
-                ╔══════════════════════════════════════════════════════════╗
-                ║              AIMate  —  Startup Summary                  ║
-                ╠══════════════════════════════════════════════════════════╣
-                ║  Server                                                  ║
-                ║    HTTP Port      : {}
-                ║    Java Version   : {}
-                ║    Virtual Threads: {}
-                ╠══════════════════════════════════════════════════════════╣
-                ║  Database (MySQL)                                        ║
-                ║    {}
-                ╠══════════════════════════════════════════════════════════╣
-                ║  Vector DB (Milvus)                                      ║
-                ║    Enabled        : {}
-                ║    Address        : {}:{}
-                ║    Collection     : {}  dim={}
-                ╠══════════════════════════════════════════════════════════╣
-                ║  LLM Providers                                           ║
-                ║    Primary        : {}  [{}]  key={}
-                ║    Fallback       : {}  [{}]  key={}
-                ╠══════════════════════════════════════════════════════════╣
-                ║  Embedding                                               ║
-                ║    Model          : {}  dim={}
-                ║    Endpoint       : {}
-                ╚══════════════════════════════════════════════════════════╝
-                """,
-                port,
-                javaVersion,
-                vtEnabled ? "✔ enabled" : "✘ disabled",
+        // Server
+        b.append("║  Server").append(" ".repeat(W - 8)).append("║\n");
+        b.append("║").append(row("port", port)).append("║\n");
+        b.append("║").append(row("java", javaVersion)).append("║\n");
+        b.append("║").append(row("virtual threads", vtEnabled ? "✓" : "✗")).append("║\n");
 
-                dbStatus,
+        // MySQL
+        b.append("╠").append(sep).append("╣\n");
+        b.append("║  MySQL").append(" ".repeat(W - 7)).append("║\n");
+        b.append("║").append(row("", dbStatus)).append("║\n");
 
-                milvusEnabled,
-                milvusProperties.host(), milvusProperties.port(),
-                milvusProperties.collectionName(), milvusProperties.vectorDimensions(),
+        // Milvus
+        b.append("╠").append(sep).append("╣\n");
+        String milvusVal = (Boolean.parseBoolean(milvusOn) ? "✓" : "✗") + "  "
+                + milvusProperties.host() + ":" + milvusProperties.port()
+                + "  " + milvusProperties.collectionName() + "  dim=" + milvusProperties.vectorDimensions();
+        b.append("║  Milvus").append(" ".repeat(W - 8)).append("║\n");
+        b.append("║").append(row("", milvusVal)).append("║\n");
 
-                llmProperties.primary().name(),
-                llmProperties.primary().model(),
-                maskKey(llmProperties.primary().apiKey()),
+        // LLM
+        b.append("╠").append(sep).append("╣\n");
+        b.append("║  LLM").append(" ".repeat(W - 5)).append("║\n");
+        b.append("║").append(row("primary", llmProperties.primary().name() + " [" + llmProperties.primary().model() + "]  key " + ("(not set)".equals(pk) ? "✗" : "✓"))).append("║\n");
+        b.append("║").append(row("fallback", llmProperties.fallback().name() + " [" + llmProperties.fallback().model() + "]  key " + ("(not set)".equals(fk) ? "✗" : "✓"))).append("║\n");
 
-                llmProperties.fallback().name(),
-                llmProperties.fallback().model(),
-                maskKey(llmProperties.fallback().apiKey()),
+        // Embedding
+        b.append("╠").append(sep).append("╣\n");
+        String embedVal = embeddingProperties.model() + "  dim=" + embeddingProperties.dimensions() + "  " + embeddingProperties.baseUrl();
+        b.append("║  Embedding").append(" ".repeat(W - 11)).append("║\n");
+        b.append("║").append(row("", embedVal)).append("║\n");
 
-                embeddingProperties.model(),
-                embeddingProperties.dimensions(),
-                embeddingProperties.baseUrl()
-        );
+        // Docker（每用户一个独立 Linux 容器，隔离执行任意命令）
+        b.append("╠").append(sep).append("╣\n");
+        var dockerVer = dockerDetector.getDockerVersion();
+        boolean dockerOn = scriptDockerProperties.enabled();
+        String dockerVal = dockerVer.map(v -> "✓ v" + v + (dockerOn ? "  每用户一 Linux  image=" + scriptDockerProperties.image() : "")).orElse("✗ 不可用" + (dockerOn ? "  (已配置启用，需安装并启动 Docker)" : ""));
+        b.append("║  Docker").append(" ".repeat(W - 8)).append("║\n");
+        b.append("║").append(row("", dockerVal)).append("║\n");
+
+        b.append("╚").append(sep).append("╝\n");
+        log.info("{}", b);
+    }
+
+    /** One row: "    label    value" with fixed label width; value may wrap or truncate to fit. */
+    private static String row(String label, String value) {
+        String l = padR(label == null ? "" : label, LABEL_W);
+        int valLen = W - 4 - LABEL_W - 2;
+        String v = value == null ? "" : value;
+        if (v.length() > valLen) v = v.substring(0, valLen - 2) + "..";
+        return "    " + l + "  " + padR(v, valLen);
+    }
+
+    private static String padR(String s, int width) {
+        if (s == null) s = "";
+        return s.length() >= width ? s.substring(0, width) : s + " ".repeat(width - s.length());
+    }
+
+    private static String center(String s, int width) {
+        if (s == null) s = "";
+        int len = Math.min(s.length(), width);
+        int left = (width - len) / 2;
+        int right = width - len - left;
+        return " ".repeat(left) + (len == s.length() ? s : s.substring(0, len)) + " ".repeat(right);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    /**
-     * Opens a real JDBC connection and reads the DB server version.
-     * Returns a one-line summary or error message.
-     */
-    private String probeDatabase() {
+    /** One-line DB status for startup banner (full version, host/db may truncate if very long). */
+    private String probeDatabaseShort() {
         try (Connection conn = dataSource.getConnection()) {
-            String url     = conn.getMetaData().getURL();
+            String url = conn.getMetaData().getURL();
             String version = conn.getMetaData().getDatabaseProductVersion();
-            // Strip credentials from the JDBC URL for safe logging
-            String safeUrl = url.replaceAll("password=[^&;]*", "password=***");
-            return "✔ Connected  version=" + version + "  url=" + safeUrl;
+            String part = url.replaceFirst("jdbc:mysql://([^?]+).*", "$1");
+            if (part.contains("@")) part = part.substring(part.indexOf('@') + 1);
+            part = part.replaceAll("password=[^&]*", "***");
+            return "✔ " + part + "  v" + version;
         } catch (Exception e) {
-            return "✘ FAILED — " + e.getMessage();
+            String msg = e.getMessage();
+            return "✘ " + (msg != null && msg.length() > W - 6 ? msg.substring(0, W - 9) + "..." : msg);
         }
     }
 

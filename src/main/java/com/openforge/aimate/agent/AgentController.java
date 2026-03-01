@@ -1,6 +1,9 @@
 package com.openforge.aimate.agent;
 
+import com.openforge.aimate.agent.dto.AssistantVersionDto;
+import com.openforge.aimate.agent.dto.ChatMessageDto;
 import com.openforge.aimate.agent.dto.ContinueSessionRequest;
+import com.openforge.aimate.agent.dto.RetryRequest;
 import com.openforge.aimate.agent.dto.SessionResponse;
 import com.openforge.aimate.agent.dto.StartSessionRequest;
 import com.openforge.aimate.domain.AgentSession;
@@ -15,15 +18,20 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.data.domain.PageRequest;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
+import java.util.stream.Collectors;
 
 /**
  * REST API for Agent session lifecycle management.
  *
  * Endpoints:
  *   POST   /api/agent/sessions              — create and immediately start a new session
+ *   GET    /api/agent/sessions              — list recent sessions for current user (?limit=10)
  *   GET    /api/agent/sessions/{id}         — poll current session status / result
  *   POST   /api/agent/sessions/{id}/pause   — pause (loop idles between iterations)
  *   POST   /api/agent/sessions/{id}/resume  — resume a paused session
@@ -47,7 +55,7 @@ import java.util.concurrent.ExecutorService;
 public class AgentController {
 
     private final AgentLoopService       agentLoopService;
-    private final AgentContextService    contextService;
+    private final SessionMessageService  sessionMessageService;
     private final AgentSessionRepository sessionRepository;
     private final ExecutorService        agentVirtualThreadExecutor;
 
@@ -85,7 +93,7 @@ public class AgentController {
                 .userId(userId)
                 .sessionId(sessionId)
                 .taskDescription(request.task())
-                .status(AgentSession.SessionStatus.PENDING)
+                .status(AgentSession.SessionStatus.IDLE)
                 .iterationCount(0)
                 .build();
         session = sessionRepository.save(session);
@@ -108,16 +116,48 @@ public class AgentController {
                 .body(SessionResponse.from(session));
     }
 
+    // ── List recent sessions (for home page) ─────────────────────────────────
+
+    /**
+     * List recent sessions for the current user, ordered by create time descending.
+     * Used by the frontend "最近会话" list. Requires auth; returns empty list if no userId.
+     */
+    @GetMapping
+    public ResponseEntity<List<SessionResponse>> listRecentSessions(
+            @RequestParam(defaultValue = "10") int limit) {
+        Long userId = null;
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.getPrincipal() instanceof Long id) userId = id;
+        if (userId == null) return ResponseEntity.ok(Collections.emptyList());
+        limit = Math.min(Math.max(1, limit), 50);
+        List<AgentSession> sessions = sessionRepository.findByUserIdOrderByCreateTimeDesc(
+                userId, PageRequest.of(0, limit));
+        List<SessionResponse> list = sessions.stream()
+                .map(SessionResponse::from)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(list);
+    }
+
     // ── Status query ─────────────────────────────────────────────────────────
 
     /**
      * Poll the current state of a session.
-     * Can also be used to retrieve the final result once status=COMPLETED.
+     * Can also be used to retrieve the latest result (session.result) when status=IDLE.
      */
     @GetMapping("/{sessionId}")
     public ResponseEntity<SessionResponse> getSession(@PathVariable String sessionId) {
         AgentSession session = findOrThrow(sessionId);
         return ResponseEntity.ok(SessionResponse.from(session));
+    }
+
+    /**
+     * Load conversation history for a session (from agent_session_messages).
+     * Used by the frontend to display past messages when opening an existing session.
+     */
+    @GetMapping("/{sessionId}/messages")
+    public ResponseEntity<List<ChatMessageDto>> getSessionMessages(@PathVariable String sessionId) {
+        AgentSession session = findOrThrow(sessionId);
+        return ResponseEntity.ok(sessionMessageService.loadDtos(session));
     }
 
     // ── Pause ────────────────────────────────────────────────────────────────
@@ -132,9 +172,9 @@ public class AgentController {
     @PostMapping("/{sessionId}/pause")
     public ResponseEntity<SessionResponse> pauseSession(@PathVariable String sessionId) {
         AgentSession session = findOrThrow(sessionId);
-        if (session.getStatus() != AgentSession.SessionStatus.RUNNING) {
+        if (session.getStatus() != AgentSession.SessionStatus.ACTIVE && session.getStatus() != AgentSession.SessionStatus.RUNNING) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Session is not RUNNING, current status: " + session.getStatus());
+                    "Session is not ACTIVE, current status: " + session.getStatus());
         }
         session.setStatus(AgentSession.SessionStatus.PAUSED);
         sessionRepository.save(session);
@@ -157,7 +197,7 @@ public class AgentController {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Session is not PAUSED, current status: " + session.getStatus());
         }
-        session.setStatus(AgentSession.SessionStatus.RUNNING);
+        session.setStatus(AgentSession.SessionStatus.ACTIVE);
         sessionRepository.save(session);
         log.info("[Controller] Resumed session {}", sessionId);
         return ResponseEntity.ok(SessionResponse.from(session));
@@ -166,18 +206,17 @@ public class AgentController {
     // ── Abort ────────────────────────────────────────────────────────────────
 
     /**
-     * Abort a session.  Sets status to FAILED so the loop exits on its next
-     * iteration check.  Idempotent — calling it on an already-terminal session
-     * is a no-op.
+     * Abort a session.  Sets status to IDLE so the loop exits on its next
+     * iteration check.  Idempotent when already IDLE.
      */
     @DeleteMapping("/{sessionId}")
     public ResponseEntity<SessionResponse> abortSession(@PathVariable String sessionId) {
         AgentSession session = findOrThrow(sessionId);
-        if (session.getStatus() == AgentSession.SessionStatus.COMPLETED
-                || session.getStatus() == AgentSession.SessionStatus.FAILED) {
+        if (session.getStatus() == AgentSession.SessionStatus.IDLE || session.getStatus() == AgentSession.SessionStatus.COMPLETED
+                || session.getStatus() == AgentSession.SessionStatus.FAILED || session.getStatus() == AgentSession.SessionStatus.PENDING) {
             return ResponseEntity.ok(SessionResponse.from(session));
         }
-        session.setStatus(AgentSession.SessionStatus.FAILED);
+        session.setStatus(AgentSession.SessionStatus.IDLE);
         session.setErrorMessage("Aborted by user");
         sessionRepository.save(session);
         log.info("[Controller] Aborted session {}", sessionId);
@@ -186,11 +225,7 @@ public class AgentController {
 
     // ── Continue (multi-turn) ────────────────────────────────────────────────
     /**
-     * Continue an existing session with a new user message.
-     *
-     * Only terminal sessions (COMPLETED / FAILED) can be continued. The new
-     * message is appended to the existing context window, and a fresh Agent
-     * loop is launched on a virtual thread using the accumulated context.
+     * 用户随时可发消息：立即追加到消息表并启动一条新回复（可与上一条并行）；是否等待上一条由前端/参数决定。
      */
     @PostMapping("/{sessionId}/continue")
     public ResponseEntity<SessionResponse> continueSession(
@@ -199,34 +234,95 @@ public class AgentController {
     ) {
         AgentSession session = findOrThrow(sessionId);
 
-        if (session.getStatus() == AgentSession.SessionStatus.RUNNING
-                || session.getStatus() == AgentSession.SessionStatus.PAUSED) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Session is still active, current status: " + session.getStatus());
-        }
-
-        // Append the new user message to the existing context.
-        // AgentLoopService will detect non-empty context and skip re-initialization.
-        contextService.append(session, Message.user(request.message()));
-
-        // Reset status & error for the new turn, keep iterationCount monotonic.
-        session.setStatus(AgentSession.SessionStatus.PENDING);
+        sessionMessageService.append(session, Message.user(request.message()));
+        com.openforge.aimate.domain.SessionMessage placeholder = sessionMessageService.createPlaceholderAssistant(session);
         session.setErrorMessage(null);
         sessionRepository.save(session);
 
-        final AgentSession finalSession = session;
+        final AgentSession finalSession = sessionRepository.findBySessionId(sessionId).orElseThrow();
+        final long placeholderId = placeholder.getId();
         agentVirtualThreadExecutor.submit(() -> {
             try {
-                agentLoopService.run(finalSession);
+                agentLoopService.run(finalSession, placeholderId);
             } catch (Exception e) {
                 log.error("[Controller] Uncaught exception in loop for session {} (continue): {}",
                         sessionId, e.getMessage(), e);
             }
         });
 
-        log.info("[Controller] Continued session {} with new user message.", sessionId);
+        log.info("[Controller] Continued session {} with new user message (placeholder {}).", sessionId, placeholderId);
         return ResponseEntity.status(HttpStatus.ACCEPTED)
-                .body(SessionResponse.from(session));
+                .body(SessionResponse.from(finalSession));
+    }
+
+    /**
+     * 消息级中断：指定某条 assistant 消息 id，将其标为已中断，对应 run 在下一轮检查时退出。
+     */
+    @PostMapping("/{sessionId}/interrupt")
+    public ResponseEntity<SessionResponse> interruptSession(
+            @PathVariable String sessionId,
+            @RequestBody(required = false) java.util.Map<String, Long> body
+    ) {
+        AgentSession session = findOrThrow(sessionId);
+        Long assistantMessageId = body != null ? body.get("assistantMessageId") : null;
+        if (assistantMessageId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "assistantMessageId required");
+        }
+        sessionMessageService.updateAssistantMessage(assistantMessageId, null, com.openforge.aimate.domain.SessionMessage.STATUS_INTERRUPTED);
+        session = sessionRepository.findBySessionId(sessionId).orElseThrow();
+        if (!sessionMessageService.hasAnyAnswering(session.getId())) {
+            session.setStatus(AgentSession.SessionStatus.IDLE);
+            session.setCurrentAssistantMessageId(null);
+            session.setErrorMessage("用户中断");
+            sessionRepository.save(session);
+        }
+        log.info("[Controller] Interrupted message {} in session {}", assistantMessageId, sessionId);
+        return ResponseEntity.ok(SessionResponse.from(session));
+    }
+
+    /**
+     * 重试某条用户消息：用该条之前的上下文重新跑 AI，更新下一条 assistant 内容并追加新版本。
+     */
+    @PostMapping("/{sessionId}/retry")
+    public ResponseEntity<SessionResponse> retryMessage(
+            @PathVariable String sessionId,
+            @RequestBody RetryRequest request
+    ) {
+        AgentSession session = findOrThrow(sessionId);
+        if (request.getUserMessageId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userMessageId required");
+        }
+        final long userMessageId = request.getUserMessageId();
+        final AgentSession finalSession = sessionRepository.findBySessionId(sessionId).orElseThrow();
+        agentVirtualThreadExecutor.submit(() -> {
+            try {
+                agentLoopService.runForRetry(finalSession, userMessageId);
+            } catch (Exception e) {
+                log.error("[Controller] Uncaught exception in retry for session {}: {}",
+                        sessionId, e.getMessage(), e);
+            }
+        });
+        log.info("[Controller] Retry for user message {} in session {}", userMessageId, sessionId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(SessionResponse.from(finalSession));
+    }
+
+    /**
+     * 某条 assistant 回复的历史版本列表（版本号降序），供前端「查看历史版本」。
+     */
+    @GetMapping("/{sessionId}/messages/{messageId}/versions")
+    public ResponseEntity<List<AssistantVersionDto>> getMessageVersions(
+            @PathVariable String sessionId,
+            @PathVariable Long messageId
+    ) {
+        findOrThrow(sessionId);
+        List<AssistantVersionDto> list = sessionMessageService.getVersions(messageId).stream()
+                .map(v -> new AssistantVersionDto(
+                        v.getVersion(),
+                        v.getContent(),
+                        v.getCreateTime() != null ? v.getCreateTime().toString() : null
+                ))
+                .toList();
+        return ResponseEntity.ok(list);
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────

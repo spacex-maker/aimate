@@ -2,6 +2,9 @@ import type { ApiKeyRequest, ApiKeyResponse } from '../types/apikey'
 import { http } from './httpClient'
 
 function base(userId: number) {
+  if (userId == null || (typeof userId === 'number' && Number.isNaN(userId))) {
+    throw new Error('userId is required')
+  }
   return `/api/users/${userId}/api-keys`
 }
 

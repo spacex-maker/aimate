@@ -33,6 +33,7 @@ public record ChatRequest(
                 .build();
     }
 
+    /** 带工具调用时提高 maxTokens，避免长命令（如大段 heredoc 脚本）在输出时被截断 */
     public static ChatRequest withTools(String model, List<Message> messages, List<Tool> tools) {
         return ChatRequest.builder()
                 .model(model)
@@ -40,7 +41,7 @@ public record ChatRequest(
                 .tools(tools)
                 .toolChoice("auto")
                 .temperature(0.7)
-                .maxTokens(4096)
+                .maxTokens(16384)
                 .build();
     }
 
