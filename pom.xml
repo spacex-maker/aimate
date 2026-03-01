@@ -189,4 +189,47 @@
         </plugins>
     </build>
 
+    <!-- 项目内 jdk25 目录：检测到 jdk25/bin/javac 或 jdk25/bin/javac.exe 则用其编译，他人克隆后把 JDK 25 解压到 jdk25 即可 -->
+    <profiles>
+        <profile>
+            <id>jdk25-compiler</id>
+            <activation>
+                <file>
+                    <exists>jdk25/bin/javac</exists>
+                </file>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <configuration>
+                            <fork>true</fork>
+                            <executable>${project.basedir}/jdk25/bin/javac</executable>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>jdk25-compiler-windows</id>
+            <activation>
+                <file>
+                    <exists>jdk25/bin/javac.exe</exists>
+                </file>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <configuration>
+                            <fork>true</fork>
+                            <executable>${project.basedir}/jdk25/bin/javac.exe</executable>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

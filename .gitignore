@@ -9688,3 +9688,7 @@
 /frontend/node_modules/zwitch/license
 /frontend/node_modules/zwitch/package.json
 /frontend/node_modules/zwitch/readme.md
+
+# JDK 25 放在项目 jdk25 目录内，不提交二进制（他人自行放置）
+/jdk25/*
+!/jdk25/README.txt
