@@ -3,8 +3,11 @@ package com.openforge.aimate.memory;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openforge.aimate.apikey.UserApiKeyResolver;
+import com.openforge.aimate.domain.LlmCallLog;
+import com.openforge.aimate.llm.LlmCallLogService;
 import com.openforge.aimate.llm.LlmClient;
 import com.openforge.aimate.llm.LlmProperties;
+import com.openforge.aimate.llm.LlmRouter;
 import com.openforge.aimate.llm.model.ChatRequest;
 import com.openforge.aimate.llm.model.ChatResponse;
 import com.openforge.aimate.llm.model.Message;
@@ -31,9 +34,11 @@ public class MemoryCompressService {
     private static final String COMPRESS_SESSION_ID = "compressed";
 
     private final LongTermMemoryService memoryService;
-    private final UserApiKeyResolver keyResolver;
-    private final HttpClient httpClient;
-    private final ObjectMapper objectMapper;
+    private final UserApiKeyResolver    keyResolver;
+    private final LlmRouter             llmRouter;
+    private final LlmCallLogService llmCallLogService;
+    private final HttpClient            httpClient;
+    private final ObjectMapper          objectMapper;
 
     private static final String PROMPT_TEMPLATE = """
         You are a memory compression assistant. Below is a list of long-term memory entries (content, type, importance).
@@ -58,11 +63,6 @@ public class MemoryCompressService {
             return new CompressPrepareResult(List.of(), List.of(), null);
         }
 
-        var config = keyResolver.resolveDefaultLlm(userId);
-        if (config.isEmpty()) {
-            return new CompressPrepareResult(current, List.of(), "请先配置默认 LLM 密钥");
-        }
-
         StringBuilder sb = new StringBuilder();
         for (MemoryItem m : current) {
             sb.append("- [").append(m.memoryType()).append("] importance=").append(m.importance())
@@ -70,13 +70,50 @@ public class MemoryCompressService {
         }
         String userContent = PROMPT_TEMPLATE.formatted(sb.toString());
 
+        // 优先使用用户配置的 LLM，如果没有则回退到系统级 LlmRouter（primary + fallback）
+        var userConfigOpt = keyResolver.resolveDefaultLlm(userId);
+        long startNs = System.nanoTime();
         try {
-            LlmClient client = new LlmClient(httpClient, objectMapper, config.get());
-            ChatResponse response = client.chat(ChatRequest.simple(config.get().model(),
-                    List.of(
-                            Message.system("You output only valid JSON arrays. No markdown, no code fence."),
-                            Message.user(userContent)
-                    )));
+            ChatResponse response;
+            if (userConfigOpt.isPresent()) {
+                LlmProperties.ProviderConfig cfg = userConfigOpt.get();
+                LlmClient client = new LlmClient(httpClient, objectMapper, cfg);
+                response = client.chat(ChatRequest.simple(cfg.model(),
+                        List.of(
+                                Message.system("You output only valid JSON arrays. No markdown, no code fence."),
+                                Message.user(userContent)
+                        )));
+                long latencyMs = (System.nanoTime() - startNs) / 1_000_000L;
+                llmCallLogService.logSuccess(
+                        cfg.name(),
+                        cfg.model(),
+                        LlmCallLog.CallType.MEMORY_COMPRESS,
+                        "compress_memory",
+                        "/v1/chat/completions",
+                        userId,
+                        null,
+                        latencyMs,
+                        response
+                );
+            } else {
+                response = llmRouter.chat(ChatRequest.simple(null,
+                        List.of(
+                                Message.system("You output only valid JSON arrays. No markdown, no code fence."),
+                                Message.user(userContent)
+                        )));
+                long latencyMs = (System.nanoTime() - startNs) / 1_000_000L;
+                llmCallLogService.logSuccess(
+                        "system_router",
+                        response.model(),
+                        LlmCallLog.CallType.MEMORY_COMPRESS,
+                        "compress_memory",
+                        "/v1/chat/completions",
+                        userId,
+                        null,
+                        latencyMs,
+                        response
+                );
+            }
             String raw = response.firstMessage().content();
             if (raw == null || raw.isBlank()) {
                 return new CompressPrepareResult(current, List.of(), "LLM 返回为空");

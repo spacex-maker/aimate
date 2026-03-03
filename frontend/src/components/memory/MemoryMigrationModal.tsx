@@ -1,82 +1,41 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { X, Loader, CheckCircle2, AlertTriangle } from 'lucide-react'
-import type { MemoryMigrationEvent } from '../../types/memory'
-import { useMemoryMigrationSocket } from '../../hooks/useMemoryMigrationSocket'
 
-interface Props {
-  open: boolean
-  onClose: () => void
-  userId: number | null
-}
-
-interface ProgressState {
-  status: 'IDLE' | 'RUNNING' | 'DONE' | 'ERROR'
+export interface MigrationProgressState {
+  status: 'IDLE' | 'RUNNING' | 'DONE' | 'ERROR' | 'CANCELLED'
   totalSessions: number
   processedSessions: number
   writtenMemories: number
   currentTask?: string | null
   error?: string | null
+  stepLog: string[]
 }
 
-export function MemoryMigrationModal({ open, onClose, userId }: Props) {
-  const [progress, setProgress] = useState<ProgressState>({
-    status: 'IDLE',
-    totalSessions: 0,
-    processedSessions: 0,
-    writtenMemories: 0,
-  })
+export const INITIAL_MIGRATION_PROGRESS: MigrationProgressState = {
+  status: 'IDLE',
+  totalSessions: 0,
+  processedSessions: 0,
+  writtenMemories: 0,
+  stepLog: [],
+}
 
-  useEffect(() => {
-    if (!open) {
-      setProgress({
-        status: 'IDLE',
-        totalSessions: 0,
-        processedSessions: 0,
-        writtenMemories: 0,
-      })
-    }
-  }, [open])
+interface Props {
+  open: boolean
+  onClose: () => void
+  progress: MigrationProgressState
+  onCancel?: () => void
+  isCancelling?: boolean
+}
 
-  useMemoryMigrationSocket(open ? userId ?? null : null, (event: MemoryMigrationEvent) => {
-    if (!open) return
-    if (event.type === 'START') {
-      setProgress({
-        status: 'RUNNING',
-        totalSessions: 0,
-        processedSessions: 0,
-        writtenMemories: 0,
-      })
-    } else if (event.type === 'PROGRESS') {
-      setProgress(prev => ({
-        ...prev,
-        status: 'RUNNING',
-        totalSessions: event.totalSessions,
-        processedSessions: event.processedSessions,
-        writtenMemories: event.writtenMemories,
-        currentTask: event.currentTaskDescription ?? prev.currentTask,
-      }))
-    } else if (event.type === 'DONE') {
-      setProgress(prev => ({
-        ...prev,
-        status: 'DONE',
-        totalSessions: event.totalSessions,
-        processedSessions: event.totalSessions,
-        writtenMemories: event.writtenMemories,
-        currentTask: null,
-      }))
-    } else if (event.type === 'ERROR') {
-      setProgress(prev => ({
-        ...prev,
-        status: 'ERROR',
-        error: event.error ?? '同步过程中发生错误',
-      }))
-    }
-  })
-
+export function MemoryMigrationModal({ open, onClose, progress, onCancel, isCancelling }: Props) {
   if (!open) return null
 
-  const { status, totalSessions, processedSessions, writtenMemories, currentTask, error } = progress
+  const { status, totalSessions, processedSessions, writtenMemories, currentTask, error, stepLog } = progress
   const pct = totalSessions > 0 ? Math.round((processedSessions / totalSessions) * 100) : 0
+  const stepLogEndRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    stepLogEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [stepLog.length])
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -93,10 +52,27 @@ export function MemoryMigrationModal({ open, onClose, userId }: Props) {
 
         <div className="px-5 py-4 space-y-4">
           <p className="text-xs text-white/60 leading-relaxed">
-            系统会遍历当前用户的所有会话，将用户与助手消息重新写入
-            <span className="text-white"> 当前默认向量模型 </span>
-            对应的 Milvus Collection。该操作只会<strong className="font-semibold">追加</strong>新向量，不会删除旧数据。
+            系统会遍历当前用户的所有会话，将用户与助手消息
+            <span className="text-white"> 向量化 </span>
+            后写入当前默认向量模型对应的集合。该操作只会<strong className="font-semibold">追加</strong>新向量，不会删除旧数据。
           </p>
+
+          {stepLog.length > 0 && (
+            <div className="rounded-lg bg-black/30 border border-white/10 overflow-hidden">
+              <div className="px-3 py-2 border-b border-white/10 text-[11px] text-white/50 font-medium">
+                步骤详情
+              </div>
+              <div className="px-3 py-2 max-h-40 overflow-y-auto font-mono text-[11px] text-white/70 space-y-1">
+                {stepLog.map((line, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className="text-white/40 shrink-0">{i + 1}.</span>
+                    <span>{line}</span>
+                  </div>
+                ))}
+                <div ref={stepLogEndRef} />
+              </div>
+            </div>
+          )}
 
           <div>
             <div className="flex items-center justify-between mb-1">
@@ -108,7 +84,13 @@ export function MemoryMigrationModal({ open, onClose, userId }: Props) {
             <div className="w-full h-2 rounded-full bg-white/5 overflow-hidden">
               <div
                 className={`h-full rounded-full ${
-                  status === 'DONE' ? 'bg-emerald-400' : status === 'ERROR' ? 'bg-red-500' : 'bg-blue-500'
+                  status === 'DONE'
+                    ? 'bg-emerald-400'
+                    : status === 'ERROR'
+                      ? 'bg-red-500'
+                      : status === 'CANCELLED'
+                        ? 'bg-amber-500'
+                        : 'bg-blue-500'
                 }`}
                 style={{ width: `${pct}%` }}
               />
@@ -142,9 +124,28 @@ export function MemoryMigrationModal({ open, onClose, userId }: Props) {
               </p>
             </div>
           )}
+
+          {status === 'CANCELLED' && (
+            <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/40 px-3 py-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400" />
+              <p className="text-xs text-amber-100/90">
+                已中断同步，已写入 <span className="font-semibold">{writtenMemories}</span> 条记忆。
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="px-5 py-3 border-t border-white/10 flex justify-end gap-2">
+          {status === 'RUNNING' && onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={isCancelling}
+              className="px-3 py-1.5 rounded-lg border border-amber-500/40 text-xs text-amber-400 hover:bg-amber-500/10 transition-colors disabled:opacity-50"
+            >
+              {isCancelling ? '请求中…' : '中断同步'}
+            </button>
+          )}
           <button
             onClick={onClose}
             className="px-3 py-1.5 rounded-lg border border-white/15 text-xs text-white/70 hover:text-white hover:bg-white/10 transition-colors"

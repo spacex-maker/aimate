@@ -5,6 +5,7 @@ import io.milvus.v2.common.DataType;
 import io.milvus.v2.common.IndexParam;
 import io.milvus.v2.service.collection.request.AddFieldReq;
 import io.milvus.v2.service.collection.request.CreateCollectionReq;
+import io.milvus.v2.service.collection.request.DropCollectionReq;
 import io.milvus.v2.service.collection.request.HasCollectionReq;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -151,5 +152,24 @@ public class MilvusCollectionManager {
                 .build());
 
         log.info("[Milvus] Collection '{}' created successfully.", name);
+    }
+
+    /**
+     * Drops the collection and removes it from the local cache.
+     * Next call to {@link #ensureCollection(String, int)} will create it again (with current schema, e.g. including user_id).
+     *
+     * @param collectionName name of the collection to drop
+     * @return true if dropped (or did not exist), false if Milvus client is unavailable
+     */
+    public boolean dropCollection(String collectionName) {
+        if (milvusClient == null) return false;
+        existingCollections.remove(collectionName);
+        if (!milvusClient.hasCollection(HasCollectionReq.builder().collectionName(collectionName).build())) {
+            log.info("[Milvus] Collection '{}' does not exist, nothing to drop.", collectionName);
+            return true;
+        }
+        milvusClient.dropCollection(DropCollectionReq.builder().collectionName(collectionName).build());
+        log.info("[Milvus] Dropped collection '{}'.", collectionName);
+        return true;
     }
 }

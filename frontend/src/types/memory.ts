@@ -22,7 +22,7 @@ export interface MemoryMeta {
   collectionName: string
 }
 
-export type MemoryMigrationEventType = 'START' | 'PROGRESS' | 'DONE' | 'ERROR'
+export type MemoryMigrationEventType = 'START' | 'PROGRESS' | 'DONE' | 'ERROR' | 'CANCELLED'
 
 export interface MemoryMigrationEvent {
   type: MemoryMigrationEventType
@@ -33,6 +33,19 @@ export interface MemoryMigrationEvent {
   currentSessionId?: string | null
   currentTaskDescription?: string | null
   error?: string | null
+  /** 当前步骤说明，用于详细日志（如：向量化并写入 EPISODIC 记忆） */
+  stepDetail?: string | null
+}
+
+/** GET /api/memories/migration-status 响应，用于刷新后恢复进度 */
+export interface MigrationStatusResponse {
+  status: 'IDLE' | 'RUNNING' | 'DONE' | 'ERROR' | 'CANCELLED'
+  totalSessions: number
+  processedSessions: number
+  writtenMemories: number
+  currentTask?: string | null
+  error?: string | null
+  stepLog: string[]
 }
 
 export interface CountResponse {

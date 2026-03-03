@@ -129,7 +129,7 @@ function ModelCard({ model: m, onEdit, onSetDefault, onDelete }: {
   return (
     <div className={clsx(
       'flex items-center gap-4 px-4 py-3.5 rounded-xl border transition-colors group',
-      m.is_default
+      m.isDefault
         ? 'border-purple-500/30 bg-purple-500/5'
         : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'
     )}>
@@ -140,7 +140,7 @@ function ModelCard({ model: m, onEdit, onSetDefault, onDelete }: {
       <div className="flex-1 min-w-0 space-y-1">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-medium text-white">{m.name}</span>
-          {m.is_default && (
+          {m.isDefault && (
             <span className="text-[10px] font-mono border border-yellow-500/30 text-yellow-400 bg-yellow-400/10 px-1.5 py-0.5 rounded">
               默认
             </span>
@@ -150,17 +150,17 @@ function ModelCard({ model: m, onEdit, onSetDefault, onDelete }: {
           </span>
         </div>
         <div className="flex items-center gap-3 flex-wrap text-[11px] text-white/35">
-          <span className="font-mono text-white/50">{m.model_name}</span>
+          <span className="font-mono text-white/50">{m.modelName}</span>
           <span className="text-purple-400/60">dim={m.dimension}</span>
-          <span className="truncate max-w-[200px]">{m.base_url}</span>
+          <span className="truncate max-w-[200px]">{m.baseUrl}</span>
         </div>
         <div className="text-[10px] text-white/20 font-mono">
-          collection: {m.collection_name}
+          collection: {m.collectionName}
         </div>
       </div>
 
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-        {!m.is_default && (
+        {!m.isDefault && (
           <button onClick={onSetDefault} title="设为默认"
             className="p-1.5 text-white/30 hover:text-yellow-400 hover:bg-white/5 rounded transition-colors">
             <Star className="w-3.5 h-3.5" />

@@ -250,9 +250,10 @@ export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning
                         <div className="mt-2 w-full min-w-0 rounded-xl border border-white/10 bg-white/[0.06] overflow-hidden">
                           <div className="px-4 py-3 text-sm text-white/70 leading-relaxed max-h-[28rem] overflow-auto space-y-4">
                             {msg.thinkingContent && (
-                              <div className="whitespace-pre-wrap break-words">
+                              <div className="break-words">
                                 <p className="text-[11px] text-white/40 uppercase tracking-wider mb-2">思考过程</p>
-                                {msg.thinkingContent}
+                                {/* 用 Markdown 渲染历史思考内容，保持与流式期间工具调用渲染风格一致 */}
+                                <MarkdownContent content={msg.thinkingContent} className="break-words" />
                               </div>
                             )}
                             {msg.toolCalls && msg.toolCalls.length > 0 && (

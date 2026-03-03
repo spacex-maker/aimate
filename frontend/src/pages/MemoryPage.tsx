@@ -1,15 +1,21 @@
-import { useState } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, Plus, Trash2, ChevronLeft, ChevronRight, RefreshCw, Merge } from 'lucide-react'
+import { Search, Plus, Trash2, ChevronLeft, ChevronRight, RefreshCw, Merge, Database, HelpCircle, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { memoryApi } from '../api/memory'
 import { MemoryTable } from '../components/memory/MemoryTable'
 import { AddMemoryModal } from '../components/memory/AddMemoryModal'
 import { CompressMemoryModal } from '../components/memory/CompressMemoryModal'
-import { MemoryMigrationModal } from '../components/memory/MemoryMigrationModal'
+import {
+  MemoryMigrationModal,
+  INITIAL_MIGRATION_PROGRESS,
+  type MigrationProgressState,
+} from '../components/memory/MemoryMigrationModal'
 import { useAuth } from '../hooks/useAuth'
+import { useMemoryMigrationSocket } from '../hooks/useMemoryMigrationSocket'
 import type { MemoryType, AddMemoryRequest } from '../types/memory'
+import type { MemoryMigrationEvent } from '../types/memory'
 
 const PAGE_SIZE = 20
 
@@ -35,8 +41,91 @@ export function MemoryPage() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [showCompressModal, setShowCompressModal] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const [showRecreateConfirm, setShowRecreateConfirm] = useState(false)
+  const [showHelpModal, setShowHelpModal] = useState(false)
   const [showMigrationModal, setShowMigrationModal] = useState(false)
+  const [migrationProgress, setMigrationProgress] = useState<MigrationProgressState>(INITIAL_MIGRATION_PROGRESS)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  const { data: migrationStatusData } = useQuery({
+    queryKey: ['migration-status', user?.userId],
+    queryFn: () => memoryApi.migrationStatus(),
+    enabled: !!user?.userId,
+  })
+
+  const migrationRestoredRef = useRef(false)
+  useEffect(() => {
+    if (!migrationStatusData || migrationRestoredRef.current) return
+    if (migrationStatusData.status === 'IDLE') return
+    migrationRestoredRef.current = true
+    setMigrationProgress({
+      status: migrationStatusData.status as MigrationProgressState['status'],
+      totalSessions: migrationStatusData.totalSessions ?? 0,
+      processedSessions: migrationStatusData.processedSessions ?? 0,
+      writtenMemories: migrationStatusData.writtenMemories ?? 0,
+      currentTask: migrationStatusData.currentTask ?? null,
+      error: migrationStatusData.error ?? null,
+      stepLog: Array.isArray(migrationStatusData.stepLog) ? migrationStatusData.stepLog : [],
+    })
+  }, [migrationStatusData])
+
+  useMemoryMigrationSocket(user?.userId ?? null, useCallback((event: MemoryMigrationEvent) => {
+    if (event.type === 'START') {
+      migrationRestoredRef.current = true
+      setMigrationProgress({
+        status: 'RUNNING',
+        totalSessions: 0,
+        processedSessions: 0,
+        writtenMemories: 0,
+        stepLog: ['开始同步…'],
+      })
+    } else if (event.type === 'PROGRESS') {
+      setMigrationProgress(prev => {
+        const nextLog =
+          event.stepDetail != null ? [...prev.stepLog, event.stepDetail] : prev.stepLog
+        return {
+          ...prev,
+          status: 'RUNNING',
+          totalSessions: event.totalSessions,
+          processedSessions: event.processedSessions,
+          writtenMemories: event.writtenMemories,
+          currentTask: event.currentTaskDescription ?? prev.currentTask,
+          stepLog: nextLog,
+        }
+      })
+    } else if (event.type === 'DONE') {
+      setMigrationProgress(prev => ({
+        ...prev,
+        status: 'DONE',
+        totalSessions: event.totalSessions,
+        processedSessions: event.totalSessions,
+        writtenMemories: event.writtenMemories,
+        currentTask: null,
+        stepLog: [...prev.stepLog, '同步完成'],
+      }))
+      queryClient.invalidateQueries({ queryKey: ['memories'] })
+      queryClient.invalidateQueries({ queryKey: ['memory-count'] })
+    } else if (event.type === 'ERROR') {
+      setMigrationProgress(prev => ({
+        ...prev,
+        status: 'ERROR',
+        error: event.error ?? '同步过程中发生错误',
+        stepLog: [...prev.stepLog, `错误: ${event.error ?? '未知'}`],
+      }))
+    } else if (event.type === 'CANCELLED') {
+      setMigrationProgress(prev => ({
+        ...prev,
+        status: 'CANCELLED',
+        totalSessions: event.totalSessions,
+        processedSessions: event.processedSessions,
+        writtenMemories: event.writtenMemories,
+        currentTask: null,
+        stepLog: [...prev.stepLog, '已中断同步'],
+      }))
+      queryClient.invalidateQueries({ queryKey: ['memories'] })
+      queryClient.invalidateQueries({ queryKey: ['memory-count'] })
+    }
+  }, [queryClient]))
 
   // Search state
   const [searchQ, setSearchQ] = useState('')
@@ -79,6 +168,12 @@ export function MemoryPage() {
       queryClient.invalidateQueries({ queryKey: ['memories'] })
       queryClient.invalidateQueries({ queryKey: ['memory-count'] })
     },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const cancelMigrationMutation = useMutation({
+    mutationFn: () => memoryApi.migrationCancel(),
+    onSuccess: (data) => toast.success(data?.message ?? '已请求中断'),
     onError: (e: Error) => toast.error(e.message),
   })
 
@@ -150,6 +245,18 @@ export function MemoryPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const recreateCollectionMutation = useMutation({
+    mutationFn: () => memoryApi.recreateCollection(),
+    onSuccess: (data) => {
+      toast.success(data?.message ?? '集合已重建，请使用「同步对话到记忆」重新写入')
+      setShowRecreateConfirm(false)
+      queryClient.invalidateQueries({ queryKey: ['memories'] })
+      queryClient.invalidateQueries({ queryKey: ['memory-count'] })
+      queryClient.invalidateQueries({ queryKey: ['memory-meta'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
   const compressExecuteMutation = useMutation({
     mutationFn: (body: { delete_ids: string[]; new_memories: { content: string; memory_type: string; importance: number }[] }) =>
       memoryApi.compressExecute(body),
@@ -181,6 +288,13 @@ export function MemoryPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setShowHelpModal(true)}
+            className="p-2 text-white/40 hover:text-white/80 hover:bg-white/5 rounded-lg transition-colors"
+            title="功能说明"
+          >
+            <HelpCircle className="w-4 h-4" />
+          </button>
+          <button
             onClick={() => refetch()}
             disabled={browseFetching}
             className="p-2 text-white/30 hover:text-white/70 hover:bg-white/5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -196,6 +310,14 @@ export function MemoryPage() {
             className="flex items-center gap-2 px-4 py-2 text-xs text-white/80 hover:text-white hover:bg-white/10 rounded-lg font-medium transition-colors border border-white/15 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             同步对话到记忆
+          </button>
+          <button
+            onClick={() => setShowRecreateConfirm(true)}
+            disabled={recreateCollectionMutation.isPending}
+            className="flex items-center gap-2 px-4 py-2 text-xs text-amber-400/90 hover:text-amber-300 hover:bg-amber-500/10 rounded-lg font-medium transition-colors border border-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="删除当前集合并按新结构（含 user_id）重建，重建后需点「同步对话到记忆」重新写入"
+          >
+            <Database className="w-4 h-4" /> 重建集合
           </button>
           <button
             onClick={() => setShowClearConfirm(true)}
@@ -377,7 +499,9 @@ export function MemoryPage() {
         <MemoryMigrationModal
           open={showMigrationModal}
           onClose={() => setShowMigrationModal(false)}
-          userId={user?.userId ?? null}
+          progress={migrationProgress}
+          onCancel={() => cancelMigrationMutation.mutate()}
+          isCancelling={cancelMigrationMutation.isPending}
         />
       )}
 
@@ -404,6 +528,89 @@ export function MemoryPage() {
                 className="px-3 py-1.5 text-xs text-white bg-red-600 hover:bg-red-500 rounded-lg font-medium transition-colors disabled:opacity-50"
               >
                 {clearAllMutation.isPending ? '清空中…' : '确定清空'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showHelpModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#111111] border border-white/10 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+            <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-white">长期记忆库 · 功能说明</h2>
+              <button
+                type="button"
+                onClick={() => setShowHelpModal(false)}
+                className="text-white/40 hover:text-white/80 rounded-lg p-1 hover:bg-white/10 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-4 max-h-[70vh] overflow-y-auto">
+              <div className="space-y-3 text-xs text-white/80">
+                <div>
+                  <span className="font-medium text-white/90">刷新</span>
+                  <p className="mt-0.5 text-white/60">重新拉取当前筛选条件下的记忆列表与数量。</p>
+                </div>
+                <div>
+                  <span className="font-medium text-white/90">同步对话到记忆</span>
+                  <p className="mt-0.5 text-white/60">将当前账号下的历史会话内容重新向量化并写入当前集合，用于迁移或补全记忆。</p>
+                </div>
+                <div>
+                  <span className="font-medium text-amber-400/90">重建集合</span>
+                  <p className="mt-0.5 text-white/60">删除当前向量集合并按新结构（含 user_id）重新创建。适用于旧版集合升级；重建后需再点「同步对话到记忆」重新写入数据。</p>
+                </div>
+                <div>
+                  <span className="font-medium text-white/90">清空记忆</span>
+                  <p className="mt-0.5 text-white/60">删除当前账号在本集合内的全部长期记忆，不可恢复。</p>
+                </div>
+                <div>
+                  <span className="font-medium text-white/90">压缩记忆</span>
+                  <p className="mt-0.5 text-white/60">由 AI 合并、去重相似记忆并生成更精简的条目，确认后替换原有记录，减少冗余、保留要点。</p>
+                </div>
+                <div>
+                  <span className="font-medium text-white/90">添加记忆</span>
+                  <p className="mt-0.5 text-white/60">手动添加一条记忆并向量化写入当前集合，可指定类型（情节/语义/程序）与重要性。</p>
+                </div>
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-white/10 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowHelpModal(false)}
+                className="px-3 py-1.5 text-xs text-white/80 hover:text-white rounded-lg border border-white/20 hover:bg-white/10 transition-colors"
+              >
+                知道了
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRecreateConfirm && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#111111] border border-amber-500/20 rounded-2xl w-full max-w-sm shadow-2xl p-5">
+            <h3 className="text-sm font-semibold text-amber-400/90 mb-2">重建集合</h3>
+            <p className="text-xs text-white/60 mb-4">
+              将删除当前集合并按新结构（含 user_id）重新创建，集合内数据会清空。重建后请点击「同步对话到记忆」重新写入。
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowRecreateConfirm(false)}
+                disabled={recreateCollectionMutation.isPending}
+                className="px-3 py-1.5 text-xs text-white/70 hover:text-white rounded-lg border border-white/20 hover:bg-white/10 transition-colors disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => recreateCollectionMutation.mutate()}
+                disabled={recreateCollectionMutation.isPending}
+                className="px-3 py-1.5 text-xs text-white bg-amber-600 hover:bg-amber-500 rounded-lg font-medium transition-colors disabled:opacity-50"
+              >
+                {recreateCollectionMutation.isPending ? '重建中…' : '确定重建'}
               </button>
             </div>
           </div>

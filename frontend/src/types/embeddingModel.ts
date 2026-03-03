@@ -2,15 +2,15 @@ export interface EmbeddingModelResponse {
   id: number
   name: string
   provider: string
-  model_name: string
-  masked_key: string | null
-  base_url: string
+  modelName: string
+  maskedKey: string | null
+  baseUrl: string
   dimension: number
-  collection_name: string
-  max_tokens: number
-  is_default: boolean
-  is_active: boolean
-  create_time: string | null
+  collectionName: string
+  maxTokens: number
+  isDefault: boolean
+  isActive: boolean
+  createTime: string | null
 }
 
 export interface EmbeddingModelRequest {

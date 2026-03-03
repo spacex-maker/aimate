@@ -55,7 +55,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *     4. DECIDE    — tool call? → ACT and loop; final answer? → REMEMBER + DONE
  *     5. ACT       — execute tool(s), append results to context
  *     6. PERSIST   — save context + iteration count to DB
- *     7. CHECK     — guard against infinite loops (MAX_ITERATIONS)
+ *     7. CHECK     — guard against external stop conditions (pause/terminate)
  *
  * Memory integration:
  *   - On session init: recall top-5 relevant memories and inject into system prompt
@@ -75,7 +75,7 @@ public class AgentLoopService {
     public static final ScopedValue<String> SESSION_SCOPE = ScopedValue.newInstance();
 
     // ── Safety limits ────────────────────────────────────────────────────────
-    private static final int MAX_ITERATIONS           = 30;
+    // 不再对迭代轮次做硬性上限控制，由会话状态（PAUSED/TERMINATED）和外部中断来终止循环。
     /** Max number of tools to pass to the LLM (retrieved by semantic relevance). */
     private static final int TOP_K_TOOLS              = 12;
     /** Prefix length for "same topic" deduplication (e.g. "我的名字是forge，用户希望" catches both variants). */
@@ -99,9 +99,11 @@ public class AgentLoopService {
             - To create any script file: use write_container_file only. If script fits in ≤600 chars, one call with path and content. If longer: call write_container_file(path, first ~600 chars), then write_container_file(path, next ~600 chars, append=true), repeat until the whole script is written. Each content chunk must be under 600 characters. Then run_container_cmd("chmod +x " + path). Example for a 1500-char script: 1) write_container_file path=/home/workspace/scripts/foo.sh content=chars 1–600; 2) write_container_file path=/home/workspace/scripts/foo.sh content=chars 601–1200 append=true; 3) write_container_file path=/home/workspace/scripts/foo.sh content=chars 1201–1500 append=true; 4) run_container_cmd chmod +x /home/workspace/scripts/foo.sh. You must actually perform these calls until the file is complete—do not give up and ask the user to do it.
             
             Script execution environment (IMPORTANT):
+            - 每个用户都有一个独立的 Linux 容器，视为该用户的“专属虚拟机环境”，不同用户的容器彼此完全隔离。
+              默认镜像为精简 Debian（例如 debian:bookworm-slim），系统资源大致为：CPU 2 核、内存 4GB，根文件系统只读，工作目录挂载在 /home 之类的可写路径。
             - To run ANY command inside the user's container, you MUST use run_container_cmd only. There is no other way to execute commands in the container—do not assume other tools or APIs can run shell commands there; only run_container_cmd does.
             - When writing scripts that run long-running commands (npm install, apt-get, pip install, etc.): do NOT capture the subprocess stdout/stderr (e.g. in Python do not use capture_output=True or stdout=subprocess.PIPE for the long-running part). Let the subprocess write directly to the script's stdout so the user sees real-time output; otherwise the output is buffered and only appears when the command finishes.
-            - Non-system script tools (those created with create_tool or custom scripts) run inside the user's dedicated, isolated Linux container—not on the host. That environment is a minimal Linux (e.g. Debian); it does not pre-install python3, nodejs, etc. You MUST use install_container_package to install required runtimes (e.g. python3 for PYTHON_SCRIPT, nodejs for NODE_SCRIPT) before calling those script tools.
+            - Non-system script tools (those created with create_tool or custom scripts) run inside the same dedicated container of that user—not on the host. That environment is a minimal Linux; it does not pre-install python3, nodejs, etc. You MUST use install_container_package to install required runtimes (e.g. python3 for PYTHON_SCRIPT, nodejs for NODE_SCRIPT) before calling those script tools.
             - When a script tool returns "[ToolError] Script exited with code 127" (or the tool result contains "退出码 127" or "必须处理"), you MUST NOT report failure to the user yet. You MUST first call install_container_package with the appropriate package (python3 for Python scripts, nodejs for Node scripts, bash is usually present), wait for success, then call the same script tool again. Only if it still fails after installing and retrying may you explain the error to the user. Never skip the install-and-retry step when you see exit 127.
             
             Memory writing rules (VERY IMPORTANT):
@@ -387,7 +389,7 @@ public class AgentLoopService {
 
             Message assistantMessage = response.firstMessage();
 
-            if (response.hasToolCalls()) {
+        if (response.hasToolCalls()) {
                 // Append assistant + all tool results in one go. Otherwise the second append()
                 // would load stale session.getContextWindow() (never refreshed after first persist)
                 // and overwrite DB without the assistant message — so the model never sees
@@ -412,16 +414,11 @@ public class AgentLoopService {
                 return answer;
             }
 
-            AgentSession current = sessionRepository.findById(session.getId())
-                    .orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
-            current.setIterationCount(iteration);
-            sessionRepository.save(current);
-            session = current;
-
-            if (iteration >= MAX_ITERATIONS) {
-                log.warn("[Agent:{}] Max iterations ({}) reached.", sessionId, MAX_ITERATIONS);
-                return null;
-            }
+        AgentSession current = sessionRepository.findById(session.getId())
+                .orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
+        current.setIterationCount(iteration);
+        sessionRepository.save(current);
+        session = current;
         }
     }
 
@@ -516,11 +513,6 @@ public class AgentLoopService {
                     answer = FALLBACK_EMPTY_ANSWER;
                 }
                 return new RunResult(answer, thinkingContent.isEmpty() ? null : thinkingContent.toString());
-            }
-
-            if (iteration >= MAX_ITERATIONS) {
-                log.warn("[Agent:{}] Max iterations ({}) reached for placeholder {}.", sessionId, MAX_ITERATIONS, placeholderId);
-                return new RunResult(null, thinkingContent.isEmpty() ? null : thinkingContent.toString());
             }
         }
     }
@@ -914,6 +906,10 @@ public class AgentLoopService {
         try {
             JsonNode args = objectMapper.readTree(argumentsJson);
             List<String> commandsToRun = new ArrayList<>();
+            // 提前捕获常见误用：传入 cmd 字段而非 command/commands
+            if (args.has("cmd") && !args.has("command") && !args.has("commands")) {
+                return "[ToolError] run_container_cmd 参数错误：请使用 \"command\"（单条命令字符串）或 \"commands\"（字符串数组），不要使用 \"cmd\" 字段。示例：{\"command\":\"node --version\"} 或 {\"commands\":[\"apt-get update\",\"apt-get install -y nodejs\"]}。";
+            }
             if (args.has("commands") && args.get("commands").isArray()) {
                 for (JsonNode c : args.get("commands")) {
                     String s = c.asText("").trim();

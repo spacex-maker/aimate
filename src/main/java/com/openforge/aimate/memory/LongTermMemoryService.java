@@ -102,6 +102,34 @@ public class LongTermMemoryService {
         return resolveContext(userId).collectionName();
     }
 
+    /**
+     * Drops the current user's collection and recreates it with the current schema (including user_id).
+     * After this, use 「同步对话到记忆」 to repopulate.
+     *
+     * @param userId current user (null = use system default collection)
+     * @return true if recreate succeeded, false if Milvus unavailable
+     */
+    public boolean recreateCollectionForUser(@Nullable Long userId) {
+        if (milvusUnavailable()) return false;
+        String collectionName;
+        int dimension;
+        if (userId != null) {
+            var resolved = embeddingResolver.resolveDefault(userId);
+            if (resolved.isPresent()) {
+                collectionName = resolved.get().collectionName();
+                dimension = resolved.get().dimension();
+            } else {
+                collectionName = milvusProps.collectionName();
+                dimension = milvusProps.vectorDimensions();
+            }
+        } else {
+            collectionName = milvusProps.collectionName();
+            dimension = milvusProps.vectorDimensions();
+        }
+        collectionManager.dropCollection(collectionName);
+        return collectionManager.ensureCollection(collectionName, dimension);
+    }
+
     private boolean milvusUnavailable() {
         if (milvusClient == null) {
             log.debug("[Memory] Skipped — Milvus not connected.");
@@ -156,14 +184,17 @@ public class LongTermMemoryService {
 
     // ── Recall (ANN search) ──────────────────────────────────────────────────
 
-    /** Recall with user-configured embedding model — across all memories for this model/collection. */
+    /** Recall with user-configured embedding model — 仅召回当前用户在该模型/集合下的记忆。 */
     public List<MemoryRecord> recall(String queryText, int topK, @Nullable Long userId) {
         if (milvusUnavailable()) return List.of();
         try {
             EmbeddingContext ctx    = resolveContext(userId);
             List<Float>      vector = ctx.client().embed(queryText);
-            // Collection is already chosen via user-specific embedding config, no extra filter needed here.
-            return searchMilvus(vector, topK, null, ctx.collectionName());
+            String filter = null;
+            if (userId != null) {
+                filter = "user_id == \"%s\"".formatted(userId);
+            }
+            return searchMilvus(vector, topK, filter, ctx.collectionName());
         } catch (Exception e) {
             log.warn("[Memory] Recall failed: {}", e.getMessage());
             return List.of();
@@ -184,6 +215,9 @@ public class LongTermMemoryService {
             EmbeddingContext ctx    = resolveContext(userId);
             List<Float>      vector = ctx.client().embed(queryText);
             String filter = "session_id == \"%s\"".formatted(sessionId);
+            if (userId != null) {
+                filter = "user_id == \"%s\" and %s".formatted(userId, filter);
+            }
             return searchMilvus(vector, topK, filter, ctx.collectionName());
         } catch (Exception e) {
             log.warn("[Memory] Session recall failed: {}", e.getMessage());
@@ -205,8 +239,9 @@ public class LongTermMemoryService {
         try {
             EmbeddingContext ctx    = resolveContext(userId);
             List<Float>      vector = ctx.client().embed(queryText);
-            // Same collection is shared by this user's memories; filter only by memory_type.
-            String filter = "memory_type == \"%s\"".formatted(MemoryType.SEMANTIC.name());
+            // 同一集合下仍以 user_id 进行隔离，只取该用户的 SEMANTIC 记忆。
+            String filter = "user_id == \"%s\" and memory_type == \"%s\""
+                    .formatted(userId, MemoryType.SEMANTIC.name());
             return searchMilvus(vector, topK, filter, ctx.collectionName());
         } catch (Exception e) {
             log.warn("[Memory] User semantic recall failed: {}", e.getMessage());

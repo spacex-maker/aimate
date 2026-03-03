@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Star, Trash2, Pencil, Key, RefreshCw } from 'lucide-react'
+import { Plus, Star, Trash2, Pencil, Key, RefreshCw, Activity } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { apikeyApi } from '../api/apikey'
@@ -8,6 +8,8 @@ import { useAuth } from '../hooks/useAuth'
 import type { ApiKeyRequest, ApiKeyResponse } from '../types/apikey'
 import { PROVIDERS, KEY_TYPE_LABELS } from '../types/apikey'
 import { ApiKeyFormModal } from '../components/apikey/ApiKeyFormModal'
+import { llmLogApi } from '../api/llmLog'
+import type { LlmCallLogItem } from '../types/llmLog'
 
 export function ApiKeyPage() {
   const { user } = useAuth()
@@ -17,6 +19,8 @@ export function ApiKeyPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<ApiKeyResponse | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [tab, setTab] = useState<'keys' | 'logs'>('keys')
+  const [logPage, setLogPage] = useState(0)
 
   const { data: keys = [], isLoading, refetch } = useQuery({
     queryKey: ['api-keys', userId],
@@ -62,47 +66,97 @@ export function ApiKeyPage() {
     return acc
   }, {})
 
+  const {
+    data: logPageData,
+    isLoading: logsLoading,
+  } = useQuery({
+    queryKey: ['llm-logs', userId, logPage],
+    queryFn: () => llmLogApi.list(userId!, logPage, 20),
+    enabled: !!userId && tab === 'logs',
+  })
+
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="flex-shrink-0 px-6 py-5 border-b border-white/10 flex items-center justify-between">
-        <div>
-          <h1 className="text-base font-semibold text-white">API 密钥管理</h1>
-          <p className="text-xs text-white/35 mt-0.5">配置你的第三方 API Key，Agent 将优先使用你的私有密钥</p>
+      {/* Header + Tabs */}
+      <div className="flex-shrink-0 border-b border-white/10">
+        <div className="px-6 pt-5 pb-3 flex items-center justify-between">
+          <div>
+            <h1 className="text-base font-semibold text-white">API 密钥管理</h1>
+            <p className="text-xs text-white/35 mt-0.5">配置第三方 API Key，并查看 LLM 调用消耗</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => refetch()} className="p-2 text-white/30 hover:text-white/70 hover:bg-white/5 rounded-lg transition-colors">
+              <RefreshCw className="w-4 h-4" />
+            </button>
+            {tab === 'keys' && (
+              <button
+                onClick={() => { setEditing(null); setModalOpen(true) }}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm text-white font-medium transition-colors"
+              >
+                <Plus className="w-4 h-4" /> 添加密钥
+              </button>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => refetch()} className="p-2 text-white/30 hover:text-white/70 hover:bg-white/5 rounded-lg transition-colors">
-            <RefreshCw className="w-4 h-4" />
+        <div className="px-6 flex border-t border-white/10">
+          <button
+            type="button"
+            onClick={() => setTab('keys')}
+            className={clsx(
+              'px-4 py-2.5 text-xs border-b-2 transition-colors',
+              tab === 'keys'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-white/40 hover:text-white/70'
+            )}
+          >
+            密钥列表
           </button>
           <button
-            onClick={() => { setEditing(null); setModalOpen(true) }}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm text-white font-medium transition-colors"
+            type="button"
+            onClick={() => setTab('logs')}
+            className={clsx(
+              'px-4 py-2.5 text-xs border-b-2 transition-colors flex items-center gap-1.5',
+              tab === 'logs'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-white/40 hover:text-white/70'
+            )}
           >
-            <Plus className="w-4 h-4" /> 添加密钥
+            <Activity className="w-3.5 h-3.5" /> 调用日志
           </button>
         </div>
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-6 py-5">
-        {isLoading ? (
-          <div className="text-center py-16 text-white/25 text-sm">加载中...</div>
-        ) : keys.length === 0 ? (
-          <EmptyState onAdd={() => setModalOpen(true)} />
+        {tab === 'keys' ? (
+          isLoading ? (
+            <div className="text-center py-16 text-white/25 text-sm">加载中...</div>
+          ) : keys.length === 0 ? (
+            <EmptyState onAdd={() => setModalOpen(true)} />
+          ) : (
+            <div className="space-y-6">
+              {Object.entries(grouped).map(([provider, list]) => (
+                <ProviderGroup
+                  key={provider}
+                  provider={provider}
+                  keys={list}
+                  onEdit={(k) => { setEditing(k); setModalOpen(true) }}
+                  onSetDefault={(id) => defaultMutation.mutate(id)}
+                  onDelete={(id) => deleteMutation.mutate(id)}
+                  deletingId={deletingId}
+                />
+              ))}
+            </div>
+          )
         ) : (
-          <div className="space-y-6">
-            {Object.entries(grouped).map(([provider, list]) => (
-              <ProviderGroup
-                key={provider}
-                provider={provider}
-                keys={list}
-                onEdit={(k) => { setEditing(k); setModalOpen(true) }}
-                onSetDefault={(id) => defaultMutation.mutate(id)}
-                onDelete={(id) => deleteMutation.mutate(id)}
-                deletingId={deletingId}
-              />
-            ))}
-          </div>
+          <LlmLogTable
+            logs={logPageData?.items ?? []}
+            loading={logsLoading}
+            page={logPage}
+            size={logPageData?.size ?? 20}
+            total={logPageData?.total ?? 0}
+            onPageChange={setLogPage}
+          />
         )}
       </div>
 
@@ -231,6 +285,135 @@ function KeyRow({
           <Trash2 className="w-3.5 h-3.5" />
         </button>
       </div>
+    </div>
+  )
+}
+
+function LlmLogTable({
+  logs,
+  loading,
+  page,
+  size,
+  total,
+  onPageChange,
+}: {
+  logs: LlmCallLogItem[]
+  loading: boolean
+  page: number
+  size: number
+  total: number
+  onPageChange: (p: number) => void
+}) {
+  const totalPages = total > 0 ? Math.ceil(total / size) : 0
+
+  if (loading) {
+    return <div className="text-center py-16 text-white/25 text-sm">加载中...</div>
+  }
+
+  if (!logs.length) {
+    return <div className="text-center py-16 text-white/30 text-sm">暂无调用记录</div>
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="overflow-auto rounded-xl border border-white/10 bg-white/[0.02]">
+        <table className="min-w-full text-xs text-white/70">
+          <thead className="bg-white/[0.04] text-white/50">
+            <tr>
+              <th className="px-3 py-2 text-left font-medium">时间</th>
+              <th className="px-3 py-2 text-left font-medium">提供商 / 模型</th>
+              <th className="px-3 py-2 text-left font-medium">用途</th>
+              <th className="px-3 py-2 text-right font-medium">Tokens</th>
+              <th className="px-3 py-2 text-right font-medium">耗时</th>
+              <th className="px-3 py-2 text-left font-medium">HTTP</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/[0.05]">
+            {logs.map((l) => (
+              <tr key={l.id} className="hover:bg-white/[0.03]">
+                <td className="px-3 py-2 whitespace-nowrap text-white/60">
+                  {l.createTime ? l.createTime.replace('T', ' ').slice(0, 19) : '-'}
+                </td>
+                <td className="px-3 py-2">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-mono text-white/80">{l.provider}</span>
+                    <span className="text-white/40 text-[11px] font-mono truncate max-w-[220px]">
+                      {l.model}
+                    </span>
+                  </div>
+                </td>
+                <td className="px-3 py-2">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[11px] text-white/60">
+                      {l.callType || 'OTHER'}{l.toolName ? ` · ${l.toolName}` : ''}
+                    </span>
+                    {l.sessionId && (
+                      <span className="text-[10px] text-white/30 font-mono truncate max-w-[180px]">
+                        session: {l.sessionId}
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-[11px]">
+                  {l.totalTokens != null ? (
+                    <>
+                      <span className="text-white/80">{l.totalTokens}</span>
+                      <span className="text-white/40"> = </span>
+                      <span className="text-white/50">
+                        {l.promptTokens ?? 0}/{l.completionTokens ?? 0}
+                      </span>
+                    </>
+                  ) : (
+                    '-'
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right text-[11px] text-white/60">
+                  {l.latencyMs != null ? `${l.latencyMs} ms` : '-'}
+                </td>
+                <td className="px-3 py-2 text-left text-[11px]">
+                  <span
+                    className={clsx(
+                      'px-1.5 py-0.5 rounded font-mono',
+                      l.success
+                        ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
+                        : 'bg-red-500/10 text-red-300 border border-red-500/30'
+                    )}
+                  >
+                    {l.httpStatus ?? '-'}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {totalPages > 1 && (
+        <div className="mt-3 flex items-center justify-between text-[11px] text-white/40">
+          <div>
+            第 <span className="text-white/70">{page + 1}</span> / {totalPages} 页， 共{' '}
+            <span className="text-white/70">{total}</span> 条
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onPageChange(Math.max(0, page - 1))}
+              disabled={page === 0}
+              className="px-2 py-1 rounded border border-white/15 text-white/60 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              上一页
+            </button>
+            <button
+              type="button"
+              onClick={() => onPageChange(Math.min(totalPages - 1, page + 1))}
+              disabled={page >= totalPages - 1}
+              className="px-2 py-1 rounded border border-white/15 text-white/60 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

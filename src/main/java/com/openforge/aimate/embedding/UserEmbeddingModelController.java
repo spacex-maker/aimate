@@ -27,15 +27,19 @@ public class UserEmbeddingModelController {
 
     // ── DTOs ─────────────────────────────────────────────────────────────────
 
+    /**
+     * 向量模型请求体：统一使用 camelCase，与前端约定保持一致。
+     * 不再兼容 snake_case，非规范调用将直接返回 400，便于尽早暴露问题。
+     */
     public record EmbeddingModelRequest(
             @NotBlank @Size(max = 128) String name,
             @NotBlank @Size(max = 32)  String provider,
             @NotBlank @Size(max = 128) String modelName,
-                                       String apiKey,
+                                   String apiKey,
             @NotBlank @Size(max = 512) String baseUrl,
             @Min(64)                   int    dimension,
-                                       Integer maxTokens,
-                                       boolean isDefault
+                                   Integer maxTokens,
+                                   boolean isDefault
     ) {}
 
     public record EmbeddingModelResponse(

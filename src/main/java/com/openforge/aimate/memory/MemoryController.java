@@ -29,6 +29,7 @@ import java.util.Map;
  * │  DELETE /api/memories/session/{sid}    删除某会话的全部记忆         │
  * │  DELETE /api/memories/type/{type}      删除某类型的全部记忆         │
  * │  DELETE /api/memories/clear            清空当前用户全部记忆         │
+ * │  POST   /api/memories/recreate-collection  重建当前用户的集合（含 user_id） │
  * └─────────────────────────────────────────────────────────────────┘
  */
 @RestController
@@ -39,6 +40,7 @@ public class MemoryController {
     private final LongTermMemoryService  memoryService;
     private final MemoryCompressService  compressService;
     private final MemoryMigrationService migrationService;
+    private final MigrationStateHolder   migrationStateHolder;
 
     private Long currentUserId() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -145,6 +147,39 @@ public class MemoryController {
         return ResponseEntity.accepted().body(new StartMigrateResponse(true));
     }
 
+    /** 获取当前用户同步进度（刷新页面后可调用以恢复显示）. */
+    @GetMapping("/migration-status")
+    public ResponseEntity<MigrationStatusResponse> getMigrationStatus() {
+        Long userId = currentUserId();
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        var snapshot = migrationStateHolder.get(userId);
+        if (snapshot == null) {
+            return ResponseEntity.ok(MigrationStatusResponse.idle());
+        }
+        return ResponseEntity.ok(new MigrationStatusResponse(
+                snapshot.status(),
+                snapshot.totalSessions(),
+                snapshot.processedSessions(),
+                snapshot.writtenMemories(),
+                snapshot.currentTask(),
+                snapshot.error(),
+                snapshot.stepLog() != null ? snapshot.stepLog() : List.of()
+        ));
+    }
+
+    /** 请求中断当前用户的同步. */
+    @PostMapping("/migration/cancel")
+    public ResponseEntity<Map<String, String>> cancelMigration() {
+        Long userId = currentUserId();
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        migrationService.requestCancel(userId);
+        return ResponseEntity.ok(Map.of("message", "已请求中断，同步将在当前步骤结束后停止"));
+    }
+
     // ── Manual add ───────────────────────────────────────────────────────────
 
     /**
@@ -163,6 +198,22 @@ public class MemoryController {
     }
 
     // ── Delete ───────────────────────────────────────────────────────────────
+
+    /** Recreate the current user's Milvus collection (drop + create with current schema including user_id). Use then 「同步对话到记忆」 to repopulate. */
+    @PostMapping("/recreate-collection")
+    public ResponseEntity<Map<String, Object>> recreateCollection() {
+        Long userId = currentUserId();
+        boolean ok = memoryService.recreateCollectionForUser(userId);
+        if (!ok) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(Map.of("message", "Milvus 不可用，无法重建集合"));
+        }
+        String name = memoryService.resolveCollectionName(userId);
+        return ResponseEntity.ok(Map.of(
+                "message", "集合已重建",
+                "collectionName", name
+        ));
+    }
 
     /** Clear all long-term memories for the current user. Must be declared before /{id} so "clear" is not matched as id. */
     @DeleteMapping("/clear")
@@ -243,6 +294,21 @@ public class MemoryController {
     public record StartMigrateResponse(
             boolean started
     ) {}
+
+    /** Response for GET /api/memories/migration-status (camelCase for frontend). */
+    public record MigrationStatusResponse(
+            String status,
+            int totalSessions,
+            int processedSessions,
+            int writtenMemories,
+            String currentTask,
+            String error,
+            List<String> stepLog
+    ) {
+        public static MigrationStatusResponse idle() {
+            return new MigrationStatusResponse("IDLE", 0, 0, 0, null, null, List.of());
+        }
+    }
 
     public record AddMemoryRequest(
             @NotBlank @Size(max = 4000) String content,

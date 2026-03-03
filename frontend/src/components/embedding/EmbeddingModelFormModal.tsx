@@ -14,16 +14,17 @@ export function EmbeddingModelFormModal({ initial, onClose, onSubmit, isLoading 
   const isEdit = !!initial
 
   const [provider,   setProvider]   = useState(initial?.provider ?? 'openai')
-  const [modelName,  setModelName]  = useState(initial?.model_name ?? '')
+  const [modelName,  setModelName]  = useState(initial?.modelName ?? '')
   const [name,       setName]       = useState(initial?.name ?? '')
   const [apiKey,     setApiKey]     = useState('')
-  const [baseUrl,    setBaseUrl]    = useState(initial?.base_url ?? '')
+  const [baseUrl,    setBaseUrl]    = useState(initial?.baseUrl ?? '')
   const [dimension,  setDimension]  = useState(initial?.dimension ?? 1536)
-  const [maxTokens,  setMaxTokens]  = useState(initial?.max_tokens ?? 8192)
-  const [isDefault,  setIsDefault]  = useState(initial?.is_default ?? false)
+  const [maxTokens,  setMaxTokens]  = useState(initial?.maxTokens ?? 8192)
+  const [isDefault,  setIsDefault]  = useState(initial?.isDefault ?? false)
   const [showKey,    setShowKey]    = useState(false)
 
   const providerInfo = EMBEDDING_PROVIDERS.find(p => p.value === provider)
+  const isOpenForgeProvider = provider === 'ollama'
 
   // Auto-fill when provider changes
   useEffect(() => {
@@ -124,17 +125,38 @@ export function EmbeddingModelFormModal({ initial, onClose, onSubmit, isLoading 
                 )}
                 <div>
                   <label className={labelCls}>模型名称</label>
-                  <input value={modelName} onChange={e => setModelName(e.target.value)} required
-                    placeholder="text-embedding-3-small" className={inputCls} />
+                  <input
+                    value={modelName}
+                    onChange={e => setModelName(e.target.value)}
+                    required
+                    placeholder="text-embedding-3-small"
+                    className={inputCls}
+                    disabled={isOpenForgeProvider}
+                  />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className={labelCls}>向量维度</label>
-                    <input type="number" value={dimension} onChange={e => setDimension(Number(e.target.value))} required min={64} className={inputCls} />
+                    <input
+                      type="number"
+                      value={dimension}
+                      onChange={e => setDimension(Number(e.target.value))}
+                      required
+                      min={64}
+                      className={inputCls}
+                      disabled={isOpenForgeProvider}
+                    />
                   </div>
                   <div>
                     <label className={labelCls}>最大输入 Token 数</label>
-                    <input type="number" value={maxTokens} onChange={e => setMaxTokens(Number(e.target.value))} min={512} className={inputCls} />
+                    <input
+                      type="number"
+                      value={maxTokens}
+                      onChange={e => setMaxTokens(Number(e.target.value))}
+                      min={512}
+                      className={inputCls}
+                      disabled={isOpenForgeProvider}
+                    />
                   </div>
                 </div>
                 <div>
@@ -151,9 +173,14 @@ export function EmbeddingModelFormModal({ initial, onClose, onSubmit, isLoading 
                     Base URL
                     {provider === 'ollama' && <span className="text-purple-400/60 ml-1">（需含 /v1 以兼容 OpenAI 格式）</span>}
                   </label>
-                  <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} required
+                  <input
+                    value={baseUrl}
+                    onChange={e => setBaseUrl(e.target.value)}
+                    required
                     placeholder={provider === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.openai.com/v1'}
-                    className={inputCls} />
+                    className={inputCls}
+                    disabled={isOpenForgeProvider}
+                  />
                 </div>
                 <div>
                   <label className={labelCls}>
@@ -162,11 +189,21 @@ export function EmbeddingModelFormModal({ initial, onClose, onSubmit, isLoading 
                     {isEdit && <span className="text-white/25 ml-1">（留空保持原值）</span>}
                   </label>
                   <div className="relative">
-                    <input type={showKey ? 'text' : 'password'} value={apiKey} onChange={e => setApiKey(e.target.value)}
-                      autoComplete="new-password" placeholder={provider === 'ollama' ? '留空即可' : 'sk-...'}
-                      className={`${inputCls} pr-10`} />
-                    <button type="button" onClick={() => setShowKey(v => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60">
+                    <input
+                      type={showKey ? 'text' : 'password'}
+                      value={apiKey}
+                      onChange={e => setApiKey(e.target.value)}
+                      autoComplete="new-password"
+                      placeholder={provider === 'ollama' ? '留空即可' : 'sk-...'}
+                      className={`${inputCls} pr-10`}
+                      disabled={isOpenForgeProvider}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowKey(v => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60"
+                      disabled={isOpenForgeProvider}
+                    >
                       {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>

@@ -15,16 +15,16 @@ spring:
 agent:
   llm:
     primary:
+      name: deepseek-chat
+      base-url: https://api.deepseek.com/v1
+      api-key: sk-458d2a115a034ec289b1bfe06f0beb6e
+      model: deepseek-reasoner
+      timeout-seconds: 120
+    fallback:
       name: gpt-4o
       base-url: https://api.openai.com/v1
       api-key: ${PRIMARY_LLM_API_KEY:sk-placeholder}
       model: gpt-4o
-      timeout-seconds: 120
-    fallback:
-      name: deepseek-chat
-      base-url: https://api.deepseek.com/v1
-      api-key: ${FALLBACK_LLM_API_KEY:sk-placeholder}
-      model: deepseek-chat
       timeout-seconds: 120
   embedding:
     base-url: http://175.27.255.29:11434/v1

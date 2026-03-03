@@ -16,7 +16,8 @@ export function LoginPage() {
   const [showPwd, setShowPwd] = useState(false)
 
   const mutation = useMutation({
-    mutationFn: () => authApi.login({ identifier, password }),
+    mutationFn: (creds?: { identifier: string; password: string }) =>
+      authApi.login(creds ?? { identifier, password }),
     onSuccess: (data) => {
       setAuthUser({ userId: data.userId, username: data.username, displayName: data.displayName, token: data.token })
       toast.success(`欢迎回来，${data.displayName ?? data.username ?? '用户'}`)
@@ -29,6 +30,10 @@ export function LoginPage() {
     e.preventDefault()
     if (!identifier.trim() || !password) return
     mutation.mutate()
+  }
+
+  const handleTestLogin = () => {
+    mutation.mutate({ identifier: 'test', password: 'test1234' })
   }
 
   return (
@@ -94,6 +99,15 @@ export function LoginPage() {
               className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2"
             >
               {mutation.isPending ? '登录中...' : '登录'}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleTestLogin}
+              disabled={mutation.isPending}
+              className="w-full py-2 rounded-lg text-sm text-white/50 hover:text-white/80 hover:bg-white/5 border border-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2"
+            >
+              测试登录（test / test1234）
             </button>
           </form>
         </div>

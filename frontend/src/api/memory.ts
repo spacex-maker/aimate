@@ -9,6 +9,7 @@ import type {
   MemoryMigrationEvent,
   MemorySearchParams,
   MemoryType,
+  MigrationStatusResponse,
 } from '../types/memory'
 import { http } from './httpClient'
 
@@ -69,6 +70,14 @@ export const memoryApi = {
   migrateToCurrentCollection: () =>
     http<{ started: boolean }>(`${BASE}/migrate-to-current-collection`, { method: 'POST' }),
 
+  /** 获取当前用户同步进度（刷新后恢复显示）. */
+  migrationStatus: () =>
+    http<MigrationStatusResponse>(`${BASE}/migration-status`),
+
+  /** 请求中断当前用户的同步. */
+  migrationCancel: () =>
+    http<{ message: string }>(`${BASE}/migration/cancel`, { method: 'POST' }),
+
   add: (body: AddMemoryRequest) =>
     http<void>(BASE, { method: 'POST', body: JSON.stringify(body) }),
 
@@ -83,6 +92,10 @@ export const memoryApi = {
 
   /** 清空当前用户全部长期记忆 */
   clearAll: () => http<void>(`${BASE}/clear`, { method: 'DELETE' }),
+
+  /** 重建当前用户的向量集合（删除后按当前 schema 新建，含 user_id）。重建后需使用「同步对话到记忆」重新写入。 */
+  recreateCollection: () =>
+    http<{ message: string; collectionName: string }>(`${BASE}/recreate-collection`, { method: 'POST' }),
 
   /** Prepare compression: get current + LLM-proposed merged list for comparison. */
   compressPrepare: async (): Promise<CompressPrepareResult> => {
