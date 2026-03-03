@@ -55,7 +55,7 @@ public class MilvusConfig {
             MilvusClientV2 client = new MilvusClientV2(
                     ConnectConfig.builder()
                             .uri("http://%s:%d".formatted(props.host(), props.port()))
-                            .connectTimeoutMs(15_000)
+                            .connectTimeoutMs(props.connectTimeoutMs() > 0 ? props.connectTimeoutMs() : 30_000)
                             .build()
             );
             log.info("[Milvus] Connected successfully.");

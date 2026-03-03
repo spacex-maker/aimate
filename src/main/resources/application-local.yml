@@ -27,10 +27,10 @@ agent:
       model: deepseek-chat
       timeout-seconds: 120
   embedding:
-    base-url: ${EMBEDDING_BASE_URL:http://175.27.255.29:11434/v1}
-    api-key: ${EMBEDDING_API_KEY:ollama}
-    model: ${EMBEDDING_MODEL:bge-m3}
-    dimensions: ${EMBEDDING_DIMENSIONS:1024}
+    base-url: http://175.27.255.29:11434/v1
+    api-key: ollama
+    model: bge-m3
+    dimensions: 1024
     timeout-seconds: 30
   script:
     docker:
@@ -46,10 +46,12 @@ agent:
       script-idle-timeout-seconds: 90
   milvus:
     enabled: true
-    host: ${MILVUS_HOST:127.0.0.1}
-    port: ${MILVUS_PORT:19530}
+    host: 175.27.255.29
+    port: 19530
     collection-name: agent_memories_v2
-    vector-dimensions: ${MILVUS_VECTOR_DIMENSIONS:1024}
+    vector-dimensions: 1024
+    # 连接超时(ms)。若 DEADLINE_EXCEEDED，说明本机无法访问 host:port，请检查网络/防火墙/FRP(需 type=tcp)
+    connect-timeout-ms: 30000
 
 app:
   jwt:

@@ -5,11 +5,13 @@ import com.openforge.aimate.agent.ScriptDockerProperties;
 import com.openforge.aimate.llm.LlmProperties;
 import com.openforge.aimate.memory.EmbeddingProperties;
 import com.openforge.aimate.memory.MilvusProperties;
+import io.milvus.v2.client.MilvusClientV2;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.env.Environment;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
@@ -20,7 +22,7 @@ import java.sql.Connection;
  *
  * Checks performed:
  *   - MySQL: attempts to open a real JDBC connection and queries server version
- *   - Milvus: reported by MilvusConfig at bean creation; we only echo the address here
+ *   - Milvus: ✓/✗ reflects actual connection (milvusClient bean non-null = connected)
  *   - LLM providers: primary + fallback config (API key is masked)
  *   - Embedding: model + dimensions
  *   - Runtime: Java version, virtual-thread status, server port
@@ -34,6 +36,7 @@ public class StartupInfoRunner implements ApplicationRunner {
     private final LlmProperties         llmProperties;
     private final EmbeddingProperties   embeddingProperties;
     private final MilvusProperties      milvusProperties;
+    @Nullable private final MilvusClientV2 milvusClient;
     private final Environment           env;
     private final DockerDetector        dockerDetector;
     private final ScriptDockerProperties scriptDockerProperties;
@@ -48,7 +51,7 @@ public class StartupInfoRunner implements ApplicationRunner {
         String javaVersion = System.getProperty("java.version");
         boolean vtEnabled  = Boolean.parseBoolean(
                 env.getProperty("spring.threads.virtual.enabled", "false"));
-        String milvusOn    = env.getProperty("agent.milvus.enabled", "true");
+        boolean milvusConnected = (milvusClient != null);
         String pk          = maskKey(llmProperties.primary().apiKey());
         String fk          = maskKey(llmProperties.fallback().apiKey());
 
@@ -71,11 +74,12 @@ public class StartupInfoRunner implements ApplicationRunner {
         b.append("║  MySQL").append(" ".repeat(W - 7)).append("║\n");
         b.append("║").append(row("", dbStatus)).append("║\n");
 
-        // Milvus
+        // Milvus（✓/✗ 以实际连接为准，连接失败时 bean 为 null）
         b.append("╠").append(sep).append("╣\n");
-        String milvusVal = (Boolean.parseBoolean(milvusOn) ? "✓" : "✗") + "  "
+        String milvusVal = (milvusConnected ? "✓" : "✗") + "  "
                 + milvusProperties.host() + ":" + milvusProperties.port()
-                + "  " + milvusProperties.collectionName() + "  dim=" + milvusProperties.vectorDimensions();
+                + "  " + milvusProperties.collectionName() + "  dim=" + milvusProperties.vectorDimensions()
+                + (milvusConnected ? "" : "  (connection failed)");
         b.append("║  Milvus").append(" ".repeat(W - 8)).append("║\n");
         b.append("║").append(row("", milvusVal)).append("║\n");
 

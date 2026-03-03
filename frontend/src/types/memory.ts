@@ -18,6 +18,23 @@ export interface MemoryPage {
   size: number
 }
 
+export interface MemoryMeta {
+  collectionName: string
+}
+
+export type MemoryMigrationEventType = 'START' | 'PROGRESS' | 'DONE' | 'ERROR'
+
+export interface MemoryMigrationEvent {
+  type: MemoryMigrationEventType
+  timestamp: number
+  totalSessions: number
+  processedSessions: number
+  writtenMemories: number
+  currentSessionId?: string | null
+  currentTaskDescription?: string | null
+  error?: string | null
+}
+
 export interface CountResponse {
   count: number
   type: MemoryType | null

@@ -3,6 +3,7 @@ package com.openforge.aimate.memory;
 import com.google.gson.JsonObject;
 import com.openforge.aimate.embedding.UserEmbeddingResolver;
 import io.milvus.v2.client.MilvusClientV2;
+import io.milvus.v2.exception.MilvusClientException;
 import io.milvus.v2.service.vector.request.DeleteReq;
 import io.milvus.v2.service.vector.request.InsertReq;
 import io.milvus.v2.service.vector.request.QueryReq;
@@ -94,6 +95,13 @@ public class LongTermMemoryService {
         return new EmbeddingContext(embeddingClient, milvusProps.collectionName());
     }
 
+    /**
+     * 仅用于调试/展示：返回当前用户长期记忆所使用的 Milvus Collection 名称。
+     */
+    public String resolveCollectionName(@Nullable Long userId) {
+        return resolveContext(userId).collectionName();
+    }
+
     private boolean milvusUnavailable() {
         if (milvusClient == null) {
             log.debug("[Memory] Skipped — Milvus not connected.");
@@ -116,6 +124,9 @@ public class LongTermMemoryService {
             List<Float> vector  = ctx.client().embed(content);
 
             JsonObject row = new JsonObject();
+            if (userId != null) {
+                row.addProperty("user_id", String.valueOf(userId));
+            }
             row.addProperty("session_id",     sessionId);
             row.addProperty("content",        truncate(content, 4000));
             row.addProperty("memory_type",    memoryType.name());
@@ -235,7 +246,7 @@ public class LongTermMemoryService {
                                          @Nullable Long userId) {
         if (milvusUnavailable()) return List.of();
         String collectionName = resolveContext(userId).collectionName();
-        String filter = buildFilter(memoryType, sessionId, keyword);
+        String filter = buildFilter(memoryType, sessionId, keyword, userId);
 
         // 为了保证按时间倒序排序，这里不直接依赖 Milvus 的返回顺序，而是：
         // 1）最多拉取 offset+limit 条记录（上限 1000 条）；
@@ -253,7 +264,16 @@ public class LongTermMemoryService {
 
         if (filter != null) builder.filter(filter);
 
-        QueryResp resp = milvusClient.query(builder.build());
+        QueryResp resp;
+        try {
+            resp = milvusClient.query(builder.build());
+        } catch (MilvusClientException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            if (msg.contains("user_id not exist") || msg.contains("field user_id")) {
+                return List.of(); // legacy collection without user_id
+            }
+            throw e;
+        }
         if (resp == null || resp.getQueryResults().isEmpty()) return List.of();
 
         List<MemoryItemWithTime> withTime = new ArrayList<>();
@@ -283,7 +303,7 @@ public class LongTermMemoryService {
     public long countMemories(MemoryType memoryType, String sessionId, @Nullable Long userId) {
         if (milvusUnavailable()) return 0L;
         String collectionName = resolveContext(userId).collectionName();
-        String filter = buildFilter(memoryType, sessionId, null);
+        String filter = buildFilter(memoryType, sessionId, null, userId);
 
         QueryReq.QueryReqBuilder builder = QueryReq.builder()
                 .collectionName(collectionName)
@@ -291,7 +311,16 @@ public class LongTermMemoryService {
 
         if (filter != null) builder.filter(filter);
 
-        QueryResp resp = milvusClient.query(builder.build());
+        QueryResp resp;
+        try {
+            resp = milvusClient.query(builder.build());
+        } catch (MilvusClientException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            if (msg.contains("user_id not exist") || msg.contains("field user_id")) {
+                return 0L; // legacy collection without user_id
+            }
+            throw e;
+        }
         if (resp == null || resp.getQueryResults().isEmpty()) return 0L;
 
         Object count = resp.getQueryResults().get(0).getEntity().get("count(*)");
@@ -307,14 +336,16 @@ public class LongTermMemoryService {
         try {
             EmbeddingContext ctx    = resolveContext(userId);
             List<Float>      vector = ctx.client().embed(queryText);
+            String filter = buildFilter(null, null, null, userId);
 
-            SearchResp resp = milvusClient.search(SearchReq.builder()
+            SearchReq.SearchReqBuilder searchBuilder = SearchReq.builder()
                     .collectionName(ctx.collectionName())
                     .data(List.of(new FloatVec(vector)))
                     .annsField("embedding")
                     .topK(topK)
-                    .outputFields(ALL_FIELDS)
-                    .build());
+                    .outputFields(ALL_FIELDS);
+            if (filter != null && !filter.isBlank()) searchBuilder.filter(filter);
+            SearchResp resp = milvusClient.search(searchBuilder.build());
 
             List<MemoryItem> results = new ArrayList<>();
             if (resp == null || resp.getSearchResults() == null) return results;
@@ -371,6 +402,27 @@ public class LongTermMemoryService {
                 .filter("memory_type == \"%s\"".formatted(memoryType.name()))
                 .build());
         log.info("[Memory] Deleted all {} memories", memoryType);
+    }
+
+    /** Delete all memories for the given user in their collection. No-op if userId is null.
+     * @throws IllegalArgumentException if the collection has no user_id field (legacy schema) */
+    public void deleteAllForUser(@Nullable Long userId) {
+        if (milvusUnavailable() || userId == null) return;
+        String collectionName = resolveContext(userId).collectionName();
+        try {
+            milvusClient.delete(DeleteReq.builder()
+                    .collectionName(collectionName)
+                    .filter("user_id == \"%s\"".formatted(userId))
+                    .build());
+            log.info("[Memory] Deleted all memories for user {}", userId);
+        } catch (MilvusClientException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            if (msg.contains("user_id not exist") || msg.contains("field user_id")) {
+                throw new IllegalArgumentException(
+                        "当前集合为旧版结构，不支持按用户清空。请先使用「同步对话到记忆」将数据同步到新集合后再清空。", e);
+            }
+            throw e;
+        }
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
@@ -435,10 +487,12 @@ public class LongTermMemoryService {
 
     /**
      * Build a Milvus filter expression from optional parameters.
-     * Combines multiple conditions with AND.
+     * When userId is not null, adds user_id filter (required for shared collections).
      */
-    private String buildFilter(MemoryType memoryType, String sessionId, String keyword) {
+    private String buildFilter(MemoryType memoryType, String sessionId, String keyword, @Nullable Long userId) {
         List<String> parts = new ArrayList<>();
+        if (userId != null)
+            parts.add("user_id == \"%s\"".formatted(userId));
         if (memoryType != null)
             parts.add("memory_type == \"%s\"".formatted(memoryType.name()));
         if (sessionId != null && !sessionId.isBlank())

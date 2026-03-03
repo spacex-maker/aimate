@@ -7,6 +7,8 @@ import { memoryApi } from '../api/memory'
 import { MemoryTable } from '../components/memory/MemoryTable'
 import { AddMemoryModal } from '../components/memory/AddMemoryModal'
 import { CompressMemoryModal } from '../components/memory/CompressMemoryModal'
+import { MemoryMigrationModal } from '../components/memory/MemoryMigrationModal'
+import { useAuth } from '../hooks/useAuth'
 import type { MemoryType, AddMemoryRequest } from '../types/memory'
 
 const PAGE_SIZE = 20
@@ -22,6 +24,7 @@ type Tab = 'browse' | 'search'
 
 export function MemoryPage() {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
   const [tab, setTab] = useState<Tab>('browse')
 
   // Browse state
@@ -31,6 +34,8 @@ export function MemoryPage() {
   const [keyword, setKeyword] = useState('')
   const [showAddModal, setShowAddModal] = useState(false)
   const [showCompressModal, setShowCompressModal] = useState(false)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const [showMigrationModal, setShowMigrationModal] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   // Search state
@@ -60,6 +65,21 @@ export function MemoryPage() {
   const { data: countData } = useQuery({
     queryKey: ['memory-count', typeFilter, sessionFilter],
     queryFn: () => memoryApi.count(typeFilter || undefined, sessionFilter || undefined),
+  })
+
+  const { data: meta } = useQuery({
+    queryKey: ['memory-meta'],
+    queryFn: () => memoryApi.meta(),
+  })
+
+  const migrateMutation = useMutation({
+    mutationFn: () => memoryApi.migrateToCurrentCollection(),
+    onSuccess: () => {
+      toast.success('已开始同步对话到记忆，请在弹出的窗口中查看进度')
+      queryClient.invalidateQueries({ queryKey: ['memories'] })
+      queryClient.invalidateQueries({ queryKey: ['memory-count'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
   })
 
   const { data: searchResults, isLoading: searchLoading } = useQuery({
@@ -119,6 +139,17 @@ export function MemoryPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const clearAllMutation = useMutation({
+    mutationFn: () => memoryApi.clearAll(),
+    onSuccess: () => {
+      toast.success('已清空全部记忆')
+      setShowClearConfirm(false)
+      queryClient.invalidateQueries({ queryKey: ['memories'] })
+      queryClient.invalidateQueries({ queryKey: ['memory-count'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
   const compressExecuteMutation = useMutation({
     mutationFn: (body: { delete_ids: string[]; new_memories: { content: string; memory_type: string; importance: number }[] }) =>
       memoryApi.compressExecute(body),
@@ -141,6 +172,11 @@ export function MemoryPage() {
           <h1 className="text-base font-semibold text-white">长期记忆库</h1>
           <p className="text-xs text-white/35 mt-0.5">
             共 {countData?.count ?? '…'} 条记忆向量
+            {meta?.collectionName && (
+              <span className="ml-2 text-[11px] text-white/25">
+                （Collection: <span className="font-mono">{meta.collectionName}</span>）
+              </span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -150,6 +186,23 @@ export function MemoryPage() {
             className="p-2 text-white/30 hover:text-white/70 hover:bg-white/5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RefreshCw className={clsx('w-4 h-4', browseFetching && 'animate-spin')} />
+          </button>
+          <button
+            onClick={() => {
+              migrateMutation.mutate()
+              setShowMigrationModal(true)
+            }}
+            disabled={migrateMutation.isPending}
+            className="flex items-center gap-2 px-4 py-2 text-xs text-white/80 hover:text-white hover:bg-white/10 rounded-lg font-medium transition-colors border border-white/15 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            同步对话到记忆
+          </button>
+          <button
+            onClick={() => setShowClearConfirm(true)}
+            disabled={clearAllMutation.isPending}
+            className="flex items-center gap-2 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg text-sm font-medium transition-colors border border-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Trash2 className="w-4 h-4" /> 清空记忆
           </button>
           <button
             onClick={() => setShowCompressModal(true)}
@@ -318,6 +371,43 @@ export function MemoryPage() {
           onExecute={(body) => compressExecuteMutation.mutateAsync(body)}
           isExecuting={compressExecuteMutation.isPending}
         />
+      )}
+
+      {showMigrationModal && (
+        <MemoryMigrationModal
+          open={showMigrationModal}
+          onClose={() => setShowMigrationModal(false)}
+          userId={user?.userId ?? null}
+        />
+      )}
+
+      {showClearConfirm && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#111111] border border-white/10 rounded-2xl w-full max-w-sm shadow-2xl p-5">
+            <h3 className="text-sm font-semibold text-white mb-2">清空记忆</h3>
+            <p className="text-xs text-white/60 mb-4">
+              确定要清空当前账号下的全部长期记忆吗？此操作不可恢复。
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowClearConfirm(false)}
+                disabled={clearAllMutation.isPending}
+                className="px-3 py-1.5 text-xs text-white/70 hover:text-white rounded-lg border border-white/20 hover:bg-white/10 transition-colors disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => clearAllMutation.mutate()}
+                disabled={clearAllMutation.isPending}
+                className="px-3 py-1.5 text-xs text-white bg-red-600 hover:bg-red-500 rounded-lg font-medium transition-colors disabled:opacity-50"
+              >
+                {clearAllMutation.isPending ? '清空中…' : '确定清空'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

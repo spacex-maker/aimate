@@ -114,6 +114,8 @@ public class MilvusCollectionManager {
 
         schema.addField(AddFieldReq.builder().fieldName("id")
                 .dataType(DataType.Int64).isPrimaryKey(true).autoID(true).build());
+        schema.addField(AddFieldReq.builder().fieldName("user_id")
+                .dataType(DataType.VarChar).maxLength(64).build());
         schema.addField(AddFieldReq.builder().fieldName("session_id")
                 .dataType(DataType.VarChar).maxLength(64).build());
         schema.addField(AddFieldReq.builder().fieldName("content")
@@ -133,6 +135,10 @@ public class MilvusCollectionManager {
                 .metricType(IndexParam.MetricType.IP)
                 .extraParams(java.util.Map.of("M", 16, "efConstruction", 256))
                 .build();
+        IndexParam userIndex = IndexParam.builder()
+                .fieldName("user_id")
+                .indexType(IndexParam.IndexType.TRIE)
+                .build();
         IndexParam sessionIndex = IndexParam.builder()
                 .fieldName("session_id")
                 .indexType(IndexParam.IndexType.TRIE)
@@ -141,7 +147,7 @@ public class MilvusCollectionManager {
         milvusClient.createCollection(CreateCollectionReq.builder()
                 .collectionName(name)
                 .collectionSchema(schema)
-                .indexParams(List.of(vectorIndex, sessionIndex))
+                .indexParams(List.of(vectorIndex, userIndex, sessionIndex))
                 .build());
 
         log.info("[Milvus] Collection '{}' created successfully.", name);

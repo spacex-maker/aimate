@@ -13,6 +13,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * REST API for browsing and managing the Agent's long-term memory.
@@ -27,6 +28,7 @@ import java.util.List;
  * │  DELETE /api/memories/{id}             按 ID 删除单条记忆          │
  * │  DELETE /api/memories/session/{sid}    删除某会话的全部记忆         │
  * │  DELETE /api/memories/type/{type}      删除某类型的全部记忆         │
+ * │  DELETE /api/memories/clear            清空当前用户全部记忆         │
  * └─────────────────────────────────────────────────────────────────┘
  */
 @RestController
@@ -34,8 +36,9 @@ import java.util.List;
 @RequiredArgsConstructor
 public class MemoryController {
 
-    private final LongTermMemoryService memoryService;
-    private final MemoryCompressService compressService;
+    private final LongTermMemoryService  memoryService;
+    private final MemoryCompressService  compressService;
+    private final MemoryMigrationService migrationService;
 
     private Long currentUserId() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -118,6 +121,30 @@ public class MemoryController {
         return ResponseEntity.ok(new CountResponse(count, type, session));
     }
 
+    // ── Meta ──────────────────────────────────────────────────────────────────
+
+    /**
+     * 返回当前用户长期记忆使用的 Milvus Collection 名称，便于前端展示和排查问题。
+     */
+    @GetMapping("/meta")
+    public ResponseEntity<MetaResponse> meta() {
+        Long userId = currentUserId();
+        String collection = memoryService.resolveCollectionName(userId);
+        return ResponseEntity.ok(new MetaResponse(collection));
+    }
+
+    /**
+     * 将当前用户所有会话记录重新写入「当前默认向量模型」对应的 Collection」。
+     * 仅追加，不会删除旧 Collection 中的记录；进度通过
+     * /topic/memory-migration/{userId} WebSocket 事件推送。
+     */
+    @PostMapping("/migrate-to-current-collection")
+    public ResponseEntity<StartMigrateResponse> migrateToCurrentCollection() {
+        Long userId = currentUserId();
+        migrationService.startMigration(userId);
+        return ResponseEntity.accepted().body(new StartMigrateResponse(true));
+    }
+
     // ── Manual add ───────────────────────────────────────────────────────────
 
     /**
@@ -137,11 +164,16 @@ public class MemoryController {
 
     // ── Delete ───────────────────────────────────────────────────────────────
 
-    /** Delete a single memory by its Milvus ID (in current user's collection). */
-    @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteById(@PathVariable long id) {
-        memoryService.deleteById(id, currentUserId());
-        return ResponseEntity.noContent().build();
+    /** Clear all long-term memories for the current user. Must be declared before /{id} so "clear" is not matched as id. */
+    @DeleteMapping("/clear")
+    public ResponseEntity<?> clearAllForCurrentUser() {
+        Long userId = currentUserId();
+        try {
+            memoryService.deleteAllForUser(userId);
+            return ResponseEntity.noContent().build();
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
     }
 
     /** Delete all memories produced by a specific session (in current user's collection). */
@@ -155,6 +187,13 @@ public class MemoryController {
     @DeleteMapping("/type/{type}")
     public ResponseEntity<Void> deleteByType(@PathVariable MemoryType type) {
         memoryService.deleteByType(type, currentUserId());
+        return ResponseEntity.noContent().build();
+    }
+
+    /** Delete a single memory by its Milvus ID (in current user's collection). */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deleteById(@PathVariable long id) {
+        memoryService.deleteById(id, currentUserId());
         return ResponseEntity.noContent().build();
     }
 
@@ -195,6 +234,14 @@ public class MemoryController {
             long       count,
             MemoryType type,
             String     session
+    ) {}
+
+    public record MetaResponse(
+            String collectionName
+    ) {}
+
+    public record StartMigrateResponse(
+            boolean started
     ) {}
 
     public record AddMemoryRequest(

@@ -1,7 +1,6 @@
 package com.openforge.aimate.memory;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
  * Configuration for the OpenAI-compatible text embedding endpoint.
@@ -25,7 +24,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 public record EmbeddingProperties(
         String baseUrl,
         String apiKey,
-        @DefaultValue("text-embedding-3-small") String model,
-        @DefaultValue("1536") int dimensions,
-        @DefaultValue("30") int timeoutSeconds
+        String model,
+        int dimensions,
+        int timeoutSeconds
 ) {}

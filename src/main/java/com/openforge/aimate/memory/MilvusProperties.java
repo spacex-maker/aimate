@@ -17,8 +17,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties(prefix = "agent.milvus")
 public record MilvusProperties(
-        @DefaultValue("175.27.255.29") String host,
-        @DefaultValue("19530")     int    port,
-        @DefaultValue("agent_memories") String collectionName,
-        @DefaultValue("1536")      int    vectorDimensions
+        String host,
+        int    port,
+        String collectionName,
+        int    vectorDimensions,
+        int    connectTimeoutMs
 ) {}

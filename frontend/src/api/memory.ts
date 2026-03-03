@@ -5,6 +5,8 @@ import type {
   ExecuteCompressRequest,
   MemoryItem,
   MemoryPage,
+  MemoryMeta,
+  MemoryMigrationEvent,
   MemorySearchParams,
   MemoryType,
 } from '../types/memory'
@@ -56,6 +58,17 @@ export const memoryApi = {
     return http<CountResponse>(`${BASE}/count${qs}`)
   },
 
+  meta: async (): Promise<MemoryMeta> => {
+    const raw = await http<{ collectionName?: string; collection_name?: string }>(`${BASE}/meta`)
+    return {
+      collectionName: (raw.collectionName || raw.collection_name || '').toString(),
+    }
+  },
+
+  /** 将当前用户所有会话记录重新向量化到当前默认 Collection（追加写入，不删除旧数据）。 */
+  migrateToCurrentCollection: () =>
+    http<{ started: boolean }>(`${BASE}/migrate-to-current-collection`, { method: 'POST' }),
+
   add: (body: AddMemoryRequest) =>
     http<void>(BASE, { method: 'POST', body: JSON.stringify(body) }),
 
@@ -67,6 +80,9 @@ export const memoryApi = {
 
   deleteByType: (type: MemoryType) =>
     http<void>(`${BASE}/type/${type}`, { method: 'DELETE' }),
+
+  /** 清空当前用户全部长期记忆 */
+  clearAll: () => http<void>(`${BASE}/clear`, { method: 'DELETE' }),
 
   /** Prepare compression: get current + LLM-proposed merged list for comparison. */
   compressPrepare: async (): Promise<CompressPrepareResult> => {
