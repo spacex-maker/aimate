@@ -268,13 +268,20 @@ export function SessionPage() {
             const list = prev ?? []
             const last = list[list.length - 1]
             const msgId = payload?.assistantMessageId
+            const timeStr = event.timestamp ? new Date(event.timestamp).toISOString() : null
             // 若最后一条就是本条 assistant（如先 STATUS_CHANGE 已 refetch 得到占位条），则只更新不追加，避免重复
             if (last?.role === 'assistant' && msgId != null && last.id === msgId) {
-              return [...list.slice(0, -1), { ...last, content, messageStatus: 'DONE' as const }]
+              return [...list.slice(0, -1), { ...last, content, messageStatus: 'DONE' as const, createTime: last.createTime ?? timeStr }]
             }
             return [
               ...list,
-              { role: 'assistant' as const, content, id: payload?.assistantMessageId ?? null, messageStatus: 'DONE' as const },
+              {
+                role: 'assistant' as const,
+                content,
+                id: payload?.assistantMessageId ?? null,
+                messageStatus: 'DONE' as const,
+                createTime: timeStr,
+              },
             ]
           }
         )
@@ -609,7 +616,7 @@ export function SessionPage() {
           className="flex-shrink-0 px-4 py-4 sm:px-6"
         >
           <div className="max-w-3xl mx-auto w-full">
-            <div className="rounded-3xl bg-[#2d2d2d] border border-white/10 shadow-xl focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10 transition-all overflow-hidden flex flex-col min-h-[120px]">
+            <div className="rounded-3xl bg-white/[0.06] backdrop-blur-xl border border-white/10 shadow-xl focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10 transition-all overflow-hidden flex flex-col min-h-[120px]">
               {/* 输入区：占满上方，多行可扩展 */}
               <textarea
                 value={followup}

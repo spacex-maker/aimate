@@ -301,7 +301,12 @@ export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning
                       <MarkdownContent content={msg.content || (msg.messageStatus === 'ANSWERING' ? '' : '(无内容)')} className="break-words" />
                     ) : (
                       <span className="whitespace-pre-wrap break-words">{msg.content || ''}</span>
-                    )}
+                  )}
+                  {msg.createTime && (
+                    <div className="mt-1 text-[10px] text-white/30 text-right">
+                      {msg.createTime.replace('T', ' ').slice(0, 19)}
+                    </div>
+                  )}
                   </div>
                   {msg.role === 'user' && canRetry && onRetry && msg.content && msg.id != null && (
                     <button

@@ -25,6 +25,7 @@ export interface EmbeddingModelRequest {
 }
 
 export const EMBEDDING_PROVIDERS = [
+  // 三方 API 提供商
   {
     value: 'openai',
     label: 'OpenAI',
@@ -35,6 +36,7 @@ export const EMBEDDING_PROVIDERS = [
       { name: 'text-embedding-ada-002', dim: 1536 },
     ],
   },
+  // OpenForge 自部署（本地 / 服务器 Ollama）
   {
     value: 'ollama',
     label: 'Ollama',
@@ -46,6 +48,7 @@ export const EMBEDDING_PROVIDERS = [
       { name: 'bge-m3', dim: 1024 },
     ],
   },
+  // 其他兼容 OpenAI 协议的云服务，可归入“三方 API”分类
   {
     value: 'azure',
     label: 'Azure OpenAI',
@@ -60,5 +63,21 @@ export const EMBEDDING_PROVIDERS = [
     label: '自定义',
     baseUrl: '',
     models: [],
+  },
+]
+
+/** 向量模型服务商分组，用于表单中展示「OpenForge 部署 / 三方 API / 自定义」三类。 */
+export const EMBEDDING_PROVIDER_GROUPS: { label: string; providers: string[] }[] = [
+  {
+    label: 'OpenForge 部署',
+    providers: ['ollama'],
+  },
+  {
+    label: '三方 API',
+    providers: ['openai', 'azure'],
+  },
+  {
+    label: '自定义',
+    providers: ['custom'],
   },
 ]

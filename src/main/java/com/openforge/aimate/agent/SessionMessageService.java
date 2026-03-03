@@ -103,8 +103,18 @@ public class SessionMessageService {
                 .map(r -> {
                     List<ToolCallDisplayDto> toolCalls = "assistant".equals(r.getRole())
                             ? loadToolCallsForAssistant(r.getId()) : null;
-                    return new ChatMessageDto(r.getId(), r.getRole(), r.getContent() != null ? r.getContent() : "",
-                            r.getMessageStatus(), "assistant".equals(r.getRole()) ? r.getThinkingContent() : null, toolCalls);
+                    String createTimeStr = r.getCreateTime() != null
+                            ? r.getCreateTime().toString()
+                            : null;
+                    return new ChatMessageDto(
+                            r.getId(),
+                            r.getRole(),
+                            r.getContent() != null ? r.getContent() : "",
+                            r.getMessageStatus(),
+                            "assistant".equals(r.getRole()) ? r.getThinkingContent() : null,
+                            toolCalls,
+                            createTimeStr
+                    );
                 })
                 .collect(Collectors.toList());
     }

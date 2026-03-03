@@ -66,8 +66,18 @@ public class MemoryController {
 
         long offset = (long) page * size;
         Long userId = currentUserId();
+
+        // 首选当前用户配置的向量模型所在 Collection；
+        // 如果该 Collection 中暂时没有任何历史记忆（total == 0），
+        // 为了避免「突然什么都看不到」的体验，再回退查询系统默认 Collection。
         List<MemoryItem> items = memoryService.listMemories(type, session, keyword, offset, size, userId);
         long total = memoryService.countMemories(type, session, userId);
+
+        if (userId != null && total == 0) {
+            // fallback: 兼容早期还未按用户拆分 Collection 时写入的旧数据
+            items = memoryService.listMemories(type, session, keyword, offset, size, null);
+            total = memoryService.countMemories(type, session, null);
+        }
 
         return ResponseEntity.ok(new MemoryPage(items, total, page, size));
     }

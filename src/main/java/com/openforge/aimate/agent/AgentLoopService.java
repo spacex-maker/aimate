@@ -501,6 +501,9 @@ public class AgentLoopService {
                             sessionId, toolCall.function().name(), toolResult, finalIter));
                     toAppend.add(Message.toolResult(toolCall.id(), toolResult));
                     maybeRememberToolResult(sessionId, toolCall.function().name(), toolResult, userId);
+
+                    // 为历史查看构建「思考+工具」统一时间线：在思考文本中插入精简的工具调用摘要
+                    appendToolSummaryToThinking(thinkingContent, toolCall, toolResult, finalIter);
                 }
                 context.addAll(toAppend);
                 sessionMessageService.appendToRun(session, placeholderId, toAppend.toArray(new Message[0]));
@@ -543,6 +546,35 @@ public class AgentLoopService {
 
         memoryService.remember(sessionId, memoryContent, MemoryType.SEMANTIC, 0.85f, userId);
         log.debug("[Agent:{}] Stored completion memory.", sessionId);
+    }
+
+    /**
+     * 将一次工具调用的关键信息以简洁文本形式附加到思考内容中，
+     * 便于前端在历史「思考」面板中按时间线查看「思考 + 工具调用」的整体过程。
+     */
+    private void appendToolSummaryToThinking(StringBuilder thinking,
+                                             ToolCall toolCall,
+                                             String toolResult,
+                                             int iteration) {
+        if (thinking == null || toolCall == null) return;
+        String name = toolCall.function() != null ? toolCall.function().name() : "";
+        String args = toolCall.function() != null && toolCall.function().arguments() != null
+                ? toolCall.function().arguments() : "";
+        thinking.append("\n\n[工具调用 第 ").append(iteration).append(" 轮] ")
+                .append(name).append("(\n  args=")
+                .append(truncateForThinking(args, 320))
+                .append("\n)");
+        if (toolResult != null && !toolResult.isBlank()) {
+            thinking.append("\n[工具结果摘要] ")
+                    .append(truncateForThinking(toolResult, 480));
+        }
+    }
+
+    /** 思考内容中的工具摘要专用截断，避免把长日志完整塞进思考里。 */
+    private String truncateForThinking(String s, int maxLen) {
+        if (s == null) return "";
+        if (s.length() <= maxLen) return s;
+        return s.substring(0, maxLen) + "...(truncated)";
     }
 
     /**

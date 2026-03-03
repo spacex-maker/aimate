@@ -27,7 +27,7 @@ agent:
       model: deepseek-chat
       timeout-seconds: 120
   embedding:
-    base-url: ${EMBEDDING_BASE_URL:http://127.0.0.1:11434/v1}
+    base-url: ${EMBEDDING_BASE_URL:http://175.27.255.29:11434/v1}
     api-key: ${EMBEDDING_API_KEY:ollama}
     model: ${EMBEDDING_MODEL:bge-m3}
     dimensions: ${EMBEDDING_DIMENSIONS:1024}

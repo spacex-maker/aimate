@@ -18,17 +18,18 @@ public record ChatMessageDto(
         @JsonProperty("content") String content,
         @JsonProperty("messageStatus") String messageStatus,  // null | ANSWERING | DONE | INTERRUPTED
         @JsonProperty("thinkingContent") String thinkingContent,  // 仅 assistant：思考过程，前端可折叠展示
-        @JsonProperty("toolCalls") List<ToolCallDisplayDto> toolCalls  // 仅 assistant：该条回复过程中的工具调用列表，前端可折叠展示
+        @JsonProperty("toolCalls") List<ToolCallDisplayDto> toolCalls,  // 仅 assistant：该条回复过程中的工具调用列表，前端可折叠展示
+        @JsonProperty("createTime") String createTime  // 消息创建时间，前端底部展示时间戳
 ) {
     public ChatMessageDto(Long id, String role, String content, String messageStatus) {
-        this(id, role, content, messageStatus, null, null);
+        this(id, role, content, messageStatus, null, null, null);
     }
 
     public ChatMessageDto(Long id, String role, String content, String messageStatus, String thinkingContent) {
-        this(id, role, content, messageStatus, thinkingContent, null);
+        this(id, role, content, messageStatus, thinkingContent, null, null);
     }
 
     public ChatMessageDto(String role, String content, String messageStatus) {
-        this(null, role, content, messageStatus, null, null);
+        this(null, role, content, messageStatus, null, null, null);
     }
 }

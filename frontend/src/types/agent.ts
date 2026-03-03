@@ -35,6 +35,7 @@ export interface ChatMessageDto {
   messageStatus?: 'ANSWERING' | 'DONE' | 'INTERRUPTED' | null
   thinkingContent?: string | null
   toolCalls?: ToolCallDisplayDto[] | null
+  createTime?: string | null
 }
 
 /** Assistant 回复的一个历史版本 */
