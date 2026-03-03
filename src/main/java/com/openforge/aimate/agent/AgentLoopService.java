@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openforge.aimate.agent.dto.SessionResponse;
 import com.openforge.aimate.agent.event.AgentEvent;
 import com.openforge.aimate.apikey.UserApiKeyResolver;
+import com.openforge.aimate.domain.LlmCallLog;
+import com.openforge.aimate.llm.LlmCallLogService;
 import com.openforge.aimate.domain.AgentSession;
 import com.openforge.aimate.domain.AgentTool;
 import com.openforge.aimate.domain.SessionMessage;
@@ -91,12 +93,12 @@ public class AgentLoopService {
             - tavily_search: search the web for real-time or factual information. Use when the user asks about current events, news, or facts you need to look up.
             - create_tool: register a new tool (script-based: PYTHON_SCRIPT, NODE_SCRIPT, SHELL_CMD). Use when the user asks you to create a tool, add a capability, or write a reusable script/function that the agent can call later. Provide tool_name, tool_description, input_schema (JSON string), tool_type, and optionally script_content and entry_point.
             - install_container_package: install system packages (e.g. python3, nodejs) inside the user's isolated Linux container. Call this BEFORE running script tools that need an interpreter: the container starts as a minimal Linux and does not include python3/node by default. Use when a script tool fails with "command not found" (exit 127) or when you are about to run a Python/Node/shell script and have not installed the runtime yet. Pass "packages" as a space-separated list (e.g. "python3" or "python3 nodejs").
-            - run_container_cmd: run short shell command(s) only (e.g. apt-get, chmod +x, mkdir). Do NOT pass a long heredoc or multi-line script here—it will be truncated. To create a script file, use write_container_file with chunked content (max 600 chars per call, append=true for continuation).
-            - write_container_file: write content to a file in the user's container. path=container path (one line). content=file body (max 600 chars per call; use \\n for newlines). append=true to append. Content is piped via stdin—no shell escaping. For scripts longer than ~600 chars you MUST split: 1st call path+content (first chunk), 2nd call same path+content (next chunk)+append=true, repeat until done. Never put a whole long script in one content—it will be rejected or truncated.
+            - run_container_cmd: run short shell command(s) only (e.g. apt-get, chmod +x, mkdir). Do NOT pass a long heredoc or multi-line script here—it will be truncated. To create a script file, use write_container_file with content piped via stdin.
+            - write_container_file: write content to a file in the user's container. path=container path (one line). content=file body (use \\n for newlines). append=true to append. Content is piped via stdin—no shell escaping. For very large scripts you can split into multiple calls with append=true,但一般情况下可以一次写完。
             
             Creating script files in the container (MANDATORY—do not suggest user to do it manually):
             - NEVER use run_container_cmd with cat/heredoc to write script content—it will be truncated and fail. NEVER suggest the user to "manually paste" or "run in terminal" to create the script; you MUST complete the task yourself.
-            - To create any script file: use write_container_file only. If script fits in ≤600 chars, one call with path and content. If longer: call write_container_file(path, first ~600 chars), then write_container_file(path, next ~600 chars, append=true), repeat until the whole script is written. Each content chunk must be under 600 characters. Then run_container_cmd("chmod +x " + path). Example for a 1500-char script: 1) write_container_file path=/home/workspace/scripts/foo.sh content=chars 1–600; 2) write_container_file path=/home/workspace/scripts/foo.sh content=chars 601–1200 append=true; 3) write_container_file path=/home/workspace/scripts/foo.sh content=chars 1201–1500 append=true; 4) run_container_cmd chmod +x /home/workspace/scripts/foo.sh. You must actually perform these calls until the file is complete—do not give up and ask the user to do it.
+            - To create any script file: use write_container_file only. For small/medium scripts, a single call with full content is fine. For extremely large scripts, you MAY split into multiple calls: first call with path+initial content, then same path+next content with append=true, until the whole script is written. Then run_container_cmd("chmod +x " + path). You must actually perform these calls until the file is complete—do not give up and ask the user to do it.
             
             Script execution environment (IMPORTANT):
             - 每个用户都有一个独立的 Linux 容器，视为该用户的“专属虚拟机环境”，不同用户的容器彼此完全隔离。
@@ -133,6 +135,7 @@ public class AgentLoopService {
     private final ObjectMapper           objectMapper;
     private final UserApiKeyResolver     keyResolver;
     private final HttpClient             httpClient;
+    private final LlmCallLogService      llmCallLogService;
 
     // Tracks which exact contents have already been stored via store_memory
     // in this JVM, per sessionId, to avoid spamming duplicate memories.
@@ -167,23 +170,70 @@ public class AgentLoopService {
     // ── Session-scoped LLM caller ────────────────────────────────────────────
 
     /**
-     * Returns a lambda that calls the user's own LLM key if configured,
+     * Returns a caller that uses the user's own LLM key if configured,
      * otherwise delegates to the system-level LlmRouter (fallback).
+     * 使用显式匿名类而不是 lambda，避免某些编译器对目标类型推断报
+     * 「lambda 转换的目标类型必须为接口」之类的错误。
      */
     private java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse>
     buildCaller(AgentSession session) {
-        return keyResolver.resolveDefaultLlm(session.getUserId())
-                .map(config -> {
-                    LlmClient userClient = new LlmClient(httpClient, objectMapper, config);
-                    log.info("[Agent:{}] Using user key — provider={} model={}",
-                            session.getSessionId(), config.name(), config.model());
-                    return (java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse>)
-                            (req, callbacks) -> userClient.streamChat(req, callbacks);
-                })
-                .orElseGet(() -> {
-                    log.info("[Agent:{}] No user key found — using system LlmRouter", session.getSessionId());
-                    return (req, callbacks) -> llmRouter.streamChat(req, callbacks);
-                });
+        var cfgOpt = keyResolver.resolveDefaultLlm(session.getUserId());
+        if (cfgOpt.isPresent()) {
+            LlmProperties.ProviderConfig config = cfgOpt.get();
+            LlmClient userClient = new LlmClient(httpClient, objectMapper, config);
+            log.info("[Agent:{}] Using user key — provider={} model={}",
+                    session.getSessionId(), config.name(), config.model());
+            return new java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse>() {
+                @Override
+                public ChatResponse apply(ChatRequest req, StreamCallbacks callbacks) {
+                    long startNs = System.nanoTime();
+                    ChatResponse response = userClient.streamChat(req, callbacks);
+                    long latencyMs = (System.nanoTime() - startNs) / 1_000_000L;
+                    try {
+                        llmCallLogService.logSuccess(
+                                config.name(),
+                                config.model(),
+                                LlmCallLog.CallType.AGENT_LOOP,
+                                null,
+                                "/chat/completions",
+                                session.getUserId(),
+                                session.getSessionId(),
+                                latencyMs,
+                                response
+                        );
+                    } catch (Exception e) {
+                        log.warn("[Agent:{}] Failed to log LLM call: {}", session.getSessionId(), e.getMessage());
+                    }
+                    return response;
+                }
+            };
+        } else {
+            log.info("[Agent:{}] No user key found — using system LlmRouter", session.getSessionId());
+            return new java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse>() {
+                @Override
+                public ChatResponse apply(ChatRequest req, StreamCallbacks callbacks) {
+                    long startNs = System.nanoTime();
+                    ChatResponse response = llmRouter.streamChat(req, callbacks);
+                    long latencyMs = (System.nanoTime() - startNs) / 1_000_000L;
+                    try {
+                        llmCallLogService.logSuccess(
+                                "system_router",
+                                response.model(),
+                                LlmCallLog.CallType.AGENT_LOOP,
+                                null,
+                                "/chat/completions",
+                                session.getUserId(),
+                                session.getSessionId(),
+                                latencyMs,
+                                response
+                        );
+                    } catch (Exception e) {
+                        log.warn("[Agent:{}] Failed to log LLM call: {}", session.getSessionId(), e.getMessage());
+                    }
+                    return response;
+                }
+            };
+        }
     }
 
     private static final List<String> EXECUTION_PLAN = List.of("回忆", "思考与执行", "回答");
@@ -923,9 +973,9 @@ public class AgentLoopService {
             if (commandsToRun.isEmpty()) {
                 return "[ToolError] run_container_cmd 需要非空的 command 或 commands（字符串数组）参数。";
             }
-            for (String cmd : commandsToRun) {
+                for (String cmd : commandsToRun) {
                 if (cmd.length() > 800) {
-                    return "[ToolError] run_container_cmd 单条命令不得超过 800 字符（当前 " + cmd.length() + "）。长脚本请用 write_container_file 分块写入：每次 content 不超过 600 字符，多次调用 append=true，再用本工具 chmod +x 并执行。";
+                    return "[ToolError] run_container_cmd 单条命令不得超过 800 字符（当前 " + cmd.length() + "）。长脚本请使用 write_container_file 写入脚本文件，再通过 run_container_cmd 执行脚本。";
                 }
             }
             String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
@@ -999,9 +1049,6 @@ public class AgentLoopService {
         } catch (Exception ignored) { }
     }
 
-    /** 单次 content 上限，避免模型输出过长被截断；长脚本必须分块多次调用 append=true */
-    private static final int WRITE_CONTAINER_FILE_MAX_CONTENT_CHARS = 600;
-
     /**
      * 标准做法：通过 stdin 将内容管道进容器写文件，不经过 shell 参数，故无需转义任何符号（引号、$、反引号等）。
      * 容器内执行 read -r path 读第一行作为路径，cat > "$path" 或 cat >> "$path" 写剩余 stdin。
@@ -1026,9 +1073,7 @@ public class AgentLoopService {
             if (path.contains("\n") || path.contains("\r")) {
                 return "[ToolError] write_container_file 的 path 不能包含换行符。";
             }
-            if (content.length() > WRITE_CONTAINER_FILE_MAX_CONTENT_CHARS) {
-                return "[ToolError] write_container_file 单次 content 不得超过 " + WRITE_CONTAINER_FILE_MAX_CONTENT_CHARS + " 字符（当前 " + content.length() + "），否则会被截断。必须分块：第一次 path + content（前 ~600 字符），后续多次 path + content（下一块）+ append=true，直到写完整个脚本。";
-            }
+            // 不再对 content 人为限制长度；如脚本极大，可由调用方自行按需拆分多次写入。
             String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
             if (containerIdOrName == null) {
                 return "[ToolError] 无法获取或创建用户 Linux 容器。";
@@ -1380,7 +1425,7 @@ public class AgentLoopService {
                     },
                     "content":{
                       "type":"string",
-                      "description":"File content for this chunk. MAX 600 characters per call. Use \\n for newlines. For long scripts, pass first ~600 chars here, then call again with next ~600 chars and append=true, repeat. No shell escaping needed."
+                      "description":"File content for this chunk. Use \\n for newlines. For extremely large scripts, you MAY split into multiple calls and use append=true, but typical scripts can be written in a single call. No shell escaping needed."
                     },
                     "append":{
                       "type":"boolean",
@@ -1394,7 +1439,7 @@ public class AgentLoopService {
             JsonNode params = objectMapper.readTree(schema);
             return Tool.ofFunction(new ToolFunction(
                     "write_container_file",
-                    "Write content to a file in the user's container. path=container path. content=at most 600 chars per call (use \\n for newlines). append=true to append. For scripts longer than 600 chars you MUST call multiple times: 1st path+content, then same path+next content+append=true, until done. Never put entire long script in one call—backend rejects >600 chars. Then run_container_cmd chmod +x path.",
+                    "Write content to a file in the user's container. path=container path. content is arbitrary length text (use \\n for newlines). append=true to append. For very large scripts you MAY split into multiple calls (first with path+initial content, then same path+next content+append=true) until done. Then run_container_cmd chmod +x path.",
                     params
             ));
         } catch (JsonProcessingException e) {
