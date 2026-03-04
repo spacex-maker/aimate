@@ -170,6 +170,15 @@ public class SessionMessageService {
     }
 
     /**
+     * 删除某个会话下的所有消息记录。
+     */
+    @Transactional
+    public void deleteAllForSession(AgentSession session) {
+        messageRepository.deleteByAgentSessionId(session.getId());
+        log.debug("[SessionMessage] Deleted all messages for session {}", session.getSessionId());
+    }
+
+    /**
      * 在会话末尾追加若干条消息。
      */
     @Transactional

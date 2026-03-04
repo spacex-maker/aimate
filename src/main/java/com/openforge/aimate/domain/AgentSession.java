@@ -103,4 +103,12 @@ public class AgentSession extends BaseEntity {
     /** 当前正在回答的 assistant 占位消息 id，可被用户中断后更新为 INTERRUPTED。 */
     @Column(name = "current_assistant_message_id")
     private Long currentAssistantMessageId;
+
+    /**
+     * 是否在「最近会话」等列表中隐藏该会话。
+     * true = 仅从列表中隐藏，不物理删除会话本身及其相关数据。
+     */
+    @Builder.Default
+    @Column(name = "hidden", nullable = false)
+    private boolean hidden = false;
 }

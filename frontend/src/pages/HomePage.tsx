@@ -1,13 +1,14 @@
 import { useState, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Send, ChevronRight, Clock, KeyRound, AlertTriangle } from 'lucide-react'
+import { Send, ChevronRight, Clock, KeyRound, AlertTriangle, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { agentApi } from '../api/agent'
 import { apikeyApi } from '../api/apikey'
 import { useAuth } from '../hooks/useAuth'
 import { StatusBadge } from '../components/agent/StatusBadge'
 import type { SessionResponse } from '../types/agent'
+import { DeleteSessionModal } from '../components/agent/DeleteSessionModal'
 
 function formatSessionTime(iso: string): string {
   try {
@@ -34,6 +35,7 @@ export function HomePage() {
   const queryClient = useQueryClient()
   const { user } = useAuth()
   const [task, setTask] = useState('')
+  const [selectedSession, setSelectedSession] = useState<SessionResponse | null>(null)
 
   const { data: apiKeys = [] } = useQuery({
     queryKey: ['api-keys', user?.userId],
@@ -55,6 +57,17 @@ export function HomePage() {
     onSuccess: (session) => {
       queryClient.invalidateQueries({ queryKey: ['recent-sessions'] })
       navigate(`/session/${session.sessionId}`)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (params: { session: SessionResponse; options: { deleteMessages: boolean; deleteMemories: boolean; hideOnly: boolean } }) =>
+      agentApi.deleteSession(params.session.sessionId, params.options),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['recent-sessions'] })
+      toast.success('会话已更新')
+      setSelectedSession(null)
     },
     onError: (err: Error) => toast.error(err.message),
   })
@@ -139,31 +152,52 @@ export function HomePage() {
           ) : (
             <div className="space-y-2">
               {recentSessions.map(s => (
-                <button
+                <div
                   key={s.sessionId}
-                  onClick={() => navigate(`/session/${s.sessionId}`)}
-                  className="w-full flex items-center gap-4 px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] rounded-lg transition-colors group"
+                  className="w-full flex items-center gap-3 px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] rounded-lg transition-colors group"
                 >
-                  <StatusBadge status={s.status} />
-                  <div className="flex-1 min-w-0 text-left">
-                    <div className="text-sm text-white/75 truncate">{s.taskDescription || '会话'}</div>
-                    <div className="flex items-center gap-3 mt-0.5">
-                      <span className="text-[10px] text-white/25 font-mono">{s.sessionId.slice(0, 8)}…</span>
-                      <span className="flex items-center gap-1 text-[10px] text-white/25">
-                        <Clock className="w-2.5 h-2.5" />
-                        {s.iterationCount} 轮
-                      </span>
-                      {s.createTime && (
-                        <span className="text-[10px] text-white/20">{formatSessionTime(s.createTime)}</span>
-                      )}
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/session/${s.sessionId}`)}
+                    className="flex-1 flex items-center gap-4 text-left"
+                  >
+                    <StatusBadge status={s.status} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-white/75 truncate">{s.taskDescription || '会话'}</div>
+                      <div className="flex items-center gap-3 mt-0.5">
+                        <span className="text-[10px] text-white/25 font-mono">{s.sessionId.slice(0, 8)}…</span>
+                        <span className="flex items-center gap-1 text-[10px] text-white/25">
+                          <Clock className="w-2.5 h-2.5" />
+                          {s.iterationCount} 轮
+                        </span>
+                        {s.createTime && (
+                          <span className="text-[10px] text-white/20">{formatSessionTime(s.createTime)}</span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/40 flex-shrink-0" />
-                </button>
+                    <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/40 flex-shrink-0" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSession(s)}
+                    className="p-2 rounded-full text-white/30 hover:text-red-400 hover:bg-red-500/10 flex-shrink-0 transition-colors"
+                    title="删除/隐藏会话"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               ))}
             </div>
           )}
         </div>
+      )}
+      {selectedSession && (
+        <DeleteSessionModal
+          session={selectedSession}
+          loading={deleteMutation.isPending}
+          onClose={() => setSelectedSession(null)}
+          onConfirm={(options) => deleteMutation.mutate({ session: selectedSession, options })}
+        />
       )}
     </div>
   )

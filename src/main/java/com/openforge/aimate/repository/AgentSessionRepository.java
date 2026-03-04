@@ -17,8 +17,8 @@ public interface AgentSessionRepository extends JpaRepository<AgentSession, Long
 
     Optional<AgentSession> findBySessionId(String sessionId);
 
-    /** 当前用户最近会话，按创建时间倒序，用于首页最近会话列表 */
-    List<AgentSession> findByUserIdOrderByCreateTimeDesc(Long userId, Pageable pageable);
+    /** 当前用户最近会话，按创建时间倒序，用于首页最近会话列表（排除已隐藏会话） */
+    List<AgentSession> findByUserIdAndHiddenFalseOrderByCreateTimeDesc(Long userId, Pageable pageable);
 
     List<AgentSession> findByStatus(AgentSession.SessionStatus status);
 

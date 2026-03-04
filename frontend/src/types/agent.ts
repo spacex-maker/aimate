@@ -10,6 +10,8 @@ export interface SessionResponse {
   iterationCount: number
   result: string | null
   errorMessage: string | null
+  /** 是否在最近会话等列表中被隐藏 */
+  hidden: boolean
   wsSubscribePath: string
   createTime: string
   updateTime: string

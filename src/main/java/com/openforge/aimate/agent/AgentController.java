@@ -3,11 +3,13 @@ package com.openforge.aimate.agent;
 import com.openforge.aimate.agent.dto.AssistantVersionDto;
 import com.openforge.aimate.agent.dto.ChatMessageDto;
 import com.openforge.aimate.agent.dto.ContinueSessionRequest;
+import com.openforge.aimate.agent.dto.DeleteSessionRequest;
 import com.openforge.aimate.agent.dto.RetryRequest;
 import com.openforge.aimate.agent.dto.SessionResponse;
 import com.openforge.aimate.agent.dto.StartSessionRequest;
 import com.openforge.aimate.domain.AgentSession;
 import com.openforge.aimate.llm.model.Message;
+import com.openforge.aimate.memory.LongTermMemoryService;
 import com.openforge.aimate.repository.AgentSessionRepository;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -57,6 +59,7 @@ public class AgentController {
     private final AgentLoopService       agentLoopService;
     private final SessionMessageService  sessionMessageService;
     private final AgentSessionRepository sessionRepository;
+    private final LongTermMemoryService  longTermMemoryService;
     private final ExecutorService        agentVirtualThreadExecutor;
 
     // ── Create & Start ───────────────────────────────────────────────────────
@@ -83,11 +86,7 @@ public class AgentController {
         }
 
         // Extract userId from JWT principal (set by JwtAuthFilter)
-        Long userId = null;
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth != null && auth.getPrincipal() instanceof Long id) {
-            userId = id;
-        }
+        Long userId = getCurrentUserId();
 
         AgentSession session = AgentSession.builder()
                 .userId(userId)
@@ -130,7 +129,7 @@ public class AgentController {
         if (auth != null && auth.getPrincipal() instanceof Long id) userId = id;
         if (userId == null) return ResponseEntity.ok(Collections.emptyList());
         limit = Math.min(Math.max(1, limit), 50);
-        List<AgentSession> sessions = sessionRepository.findByUserIdOrderByCreateTimeDesc(
+        List<AgentSession> sessions = sessionRepository.findByUserIdAndHiddenFalseOrderByCreateTimeDesc(
                 userId, PageRequest.of(0, limit));
         List<SessionResponse> list = sessions.stream()
                 .map(SessionResponse::from)
@@ -220,6 +219,57 @@ public class AgentController {
         session.setErrorMessage("Aborted by user");
         sessionRepository.save(session);
         log.info("[Controller] Aborted session {}", sessionId);
+        return ResponseEntity.ok(SessionResponse.from(session));
+    }
+
+    /**
+     * 删除/清理会话。
+     *
+     * 选项说明：
+     * - hideOnly       = true  时，仅将会话标记为隐藏，不删除任何数据（聊天记录与长期记忆都保留）；
+     * - deleteMessages = true  时，删除会话内所有消息记录，并清空上下文、结果等字段；
+     * - deleteMemories = true  时，删除该会话在长期记忆中的所有记录。
+     *
+     * 当 hideOnly=true 时，将忽略 deleteMessages / deleteMemories。
+     * 若三者均为 false，将返回 400。
+     */
+    @PostMapping("/{sessionId}/delete")
+    public ResponseEntity<SessionResponse> deleteSession(
+            @PathVariable String sessionId,
+            @RequestBody DeleteSessionRequest request
+    ) {
+        AgentSession session = findOrThrow(sessionId);
+        Long userId = getCurrentUserId();
+
+        if (request.hideOnly()) {
+            session.setHidden(true);
+            sessionRepository.save(session);
+            log.info("[Controller] Hidden session {}", sessionId);
+            return ResponseEntity.ok(SessionResponse.from(session));
+        }
+
+        if (!request.deleteMessages() && !request.deleteMemories()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "至少选择删除聊天记录、删除长期记忆或仅隐藏会话中的一项");
+        }
+
+        if (request.deleteMessages()) {
+            sessionMessageService.deleteAllForSession(session);
+            session.setContextWindow(null);
+            session.setIterationCount(0);
+            session.setResult(null);
+            session.setErrorMessage(null);
+            session.setCurrentAssistantMessageId(null);
+        }
+
+        if (request.deleteMemories()) {
+            longTermMemoryService.deleteBySession(session.getSessionId(), userId);
+        }
+
+        session.setHidden(true);
+        sessionRepository.save(session);
+        log.info("[Controller] Deleted session data for {} (messages={}, memories={})",
+                sessionId, request.deleteMessages(), request.deleteMemories());
         return ResponseEntity.ok(SessionResponse.from(session));
     }
 
@@ -331,5 +381,13 @@ public class AgentController {
         return sessionRepository.findBySessionId(sessionId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Session not found: " + sessionId));
+    }
+
+    private Long getCurrentUserId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.getPrincipal() instanceof Long id) {
+            return id;
+        }
+        return null;
     }
 }

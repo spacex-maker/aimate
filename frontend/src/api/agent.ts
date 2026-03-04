@@ -48,6 +48,21 @@ export const agentApi = {
     return http<SessionResponse>(`${BASE}/${sessionId}`, { method: 'DELETE' })
   },
 
+  /** 删除/清理会话：支持删除聊天记录、长期记忆或仅隐藏会话 */
+  deleteSession: (
+    sessionId: string,
+    body: { deleteMessages: boolean; deleteMemories: boolean; hideOnly: boolean }
+  ) => {
+    if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
+      return Promise.reject(new Error('无效的会话 ID'))
+    }
+    return http<SessionResponse>(`${BASE}/${sessionId}/delete`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    })
+  },
+
   /** 消息级中断：指定 assistant 消息 id，该条标为已中断，对应 run 退出 */
   interruptSession: (sessionId: string, assistantMessageId: number) =>
     http<SessionResponse>(`${BASE}/${sessionId}/interrupt`, {
