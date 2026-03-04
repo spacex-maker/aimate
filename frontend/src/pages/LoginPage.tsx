@@ -19,7 +19,13 @@ export function LoginPage() {
     mutationFn: (creds?: { identifier: string; password: string }) =>
       authApi.login(creds ?? { identifier, password }),
     onSuccess: (data) => {
-      setAuthUser({ userId: data.userId, username: data.username, displayName: data.displayName, token: data.token })
+      setAuthUser({
+        userId: data.userId,
+        username: data.username,
+        displayName: data.displayName,
+        role: data.role,
+        token: data.token,
+      })
       toast.success(`欢迎回来，${data.displayName ?? data.username ?? '用户'}`)
       navigate(from, { replace: true })
     },

@@ -26,12 +26,13 @@ public class JwtUtil {
         this.expirationMs = expirationMs;
     }
 
-    /** Generate a signed JWT containing userId and username as claims. */
-    public String generate(Long userId, String username) {
+    /** Generate a signed JWT containing userId, username and role as claims. */
+    public String generate(Long userId, String username, String role) {
         long now = System.currentTimeMillis();
         return Jwts.builder()
                 .subject(String.valueOf(userId))
                 .claim("username", username)
+                .claim("role", role)
                 .issuedAt(new Date(now))
                 .expiration(new Date(now + expirationMs))
                 .signWith(key)
@@ -61,6 +62,15 @@ public class JwtUtil {
     public String extractUsername(String token) {
         try {
             return parse(token).get("username", String.class);
+        } catch (JwtException | IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /** Returns role claim if the token is valid, else null. */
+    public String extractRole(String token) {
+        try {
+            return parse(token).get("role", String.class);
         } catch (JwtException | IllegalArgumentException e) {
             return null;
         }

@@ -8,6 +8,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.lang.NonNull;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
@@ -40,16 +42,16 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             String token    = header.substring(7);
             Long   userId   = jwtUtil.extractUserId(token);
             String username = jwtUtil.extractUsername(token);
+            String role     = jwtUtil.extractRole(token);
 
             if (userId != null && username != null
                     && SecurityContextHolder.getContext().getAuthentication() == null) {
 
                 // Use userId as the principal, username as a granted authority label
-                var auth = new UsernamePasswordAuthenticationToken(
-                        userId,
-                        null,
-                        List.of() // roles/authorities — extend when needed
-                );
+                List<GrantedAuthority> authorities = (role != null && !role.isBlank())
+                        ? List.of(new SimpleGrantedAuthority(role))
+                        : List.of();
+                var auth = new UsernamePasswordAuthenticationToken(userId, null, authorities);
                 auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                 SecurityContextHolder.getContext().setAuthentication(auth);
                 log.debug("[JWT] Authenticated userId={} path={}", userId, request.getRequestURI());

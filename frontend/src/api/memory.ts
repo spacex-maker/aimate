@@ -23,6 +23,7 @@ function fromMemoryItem(raw: Record<string, unknown>): MemoryItem {
     content: String(raw.content ?? ''),
     memoryType: String(raw.memory_type ?? raw.memoryType ?? 'SEMANTIC') as MemoryItem['memoryType'],
     importance: Number(raw.importance ?? 0),
+    noCompress: Boolean(raw.no_compress ?? raw.noCompress ?? false),
     createTime: String(raw.create_time ?? raw.createTime ?? ''),
     score: raw.score != null ? Number(raw.score) : null,
   }
@@ -80,6 +81,20 @@ export const memoryApi = {
 
   add: (body: AddMemoryRequest) =>
     http<void>(BASE, { method: 'POST', body: JSON.stringify(body) }),
+
+  /** 设置单条记忆的重要度（0–1），仅当前用户。 */
+  updateImportance: (id: string, importance: number) =>
+    http<void>(`${BASE}/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ importance }),
+    }),
+
+  /** 设置/取消单条记忆的「禁止压缩」标记，仅当前用户。 */
+  updateNoCompress: (id: string, noCompress: boolean) =>
+    http<void>(`${BASE}/${encodeURIComponent(id)}/no-compress`, {
+      method: 'PATCH',
+      body: JSON.stringify({ noCompress }),
+    }),
 
   deleteById: (id: string) =>
     http<void>(`${BASE}/${encodeURIComponent(id)}`, { method: 'DELETE' }),

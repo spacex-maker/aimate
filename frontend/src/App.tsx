@@ -10,6 +10,7 @@ import { SessionPage } from './pages/SessionPage'
 import { MemoryPage } from './pages/MemoryPage'
 import { ApiKeyPage } from './pages/ApiKeyPage'
 import { EmbeddingModelPage } from './pages/EmbeddingModelPage'
+import { AdminContainerPage } from './pages/AdminContainerPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -90,6 +91,17 @@ export default function App() {
               <RequireAuth>
                 <AppLayout>
                   <EmbeddingModelPage />
+                </AppLayout>
+              </RequireAuth>
+            }
+          />
+
+          <Route
+            path="/admin/containers"
+            element={
+              <RequireAuth>
+                <AppLayout>
+                  <AdminContainerPage />
                 </AppLayout>
               </RequireAuth>
             }

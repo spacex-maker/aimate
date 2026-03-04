@@ -37,12 +37,24 @@ public class User extends BaseEntity {
     @Column(nullable = false, length = 16)
     private Status status = Status.ACTIVE;
 
+    /**
+     * Simple role for RBAC: USER / ADMIN. 默认普通用户。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 16)
+    private Role role = Role.USER;
+
     @Column(name = "last_login_time")
     private LocalDateTime lastLoginTime;
 
     public enum Status {
         ACTIVE,
         DISABLED
+    }
+
+    public enum Role {
+        USER,
+        ADMIN
     }
 }
 

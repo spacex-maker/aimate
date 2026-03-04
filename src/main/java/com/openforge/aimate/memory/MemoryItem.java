@@ -16,6 +16,7 @@ import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
  * @param content       the stored text
  * @param memoryType    EPISODIC / SEMANTIC / PROCEDURAL
  * @param importance    0.0 – 1.0
+ * @param noCompress    whether this memory is protected from compression (true = skip in compression)
  * @param createTime    human-readable local time (yyyy-MM-dd HH:mm:ss)
  * @param score         similarity score — present only in search results, null in list results
  */
@@ -26,6 +27,7 @@ public record MemoryItem(
         String     content,
         MemoryType memoryType,
         float      importance,
+        boolean    noCompress,
         String     createTime,
         Double     score
 ) {}

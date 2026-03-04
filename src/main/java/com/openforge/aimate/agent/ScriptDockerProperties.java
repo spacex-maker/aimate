@@ -11,7 +11,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 @ConfigurationProperties(prefix = "agent.script.docker")
 public record ScriptDockerProperties(
         @DefaultValue("true") boolean enabled,
-        @DefaultValue("30") int idleMinutes,
+        // 默认空闲 3 天后再回收（分钟）
+        @DefaultValue("4320") int idleMinutes,
         @DefaultValue("debian:bookworm-slim") String image,
         /** 内存上限，如 4g、512m；空则不限制 */
         @DefaultValue("4g") String memoryLimit,
@@ -28,7 +29,11 @@ public record ScriptDockerProperties(
         /** 容器内脚本工具（如 Python/Shell 脚本）最长执行时间（秒） */
         @DefaultValue("300") int scriptTimeoutSeconds,
         /** 脚本工具连续无输出超过此时长视为卡住；有输出会重置计时 */
-        @DefaultValue("90") int scriptIdleTimeoutSeconds
+        @DefaultValue("90") int scriptIdleTimeoutSeconds,
+        /** 是否在宿主机内存吃紧时主动停掉最久未使用的容器以释放资源 */
+        @DefaultValue("true") boolean enableHostMemoryEviction,
+        /** 当 MemAvailable / MemTotal（或等价指标）低于该百分比时视为内存吃紧，触发一次逐出 */
+        @DefaultValue("10") int lowMemoryFreePercent
 ) {
     public boolean isCpuLimitSet() { return cpuLimit > 0; }
     public boolean isMemoryLimitSet() { return memoryLimit != null && !memoryLimit.isBlank(); }

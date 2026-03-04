@@ -7,6 +7,8 @@ export interface MemoryItem {
   content: string
   memoryType: MemoryType
   importance: number
+  /** 是否禁止参与压缩（true = 压缩时跳过这条记忆） */
+  noCompress: boolean
   createTime: string
   score: number | null
 }
@@ -83,6 +85,8 @@ export interface CompressPrepareResult {
 }
 
 export interface ExecuteCompressRequest {
-  delete_ids: string[]
-  new_memories: CompressedMemoryDto[]
+  delete_ids?: string[]
+  new_memories?: CompressedMemoryDto[]
+  /** 仅压缩这些 ID（不传 delete_ids/new_memories 时后端会按此子集重新跑 LLM 并执行） */
+  include_ids?: string[]
 }

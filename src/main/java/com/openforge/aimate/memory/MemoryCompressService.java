@@ -1,5 +1,7 @@
 package com.openforge.aimate.memory;
 
+import com.openforge.aimate.memory.dto.ExecuteCompressRequest;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openforge.aimate.apikey.UserApiKeyResolver;
@@ -58,19 +60,32 @@ public class MemoryCompressService {
         if (userId == null) {
             return new CompressPrepareResult(List.of(), List.of(), "未登录");
         }
-        List<MemoryItem> current = memoryService.listMemories(null, null, null, 0, MAX_MEMORIES_FOR_COMPRESS, userId);
+        List<MemoryItem> all = memoryService.listMemories(null, null, null, 0, MAX_MEMORIES_FOR_COMPRESS, userId);
+        // 跳过被标记为「禁止压缩」的记忆，避免重要记忆被合并/删除
+        List<MemoryItem> current = new ArrayList<>();
+        for (MemoryItem m : all) {
+            if (!m.noCompress()) {
+                current.add(m);
+            }
+        }
         if (current.isEmpty()) {
             return new CompressPrepareResult(List.of(), List.of(), null);
         }
+        var proposedResult = callLlmForCompress(current, userId);
+        return new CompressPrepareResult(current, proposedResult.proposed(), proposedResult.error());
+    }
 
+    /**
+     * Calls LLM to merge the given memory list into a compressed list.
+     */
+    private CompressProposeResult callLlmForCompress(List<MemoryItem> current, @Nullable Long userId) {
+        if (current.isEmpty()) return new CompressProposeResult(List.of(), null);
         StringBuilder sb = new StringBuilder();
         for (MemoryItem m : current) {
             sb.append("- [").append(m.memoryType()).append("] importance=").append(m.importance())
               .append(": ").append(m.content().length() > 200 ? m.content().substring(0, 200) + "..." : m.content()).append("\n");
         }
         String userContent = PROMPT_TEMPLATE.formatted(sb.toString());
-
-        // 优先使用用户配置的 LLM，如果没有则回退到系统级 LlmRouter（primary + fallback）
         var userConfigOpt = keyResolver.resolveDefaultLlm(userId);
         long startNs = System.nanoTime();
         try {
@@ -85,16 +100,8 @@ public class MemoryCompressService {
                         )));
                 long latencyMs = (System.nanoTime() - startNs) / 1_000_000L;
                 llmCallLogService.logSuccess(
-                        cfg.name(),
-                        cfg.model(),
-                        LlmCallLog.CallType.MEMORY_COMPRESS,
-                        "compress_memory",
-                        "/v1/chat/completions",
-                        userId,
-                        null,
-                        latencyMs,
-                        response
-                );
+                        cfg.name(), cfg.model(), LlmCallLog.CallType.MEMORY_COMPRESS,
+                        "compress_memory", "/v1/chat/completions", userId, null, latencyMs, response);
             } else {
                 response = llmRouter.chat(ChatRequest.simple(null,
                         List.of(
@@ -103,30 +110,21 @@ public class MemoryCompressService {
                         )));
                 long latencyMs = (System.nanoTime() - startNs) / 1_000_000L;
                 llmCallLogService.logSuccess(
-                        "system_router",
-                        response.model(),
-                        LlmCallLog.CallType.MEMORY_COMPRESS,
-                        "compress_memory",
-                        "/v1/chat/completions",
-                        userId,
-                        null,
-                        latencyMs,
-                        response
-                );
+                        "system_router", response.model(), LlmCallLog.CallType.MEMORY_COMPRESS,
+                        "compress_memory", "/v1/chat/completions", userId, null, latencyMs, response);
             }
             String raw = response.firstMessage().content();
-            if (raw == null || raw.isBlank()) {
-                return new CompressPrepareResult(current, List.of(), "LLM 返回为空");
-            }
+            if (raw == null || raw.isBlank()) return new CompressProposeResult(List.of(), "LLM 返回为空");
             raw = stripMarkdownJson(raw);
             List<CompressedMemoryDto> proposed = objectMapper.readValue(raw, new TypeReference<>() {});
-            if (proposed == null) proposed = List.of();
-            return new CompressPrepareResult(current, proposed, null);
+            return new CompressProposeResult(proposed != null ? proposed : List.of(), null);
         } catch (Exception e) {
             log.warn("[Compress] LLM prepare failed: {}", e.getMessage());
-            return new CompressPrepareResult(current, List.of(), "压缩建议生成失败: " + e.getMessage());
+            return new CompressProposeResult(List.of(), "压缩建议生成失败: " + e.getMessage());
         }
     }
+
+    private record CompressProposeResult(List<CompressedMemoryDto> proposed, String error) {}
 
     private static final Pattern JSON_BLOCK = Pattern.compile("```(?:json)?\\s*([\\s\\S]*?)```", Pattern.CASE_INSENSITIVE);
 
@@ -137,10 +135,30 @@ public class MemoryCompressService {
     }
 
     /**
-     * Deletes given memory IDs and inserts the new compressed memories (all for the given user).
+     * Executes compression from the request: either (delete_ids + new_memories) or (include_ids only).
+     * When include_ids is non-empty, loads those memories, re-runs LLM to get proposed for the subset, then deletes include_ids and inserts proposed.
      */
-    public void executeCompression(@Nullable Long userId, List<String> deleteIds, List<CompressedMemoryDto> newMemories) {
+    public void executeCompression(@Nullable Long userId, ExecuteCompressRequest req) {
         if (userId == null) return;
+        List<String> deleteIds;
+        List<CompressedMemoryDto> newMemories;
+        if (req.include_ids() != null && !req.include_ids().isEmpty()) {
+            List<MemoryItem> subset = memoryService.listMemoriesByIds(req.include_ids(), userId);
+            if (subset.isEmpty()) {
+                log.warn("[Compress] include_ids provided but no memories found for user {}", userId);
+                return;
+            }
+            CompressProposeResult proposed = callLlmForCompress(subset, userId);
+            if (proposed.error() != null || proposed.proposed().isEmpty()) {
+                log.warn("[Compress] Cannot execute with subset: {}", proposed.error());
+                return;
+            }
+            deleteIds = req.include_ids();
+            newMemories = proposed.proposed();
+        } else {
+            deleteIds = req.delete_ids() != null ? req.delete_ids() : List.of();
+            newMemories = req.new_memories() != null ? req.new_memories() : List.of();
+        }
         for (String id : deleteIds) {
             try {
                 memoryService.deleteById(Long.parseLong(id), userId);

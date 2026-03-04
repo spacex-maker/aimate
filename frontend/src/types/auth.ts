@@ -3,6 +3,7 @@ export interface AuthResponse {
   userId: number
   username: string
   displayName: string
+  role: 'USER' | 'ADMIN'
   token: string
 }
 
@@ -22,5 +23,6 @@ export interface AuthUser {
   userId: number
   username: string
   displayName: string
+  role: 'USER' | 'ADMIN'
   token: string
 }

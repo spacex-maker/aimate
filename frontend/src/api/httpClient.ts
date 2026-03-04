@@ -6,7 +6,6 @@
  */
 
 import toast from 'react-hot-toast'
-import { setAuthUser } from '../hooks/useAuth'
 
 const AUTH_KEY = 'ofx_auth_user'
 
@@ -33,11 +32,9 @@ function getToken(): string | null {
 }
 
 function handleUnauthorized(): never {
-  localStorage.removeItem(AUTH_KEY)
-  setAuthUser(null)
-  toast.error('登录已过期或无效，请重新登录')
-  window.location.href = '/login'
-  throw new Error('未登录，请重新登录')
+  // 只提示，不再清理本地登录状态，避免单个接口 401 把整个前端“登出”
+  toast.error('接口未授权（401），请检查登录状态或权限')
+  throw new Error('未授权（401）')
 }
 
 export async function http<T>(url: string, init: RequestInit = {}): Promise<T> {

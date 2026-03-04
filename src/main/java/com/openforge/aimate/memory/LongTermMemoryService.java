@@ -8,6 +8,7 @@ import io.milvus.v2.service.vector.request.DeleteReq;
 import io.milvus.v2.service.vector.request.InsertReq;
 import io.milvus.v2.service.vector.request.QueryReq;
 import io.milvus.v2.service.vector.request.SearchReq;
+import io.milvus.v2.service.vector.request.UpsertReq;
 import io.milvus.v2.service.vector.request.data.FloatVec;
 import io.milvus.v2.service.vector.response.QueryResp;
 import io.milvus.v2.service.vector.response.SearchResp;
@@ -23,6 +24,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+
+import com.google.gson.JsonArray;
 
 /**
  * Long-term memory service — the Agent's persistent knowledge store.
@@ -40,7 +43,7 @@ public class LongTermMemoryService {
     /** Minimum similarity score for recall() results. Set to 0 to always return ranked hits. */
     private static final float   MIN_SCORE_THRESHOLD = 0.0f;
     private static final List<String> ALL_FIELDS = List.of(
-            "id", "session_id", "content", "memory_type", "importance", "create_time_ms");
+            "id", "session_id", "content", "memory_type", "importance", "no_compress", "create_time_ms");
 
     private static final DateTimeFormatter TIME_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
@@ -155,10 +158,12 @@ public class LongTermMemoryService {
             if (userId != null) {
                 row.addProperty("user_id", String.valueOf(userId));
             }
+            // 直接使用传入的 sessionId，不再做压缩版本号改写
             row.addProperty("session_id",     sessionId);
             row.addProperty("content",        truncate(content, 4000));
             row.addProperty("memory_type",    memoryType.name());
             row.addProperty("importance",     importance);
+            row.addProperty("no_compress",    false);
             row.addProperty("create_time_ms", System.currentTimeMillis());
 
             com.google.gson.JsonArray embeddingArray = new com.google.gson.JsonArray();
@@ -363,6 +368,45 @@ public class LongTermMemoryService {
     }
 
     /**
+     * Load memories by their IDs (for compression subset). Uses user's collection; filters by user_id.
+     */
+    public List<MemoryItem> listMemoriesByIds(List<String> ids, @Nullable Long userId) {
+        if (milvusUnavailable() || ids == null || ids.isEmpty() || userId == null) return List.of();
+        List<Long> parsed = new ArrayList<>();
+        for (String s : ids) {
+            try {
+                parsed.add(Long.parseLong(s.trim()));
+            } catch (NumberFormatException ignored) {
+                // skip invalid id
+            }
+        }
+        if (parsed.isEmpty()) return List.of();
+        String collectionName = resolveContext(userId).collectionName();
+        String idList = parsed.stream().map(String::valueOf).reduce((a, b) -> a + ", " + b).orElse("");
+        String filter = "user_id == \"%s\" and id in [%s]".formatted(userId, idList);
+        QueryReq req = QueryReq.builder()
+                .collectionName(collectionName)
+                .filter(filter)
+                .outputFields(ALL_FIELDS)
+                .limit((long) parsed.size())
+                .build();
+        try {
+            QueryResp resp = milvusClient.query(req);
+            if (resp == null || resp.getQueryResults().isEmpty()) return List.of();
+            List<MemoryItem> out = new ArrayList<>();
+            for (QueryResp.QueryResult r : resp.getQueryResults()) {
+                Map<String, Object> e = r.getEntity();
+                out.add(toMemoryItem(e.get("id"), e, null));
+            }
+            return out;
+        } catch (MilvusClientException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            if (msg.contains("user_id not exist") || msg.contains("field user_id")) return List.of();
+            throw e;
+        }
+    }
+
+    /**
      * Semantic search visible to the user (no threshold applied — returns all results).
      * Uses the user's configured embedding model + collection when available.
      */
@@ -414,6 +458,131 @@ public class LongTermMemoryService {
                 .ids(List.of(id))
                 .build());
         log.info("[Memory] Deleted memory id={}", id);
+    }
+
+    /**
+     * Update only the "no_compress" flag of an existing memory (by id, scoped to userId).
+     * Uses query-by-id then upsert so the vector and other fields are unchanged.
+     */
+    public boolean updateNoCompress(long id, boolean noCompress, @Nullable Long userId) {
+        if (milvusUnavailable() || userId == null) return false;
+        String collectionName = resolveContext(userId).collectionName();
+        String filter = "id == %d and user_id == \"%s\"".formatted(id, userId);
+        List<String> outFields = new ArrayList<>(ALL_FIELDS);
+        outFields.add("embedding");
+        QueryReq req = QueryReq.builder()
+                .collectionName(collectionName)
+                .filter(filter)
+                .outputFields(outFields)
+                .limit(1L)
+                .build();
+        QueryResp resp;
+        try {
+            resp = milvusClient.query(req);
+        } catch (MilvusClientException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            if (msg.contains("user_id not exist") || msg.contains("field user_id")) return false;
+            throw e;
+        }
+        if (resp == null || resp.getQueryResults().isEmpty()) return false;
+        Map<String, Object> e = resp.getQueryResults().get(0).getEntity();
+        JsonObject row = new JsonObject();
+        row.addProperty("id", ((Number) e.get("id")).longValue());
+        row.addProperty("user_id", String.valueOf(userId));
+        row.addProperty("session_id", str(e, "session_id"));
+        row.addProperty("content", str(e, "content"));
+        row.addProperty("memory_type", str(e, "memory_type"));
+        row.addProperty("importance", num(e, "importance"));
+        row.addProperty("no_compress", noCompress);
+        row.addProperty("create_time_ms", ((Number) e.get("create_time_ms")).longValue());
+        Object emb = e.get("embedding");
+        JsonArray embeddingArray = toJsonArray(emb);
+        if (embeddingArray == null) {
+            log.warn("[Memory] updateNoCompress: no embedding in entity id={}", id);
+            return false;
+        }
+        row.add("embedding", embeddingArray);
+        milvusClient.upsert(UpsertReq.builder()
+                .collectionName(collectionName)
+                .data(List.of(row))
+                .build());
+        log.debug("[Memory] Updated no_compress for id={} to {}", id, noCompress);
+        return true;
+    }
+
+    /**
+     * Update only the importance of an existing memory (by id, scoped to userId).
+     * Uses query-by-id then upsert so the vector is unchanged; returns false if not found or Milvus unavailable.
+     */
+    public boolean updateImportance(long id, float importance, @Nullable Long userId) {
+        if (milvusUnavailable() || userId == null) return false;
+        String collectionName = resolveContext(userId).collectionName();
+        String filter = "id == %d and user_id == \"%s\"".formatted(id, userId);
+        List<String> outFields = new ArrayList<>(ALL_FIELDS);
+        outFields.add("embedding");
+        QueryReq req = QueryReq.builder()
+                .collectionName(collectionName)
+                .filter(filter)
+                .outputFields(outFields)
+                .limit(1L)
+                .build();
+        QueryResp resp;
+        try {
+            resp = milvusClient.query(req);
+        } catch (MilvusClientException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            if (msg.contains("user_id not exist") || msg.contains("field user_id")) return false;
+            throw e;
+        }
+        if (resp == null || resp.getQueryResults().isEmpty()) return false;
+        Map<String, Object> e = resp.getQueryResults().get(0).getEntity();
+        JsonObject row = new JsonObject();
+        row.addProperty("id", ((Number) e.get("id")).longValue());
+        row.addProperty("user_id", String.valueOf(userId));
+        row.addProperty("session_id", str(e, "session_id"));
+        row.addProperty("content", str(e, "content"));
+        row.addProperty("memory_type", str(e, "memory_type"));
+        row.addProperty("importance", importance);
+        // 保留原有的禁止压缩标记（如果存在）
+        Object nc = e.get("no_compress");
+        if (nc instanceof Boolean b) {
+            row.addProperty("no_compress", b);
+        } else if (nc instanceof Number n) {
+            row.addProperty("no_compress", n.intValue() != 0);
+        }
+        row.addProperty("create_time_ms", ((Number) e.get("create_time_ms")).longValue());
+        Object emb = e.get("embedding");
+        JsonArray embeddingArray = toJsonArray(emb);
+        if (embeddingArray == null) {
+            log.warn("[Memory] updateImportance: no embedding in entity id={}", id);
+            return false;
+        }
+        row.add("embedding", embeddingArray);
+        milvusClient.upsert(UpsertReq.builder()
+                .collectionName(collectionName)
+                .data(List.of(row))
+                .build());
+        log.debug("[Memory] Updated importance for id={} to {}", id, importance);
+        return true;
+    }
+
+    /** Convert Milvus query result embedding (List or array) to Gson JsonArray. */
+    private static JsonArray toJsonArray(Object emb) {
+        if (emb == null) return null;
+        JsonArray arr = new JsonArray();
+        if (emb instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof Number n) arr.add(n.floatValue());
+                else if (o != null) arr.add(Float.parseFloat(o.toString()));
+            }
+        } else if (emb instanceof float[] fa) {
+            for (float f : fa) arr.add(f);
+        } else if (emb instanceof double[] da) {
+            for (double d : da) arr.add((float) d);
+        } else {
+            return null;
+        }
+        return arr.size() > 0 ? arr : null;
     }
 
     /** Delete all memories for a given session (in user's collection). */
@@ -515,6 +684,7 @@ public class LongTermMemoryService {
                 str(entity, "content"),
                 memType(entity),
                 num(entity, "importance"),
+                bool(entity, "no_compress"),
                 createTimeStr,
                 score
         );
@@ -546,6 +716,14 @@ public class LongTermMemoryService {
 
     private float num(Map<String, Object> e, String key) {
         return ((Number) e.getOrDefault(key, 0f)).floatValue();
+    }
+
+    private boolean bool(Map<String, Object> e, String key) {
+        Object v = e.get(key);
+        if (v == null) return false;
+        if (v instanceof Boolean b) return b;
+        if (v instanceof Number n) return n.intValue() != 0;
+        return Boolean.parseBoolean(v.toString());
     }
 
     private MemoryType memType(Map<String, Object> e) {

@@ -7,9 +7,11 @@ import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.FileReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -184,18 +186,25 @@ public class UserContainerManager {
             Long userId = entry.getKey();
             ContainerInfo info = entry.getValue();
             if (now - info.getLastUsedAt() < idleMs) return false;
-            if (!isContainerRunning(info.containerId)) {
-                return true;
-            }
+            // 改为仅 stop 不 rm：保留容器文件系统，用户下次进入会话时可直接 start 继续使用
             try {
-                runDocker("stop", info.containerId);
-                runDocker("rm", info.containerId);
-                log.info("[UserContainer] Recycled idle container for user {}", userId);
+                if (isContainerRunning(info.containerId)) {
+                    runDocker("stop", info.containerId);
+                    log.info("[UserContainer] Stopped idle container for user {}", userId);
+                } else {
+                    log.info("[UserContainer] Container for user {} already stopped", userId);
+                }
             } catch (Exception e) {
-                log.warn("[UserContainer] Recycle failed for user {}: {}", userId, e.getMessage());
+                log.warn("[UserContainer] Stop idle container failed for user {}: {}", userId, e.getMessage());
             }
+            // 无论 stop 是否成功，都从内存 map 中移除；下次需要时会通过 useExistingContainerIfPresent 重新检查/启动
             return true;
         });
+
+        // 若宿主机内存吃紧，根据配置再尝试停掉一个最久未使用的容器以释放资源
+        if (scriptDockerProperties.enableHostMemoryEviction() && isHostMemoryUnderPressure()) {
+            evictOldestContainerDueToLowMemory();
+        }
     }
 
     private boolean isContainerRunning(String containerIdOrName) {
@@ -258,7 +267,151 @@ public class UserContainerManager {
         return sb.toString().trim();
     }
 
-    private static class ContainerInfo {
+    /**
+     * 枚举所有 aimate-user-* 容器及其基本状态（不区分是否当前 JVM 已知），用于管理后台监控。
+     * 为避免频繁子进程开销，建议仅在管理页面手动刷新时调用。
+     *
+     * 返回的 List 按 userId 升序、同一用户内部按容器名排序。
+     */
+    public List<ContainerSummary> listAllUserContainersWithStats() {
+        List<ContainerSummary> result = new ArrayList<>();
+        try {
+            // 1) docker ps -a 列出所有相关容器及状态
+            Process ps = new ProcessBuilder("docker", "ps", "-a",
+                    "--filter", "name=" + CONTAINER_NAME_PREFIX,
+                    "--format", "{{.Names}}||{{.Status}}")
+                    .redirectErrorStream(true)
+                    .start();
+            String psOut = readFully(ps.getInputStream());
+            ps.waitFor();
+            if (psOut == null || psOut.isBlank()) return List.of();
+
+            // 2) docker stats --no-stream 获取 CPU/Mem
+            Process stats = new ProcessBuilder("docker", "stats", "--no-stream",
+                    "--format", "{{.Name}}||{{.CPUPerc}}||{{.MemUsage}}||{{.MemPerc}}")
+                    .redirectErrorStream(true)
+                    .start();
+            String statsOut = readFully(stats.getInputStream());
+            stats.waitFor();
+            Map<String, String[]> statsMap = new HashMap<>();
+            if (statsOut != null && !statsOut.isBlank()) {
+                for (String line : statsOut.split("\\R")) {
+                    String[] parts = line.split("\\|\\|");
+                    if (parts.length >= 4) {
+                        statsMap.put(parts[0].trim(), new String[]{parts[1].trim(), parts[2].trim(), parts[3].trim()});
+                    }
+                }
+            }
+
+            // 3) 组装结果
+            for (String line : psOut.split("\\R")) {
+                if (line.isBlank()) continue;
+                String[] parts = line.split("\\|\\|");
+                if (parts.length < 2) continue;
+                String name = parts[0].trim();
+                String status = parts[1].trim();
+                Long userId = parseUserIdFromContainerName(name);
+                if (userId == null) continue;
+                ContainerInfo info = userContainers.get(userId);
+                Long lastUsedAt = info != null ? info.getLastUsedAt() : null;
+                String[] stat = statsMap.get(name);
+                String cpu = stat != null ? stat[0] : null;
+                String memUsage = stat != null ? stat[1] : null;
+                String memPerc = stat != null ? stat[2] : null;
+                result.add(new ContainerSummary(userId, name, status, lastUsedAt, cpu, memUsage, memPerc));
+            }
+            result.sort((a, b) -> {
+                int c = Long.compare(a.userId(), b.userId());
+                if (c != 0) return c;
+                return a.containerName().compareToIgnoreCase(b.containerName());
+            });
+        } catch (Exception e) {
+            log.warn("[UserContainer] listAllUserContainersWithStats failed: {}", e.getMessage());
+        }
+        return result;
+    }
+
+    private Long parseUserIdFromContainerName(String name) {
+        if (name == null || !name.startsWith(CONTAINER_NAME_PREFIX)) return null;
+        String s = name.substring(CONTAINER_NAME_PREFIX.length());
+        try {
+            return Long.parseLong(s);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 判断宿主机内存是否吃紧：优先从 /proc/meminfo 读取 MemTotal/MemAvailable，
+     * 计算可用内存百分比，低于配置阈值则认为需要释放部分容器。
+     */
+    private boolean isHostMemoryUnderPressure() {
+        try (BufferedReader r = new BufferedReader(new FileReader("/proc/meminfo", StandardCharsets.UTF_8))) {
+            long memTotalKb = 0L;
+            long memAvailableKb = 0L;
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (line.startsWith("MemTotal:")) {
+                    memTotalKb = parseMeminfoValueKb(line);
+                } else if (line.startsWith("MemAvailable:")) {
+                    memAvailableKb = parseMeminfoValueKb(line);
+                }
+                if (memTotalKb > 0 && memAvailableKb > 0) break;
+            }
+            if (memTotalKb > 0 && memAvailableKb > 0) {
+                int freePercent = (int) (memAvailableKb * 100 / memTotalKb);
+                int threshold = Math.max(1, scriptDockerProperties.lowMemoryFreePercent());
+                if (freePercent < threshold) {
+                    log.info("[UserContainer] Host memory under pressure: available={}%, threshold={}%", freePercent, threshold);
+                    return true;
+                }
+            }
+        } catch (IOException e) {
+            // 非 Linux 或无法读取 /proc/meminfo 时忽略该策略
+        }
+        return false;
+    }
+
+    private static long parseMeminfoValueKb(String line) {
+        // 形如 "MemTotal:       16333780 kB"
+        String[] parts = line.split("\\s+");
+        for (String p : parts) {
+            if (p.endsWith("kB")) continue;
+            try {
+                return Long.parseLong(p);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return 0L;
+    }
+
+    /**
+     * 在内存吃紧时，选择当前已知所有用户容器中「最久未使用」的一项，尝试 stop 以释放资源。
+     */
+    private void evictOldestContainerDueToLowMemory() {
+        if (userContainers.isEmpty()) return;
+        Long targetUserId = null;
+        ContainerInfo targetInfo = null;
+        for (Map.Entry<Long, ContainerInfo> e : userContainers.entrySet()) {
+            if (targetInfo == null || e.getValue().getLastUsedAt() < targetInfo.getLastUsedAt()) {
+                targetUserId = e.getKey();
+                targetInfo = e.getValue();
+            }
+        }
+        if (targetUserId == null || targetInfo == null) return;
+        try {
+            if (isContainerRunning(targetInfo.containerId)) {
+                runDocker("stop", targetInfo.containerId);
+                log.warn("[UserContainer] Stopped container for user {} due to host memory pressure", targetUserId);
+            }
+        } catch (Exception e) {
+            log.warn("[UserContainer] Failed to stop container for user {} under memory pressure: {}", targetUserId, e.getMessage());
+        } finally {
+            userContainers.remove(targetUserId);
+        }
+    }
+
+    public static class ContainerInfo {
         private final String containerId;
         private volatile long lastUsedAt;
 
@@ -270,4 +423,17 @@ public class UserContainerManager {
         void setLastUsedAt(long lastUsedAt) { this.lastUsedAt = lastUsedAt; }
         long getLastUsedAt() { return lastUsedAt; }
     }
+
+    /**
+     * 内部使用的容器汇总信息，用于管理后台 DTO 映射。
+     */
+    public record ContainerSummary(
+            Long userId,
+            String containerName,
+            String status,
+            Long lastUsedAt,
+            String cpuPercent,
+            String memUsage,
+            String memPercent
+    ) {}
 }

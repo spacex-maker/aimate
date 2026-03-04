@@ -38,7 +38,7 @@ agent:
   script:
     docker:
       enabled: true
-      idle-minutes: 30
+      idle-minutes: 4320
       image: debian:bookworm-slim
       memory-limit: 4g
       cpu-limit: 2

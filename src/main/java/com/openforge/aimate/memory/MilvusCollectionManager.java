@@ -125,6 +125,9 @@ public class MilvusCollectionManager {
                 .dataType(DataType.VarChar).maxLength(32).build());
         schema.addField(AddFieldReq.builder().fieldName("importance")
                 .dataType(DataType.Float).build());
+        // 标记该记忆是否禁止参与压缩流程（true = 不参与压缩）
+        schema.addField(AddFieldReq.builder().fieldName("no_compress")
+                .dataType(DataType.Bool).build());
         schema.addField(AddFieldReq.builder().fieldName("create_time_ms")
                 .dataType(DataType.Int64).build());
         schema.addField(AddFieldReq.builder().fieldName("embedding")

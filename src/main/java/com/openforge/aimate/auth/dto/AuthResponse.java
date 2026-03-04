@@ -1,13 +1,13 @@
 package com.openforge.aimate.auth.dto;
 
 /**
- * Simple auth response. Token is a placeholder for future JWT / session implementation.
+ * Auth response returned after login/register.
  */
 public record AuthResponse(
-        Long userId,
+        Long   userId,
         String username,
         String displayName,
+        String role,
         String token
-) {
-}
+) {}
 

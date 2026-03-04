@@ -14,7 +14,7 @@ import {
 } from '../components/memory/MemoryMigrationModal'
 import { useAuth } from '../hooks/useAuth'
 import { useMemoryMigrationSocket } from '../hooks/useMemoryMigrationSocket'
-import type { MemoryType, AddMemoryRequest } from '../types/memory'
+import type { MemoryType, AddMemoryRequest, ExecuteCompressRequest } from '../types/memory'
 import type { MemoryMigrationEvent } from '../types/memory'
 
 const PAGE_SIZE = 20
@@ -46,6 +46,7 @@ export function MemoryPage() {
   const [showMigrationModal, setShowMigrationModal] = useState(false)
   const [migrationProgress, setMigrationProgress] = useState<MigrationProgressState>(INITIAL_MIGRATION_PROGRESS)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [updatingId, setUpdatingId] = useState<string | null>(null)
 
   const { data: migrationStatusData } = useQuery({
     queryKey: ['migration-status', user?.userId],
@@ -234,6 +235,69 @@ export function MemoryPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const updateImportanceMutation = useMutation({
+    mutationFn: ({ id, importance }: { id: string; importance: number }) =>
+      memoryApi.updateImportance(id, importance),
+    onMutate: ({ id }) => setUpdatingId(id),
+    onSuccess: (_data, { id, importance }) => {
+      toast.success('重要度已更新')
+      // 只更新缓存中该条的 importance，不 refetch，避免列表顺序因重新请求而变化
+      queryClient.setQueriesData(
+        { queryKey: ['memories'] },
+        (old: unknown) => {
+          const page = old as { items: { id: string; importance?: number }[]; total: number; page: number; size: number } | undefined
+          if (!page?.items) return old
+          return {
+            ...page,
+            items: page.items.map(m => (String(m.id) === id ? { ...m, importance } : m)),
+          }
+        },
+      )
+      queryClient.setQueriesData(
+        { queryKey: ['memory-search'] },
+        (old: unknown) => {
+          const items = (old as { id: string; importance?: number }[] | undefined) ?? []
+          if (!Array.isArray(items)) return old
+          return items.map(m => (String(m.id) === id ? { ...m, importance } : m))
+        },
+      )
+    },
+    onError: (e: Error) => toast.error(e.message),
+    onSettled: () => setUpdatingId(null),
+  })
+
+  const updateNoCompressMutation = useMutation({
+    mutationFn: ({ id, noCompress }: { id: string; noCompress: boolean }) =>
+      memoryApi.updateNoCompress(id, noCompress),
+    onMutate: ({ id }) => setUpdatingId(id),
+    onSuccess: (_data, { id, noCompress }) => {
+      toast.success(noCompress ? '已标记为禁止压缩' : '已取消禁止压缩')
+      // 更新浏览列表中的 noCompress 标记
+      queryClient.setQueriesData(
+        { queryKey: ['memories'] },
+        (old: unknown) => {
+          const page = old as { items: { id: string; noCompress?: boolean }[]; total: number; page: number; size: number } | undefined
+          if (!page?.items) return old
+          return {
+            ...page,
+            items: page.items.map(m => (String(m.id) === id ? { ...m, noCompress } : m)),
+          }
+        },
+      )
+      // 更新搜索结果中的 noCompress 标记
+      queryClient.setQueriesData(
+        { queryKey: ['memory-search'] },
+        (old: unknown) => {
+          const items = (old as { id: string; noCompress?: boolean }[] | undefined) ?? []
+          if (!Array.isArray(items)) return old
+          return items.map(m => (String(m.id) === id ? { ...m, noCompress } : m))
+        },
+      )
+    },
+    onError: (e: Error) => toast.error(e.message),
+    onSettled: () => setUpdatingId(null),
+  })
+
   const clearAllMutation = useMutation({
     mutationFn: () => memoryApi.clearAll(),
     onSuccess: () => {
@@ -258,8 +322,7 @@ export function MemoryPage() {
   })
 
   const compressExecuteMutation = useMutation({
-    mutationFn: (body: { delete_ids: string[]; new_memories: { content: string; memory_type: string; importance: number }[] }) =>
-      memoryApi.compressExecute(body),
+    mutationFn: (body: ExecuteCompressRequest) => memoryApi.compressExecute(body),
     onSuccess: () => {
       toast.success('压缩已完成')
       queryClient.invalidateQueries({ queryKey: ['memories'] })
@@ -404,7 +467,10 @@ export function MemoryPage() {
               <MemoryTable
                 items={browseData?.items ?? []}
                 onDelete={(id) => deleteMutation.mutate(id)}
+                onUpdateImportance={(id, importance) => updateImportanceMutation.mutate({ id, importance })}
+                onToggleNoCompress={(id, noCompress) => updateNoCompressMutation.mutate({ id, noCompress })}
                 isDeleting={deletingId}
+                isUpdating={updatingId}
               />
             )}
           </div>
@@ -468,7 +534,10 @@ export function MemoryPage() {
               <MemoryTable
                 items={searchResults}
                 onDelete={(id) => deleteMutation.mutate(id)}
+                onUpdateImportance={(id, importance) => updateImportanceMutation.mutate({ id, importance })}
+                onToggleNoCompress={(id, noCompress) => updateNoCompressMutation.mutate({ id, noCompress })}
                 isDeleting={deletingId}
+                isUpdating={updatingId}
                 showScore
               />
             ) : (

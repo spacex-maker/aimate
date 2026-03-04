@@ -43,8 +43,8 @@ public class AuthService {
         User saved = userRepository.save(user);
         log.info("[Auth] New user registered: id={}, username={}", saved.getId(), saved.getUsername());
 
-        String token = jwtUtil.generate(saved.getId(), saved.getUsername());
-        return new AuthResponse(saved.getId(), saved.getUsername(), saved.getDisplayName(), token);
+        String token = jwtUtil.generate(saved.getId(), saved.getUsername(), saved.getRole().name());
+        return new AuthResponse(saved.getId(), saved.getUsername(), saved.getDisplayName(), saved.getRole().name(), token);
     }
 
     @Transactional
@@ -63,8 +63,8 @@ public class AuthService {
 
         user.setLastLoginTime(LocalDateTime.now());
 
-        String token = jwtUtil.generate(user.getId(), user.getUsername());
-        return new AuthResponse(user.getId(), user.getUsername(), user.getDisplayName(), token);
+        String token = jwtUtil.generate(user.getId(), user.getUsername(), user.getRole().name());
+        return new AuthResponse(user.getId(), user.getUsername(), user.getDisplayName(), user.getRole().name(), token);
     }
 
     private String normalize(String value) {

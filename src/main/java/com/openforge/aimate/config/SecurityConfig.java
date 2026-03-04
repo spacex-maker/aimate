@@ -39,6 +39,8 @@ public class SecurityConfig {
                     // WebSocket handshake (SockJS)
                     "/ws/**"
                 ).permitAll()
+                // Admin-only APIs
+                .requestMatchers("/api/admin/**").hasAuthority("ADMIN")
                 // Everything else requires a valid JWT
                 .anyRequest().authenticated()
             )
@@ -60,7 +62,7 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOriginPatterns(List.of("http://localhost:3000", "http://localhost:*"));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

@@ -1,10 +1,19 @@
 package com.openforge.aimate.memory;
 
+import com.openforge.aimate.memory.dto.AddMemoryRequest;
+import com.openforge.aimate.memory.dto.CountResponse;
+import com.openforge.aimate.memory.dto.ExecuteCompressRequest;
+import com.openforge.aimate.memory.dto.MetaResponse;
+import com.openforge.aimate.memory.dto.MigrationStatusResponse;
+import com.openforge.aimate.memory.dto.MemoryPage;
+import com.openforge.aimate.memory.dto.StartMigrateResponse;
+import com.openforge.aimate.memory.dto.UpdateImportanceRequest;
+import com.openforge.aimate.memory.dto.UpdateNoCompressRequest;
+
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -72,17 +81,8 @@ public class MemoryController {
         long offset = (long) page * size;
         Long userId = currentUserId();
 
-        // 首选当前用户配置的向量模型所在 Collection；
-        // 如果该 Collection 中暂时没有任何历史记忆（total == 0），
-        // 为了避免「突然什么都看不到」的体验，再回退查询系统默认 Collection。
         List<MemoryItem> items = memoryService.listMemories(type, session, keyword, offset, size, userId);
         long total = memoryService.countMemories(type, session, userId);
-
-        if (userId != null && total == 0) {
-            // fallback: 兼容早期还未按用户拆分 Collection 时写入的旧数据
-            items = memoryService.listMemories(type, session, keyword, offset, size, null);
-            total = memoryService.countMemories(type, session, null);
-        }
 
         return ResponseEntity.ok(new MemoryPage(items, total, page, size));
     }
@@ -241,6 +241,42 @@ public class MemoryController {
         return ResponseEntity.noContent().build();
     }
 
+    /**
+     * Update importance of a single memory (current user only).
+     * Body: { "importance": 0.0–1.0 }. Returns 404 if not found or not owner.
+     */
+    @PatchMapping("/{id}")
+    public ResponseEntity<Void> updateImportance(
+            @PathVariable long id,
+            @RequestBody UpdateImportanceRequest body) {
+        Long userId = currentUserId();
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        float importance = body.importance() != null
+                ? Math.max(0f, Math.min(1f, body.importance()))
+                : 0.8f;
+        boolean updated = memoryService.updateImportance(id, importance, userId);
+        return updated ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+    }
+
+    /**
+     * Mark a memory as protected from compression (or remove the protection).
+     * Body: { "noCompress": true | false }.
+     */
+    @PatchMapping("/{id}/no-compress")
+    public ResponseEntity<Void> updateNoCompress(
+            @PathVariable long id,
+            @RequestBody UpdateNoCompressRequest body) {
+        Long userId = currentUserId();
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        boolean noCompress = Boolean.TRUE.equals(body.noCompress());
+        boolean updated = memoryService.updateNoCompress(id, noCompress, userId);
+        return updated ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+    }
+
     /** Delete a single memory by its Milvus ID (in current user's collection). */
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteById(@PathVariable long id) {
@@ -264,62 +300,8 @@ public class MemoryController {
      */
     @PostMapping("/compress/execute")
     public ResponseEntity<Void> executeCompress(@Valid @RequestBody ExecuteCompressRequest req) {
-        compressService.executeCompression(
-                currentUserId(),
-                req.delete_ids() != null ? req.delete_ids() : List.of(),
-                req.new_memories() != null ? req.new_memories() : List.of()
-        );
+        compressService.executeCompression(currentUserId(), req);
         return ResponseEntity.noContent().build();
     }
 
-    // ── Inner DTOs ────────────────────────────────────────────────────────────
-
-    public record MemoryPage(
-            List<MemoryItem> items,
-            long             total,
-            int              page,
-            int              size
-    ) {}
-
-    public record CountResponse(
-            long       count,
-            MemoryType type,
-            String     session
-    ) {}
-
-    public record MetaResponse(
-            String collectionName
-    ) {}
-
-    public record StartMigrateResponse(
-            boolean started
-    ) {}
-
-    /** Response for GET /api/memories/migration-status (camelCase for frontend). */
-    public record MigrationStatusResponse(
-            String status,
-            int totalSessions,
-            int processedSessions,
-            int writtenMemories,
-            String currentTask,
-            String error,
-            List<String> stepLog
-    ) {
-        public static MigrationStatusResponse idle() {
-            return new MigrationStatusResponse("IDLE", 0, 0, 0, null, null, List.of());
-        }
-    }
-
-    public record AddMemoryRequest(
-            @NotBlank @Size(max = 4000) String content,
-            MemoryType memoryType,
-            String     sessionId,
-            Float      importance
-    ) {}
-
-    /** Request body for POST /api/memories/compress/execute (snake_case for API). */
-    public record ExecuteCompressRequest(
-            List<String> delete_ids,
-            List<MemoryCompressService.CompressedMemoryDto> new_memories
-    ) {}
 }
