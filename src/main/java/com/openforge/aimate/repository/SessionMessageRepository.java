@@ -36,7 +36,8 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessage, 
     @Query("SELECT COUNT(m) FROM SessionMessage m WHERE m.agentSession.id = :sessionId AND m.role = 'assistant' AND m.messageStatus = 'ANSWERING'")
     long countAnswering(@Param("sessionId") Long sessionId);
 
-    /** 删除某会话下所有消息（如重置会话时）。 */
-    @Modifying
-    void deleteByAgentSessionId(Long agentSessionId);
+    /** 删除某会话下所有消息（如重置会话时），使用批量 DELETE 避免逐条删除导致的乐观锁冲突。 */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("DELETE FROM SessionMessage m WHERE m.agentSession.id = :agentSessionId")
+    void deleteByAgentSessionId(@Param("agentSessionId") Long agentSessionId);
 }

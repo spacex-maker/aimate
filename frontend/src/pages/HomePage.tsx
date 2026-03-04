@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Send, ChevronRight, Clock, KeyRound, AlertTriangle, Trash2 } from 'lucide-react'
+import { Send, ChevronRight, Clock, KeyRound, AlertTriangle, Trash2, Plus, SlidersHorizontal, Mic } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { agentApi } from '../api/agent'
 import { apikeyApi } from '../api/apikey'
@@ -82,123 +82,171 @@ export function HomePage() {
   )
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-10 space-y-10">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-white">新建 Agent 任务</h1>
-        <p className="text-white/40 text-sm mt-1">描述你的目标，Agent 将自主规划并执行</p>
+    <div className="min-h-screen flex flex-col">
+      <div className="flex-1 max-w-3xl mx-auto px-6 py-10 space-y-10 w-full">
+        {/* Header */}
+        <div>
+          <h1 className="text-2xl font-bold text-white">新建 Agent 任务</h1>
+          <p className="text-white/40 text-sm mt-1">描述你的目标，Agent 将自主规划并执行</p>
+        </div>
+
+        {/* No LLM key warning */}
+        {!hasDefaultLlmKey && (
+          <Link to="/api-keys"
+            className="flex items-center gap-3 px-4 py-3 rounded-xl border border-yellow-500/30 bg-yellow-500/5 hover:bg-yellow-500/10 transition-colors group">
+            <AlertTriangle className="w-4 h-4 text-yellow-400 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm text-yellow-300 font-medium">尚未配置默认 LLM API 密钥</p>
+              <p className="text-xs text-yellow-400/60 mt-0.5">Agent 将使用系统密钥运行，点击前往配置你自己的密钥</p>
+            </div>
+            <KeyRound className="w-4 h-4 text-yellow-400/50 group-hover:text-yellow-400 transition-colors" />
+          </Link>
+        )}
+
+        {/* Examples */}
+        <div className="space-y-2">
+          <p className="text-xs text-white/30 font-medium uppercase tracking-wider">示例任务</p>
+          <div className="space-y-2">
+            {EXAMPLES.map(ex => (
+              <button
+                key={ex}
+                onClick={() => setTask(ex)}
+                className="w-full text-left px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] rounded-lg text-sm text-white/60 hover:text-white/80 transition-colors"
+              >
+                {ex}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Recent sessions：来自接口的详细会话列表（移到中部区域） */}
+        {(recentLoading || recentSessions.length > 0) && (
+          <div className="space-y-2">
+            <p className="text-xs text-white/30 font-medium uppercase tracking-wider">最近会话</p>
+            {recentLoading ? (
+              <div className="text-center py-8 text-white/25 text-sm">加载中...</div>
+            ) : (
+              <div className="space-y-2">
+                {recentSessions.map(s => (
+                  <div
+                    key={s.sessionId}
+                    className="w-full flex items-center gap-3 px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] rounded-lg transition-colors group"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/session/${s.sessionId}`)}
+                      className="flex-1 flex items-center gap-4 text-left"
+                    >
+                      <StatusBadge status={s.status} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-white/75 truncate">{s.taskDescription || '会话'}</div>
+                        <div className="flex items-center gap-3 mt-0.5">
+                          <span className="text-[10px] text-white/25 font-mono">{s.sessionId.slice(0, 8)}…</span>
+                          <span className="flex items-center gap-1 text-[10px] text-white/25">
+                            <Clock className="w-2.5 h-2.5" />
+                            {s.iterationCount} 轮
+                          </span>
+                          {s.createTime && (
+                            <span className="text-[10px] text-white/20">{formatSessionTime(s.createTime)}</span>
+                          )}
+                        </div>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/40 flex-shrink-0" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSession(s)}
+                      className="p-2 rounded-full text-white/30 hover:text-red-400 hover:bg-red-500/10 flex-shrink-0 transition-colors"
+                      title="删除/隐藏会话"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {selectedSession && (
+          <DeleteSessionModal
+            session={selectedSession}
+            loading={deleteMutation.isPending}
+            onClose={() => setSelectedSession(null)}
+            onConfirm={(options) => deleteMutation.mutate({ session: selectedSession, options })}
+          />
+        )}
       </div>
 
-      {/* No LLM key warning */}
-      {!hasDefaultLlmKey && (
-        <Link to="/api-keys"
-          className="flex items-center gap-3 px-4 py-3 rounded-xl border border-yellow-500/30 bg-yellow-500/5 hover:bg-yellow-500/10 transition-colors group">
-          <AlertTriangle className="w-4 h-4 text-yellow-400 flex-shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm text-yellow-300 font-medium">尚未配置默认 LLM API 密钥</p>
-            <p className="text-xs text-yellow-400/60 mt-0.5">Agent 将使用系统密钥运行，点击前往配置你自己的密钥</p>
+      {/* 底部输入：复用会话页的大圆角输入框布局 */}
+      <form
+        onSubmit={handleSubmit}
+        className="flex-shrink-0 px-4 py-4 sm:px-6 border-t border-white/5 bg-black/60"
+      >
+        <div className="max-w-3xl mx-auto w-full">
+          <div className="rounded-3xl bg-white/[0.06] backdrop-blur-xl border border-white/10 shadow-xl focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10 transition-all overflow-hidden flex flex-col min-h-[120px]">
+            {/* 输入区：占满上方，多行可扩展 */}
+            <textarea
+              value={task}
+              onChange={e => setTask(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  if (task.trim() && !startMutation.isPending) {
+                    startMutation.mutate(task.trim())
+                  }
+                }
+              }}
+              rows={1}
+              className="flex-1 min-h-[56px] max-h-40 py-4 px-4 bg-transparent text-sm text-white placeholder-white/40 resize-none focus:outline-none"
+              placeholder="描述你想让 Agent 完成的任务，Enter 发送 · Shift+Enter 换行"
+            />
+            {/* 底部操作栏：左侧附加/工具，右侧发送与语音（占位） */}
+            <div className="flex-shrink-0 flex items-center justify-between px-3 py-2 border-t border-white/[0.06]">
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  className="p-2 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
+                  title="附加文件（敬请期待）"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors text-xs"
+                  title="工具与设置（敬请期待）"
+                >
+                  <SlidersHorizontal className="w-4 h-4" />
+                  <span>工具</span>
+                </button>
+              </div>
+              <div className="flex items-center gap-0.5">
+                <button
+                  type="button"
+                  className="p-2 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
+                  title="语音输入（敬请期待）"
+                >
+                  <Mic className="w-4 h-4" />
+                </button>
+                <button
+                  type="submit"
+                  disabled={!task.trim() || startMutation.isPending}
+                  className="p-2.5 rounded-xl text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
+                  title="启动 Agent"
+                >
+                  {startMutation.isPending ? (
+                    <span className="text-xs px-1">启动中</span>
+                  ) : (
+                    <Send className="w-5 h-5" />
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
-          <KeyRound className="w-4 h-4 text-yellow-400/50 group-hover:text-yellow-400 transition-colors" />
-        </Link>
-      )}
-
-      {/* Input */}
-      <form onSubmit={handleSubmit} className="space-y-3">
-        <textarea
-          value={task}
-          onChange={e => setTask(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSubmit(e)
-          }}
-          placeholder="描述你想让 Agent 完成的任务..."
-          rows={5}
-          className="w-full bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3.5 text-sm text-white placeholder-white/20 resize-none focus:outline-none focus:border-blue-500/50 transition-colors"
-        />
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-white/25">Ctrl+Enter 快速发送</span>
-          <button
-            type="submit"
-            disabled={!task.trim() || startMutation.isPending}
-            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Send className="w-4 h-4" />
-            {startMutation.isPending ? '启动中...' : '启动 Agent'}
-          </button>
+          <p className="mt-1.5 text-center text-xs text-white/35">
+            启动后，你可以在会话页底部继续追加问题，布局与此处保持一致。
+          </p>
         </div>
       </form>
-
-      {/* Examples */}
-      <div className="space-y-2">
-        <p className="text-xs text-white/30 font-medium uppercase tracking-wider">示例任务</p>
-        <div className="space-y-2">
-          {EXAMPLES.map(ex => (
-            <button
-              key={ex}
-              onClick={() => setTask(ex)}
-              className="w-full text-left px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] rounded-lg text-sm text-white/60 hover:text-white/80 transition-colors"
-            >
-              {ex}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Recent sessions：来自接口的详细会话列表 */}
-      {(recentLoading || recentSessions.length > 0) && (
-        <div className="space-y-2">
-          <p className="text-xs text-white/30 font-medium uppercase tracking-wider">最近会话</p>
-          {recentLoading ? (
-            <div className="text-center py-8 text-white/25 text-sm">加载中...</div>
-          ) : (
-            <div className="space-y-2">
-              {recentSessions.map(s => (
-                <div
-                  key={s.sessionId}
-                  className="w-full flex items-center gap-3 px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] rounded-lg transition-colors group"
-                >
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/session/${s.sessionId}`)}
-                    className="flex-1 flex items-center gap-4 text-left"
-                  >
-                    <StatusBadge status={s.status} />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm text-white/75 truncate">{s.taskDescription || '会话'}</div>
-                      <div className="flex items-center gap-3 mt-0.5">
-                        <span className="text-[10px] text-white/25 font-mono">{s.sessionId.slice(0, 8)}…</span>
-                        <span className="flex items-center gap-1 text-[10px] text-white/25">
-                          <Clock className="w-2.5 h-2.5" />
-                          {s.iterationCount} 轮
-                        </span>
-                        {s.createTime && (
-                          <span className="text-[10px] text-white/20">{formatSessionTime(s.createTime)}</span>
-                        )}
-                      </div>
-                    </div>
-                    <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/40 flex-shrink-0" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedSession(s)}
-                    className="p-2 rounded-full text-white/30 hover:text-red-400 hover:bg-red-500/10 flex-shrink-0 transition-colors"
-                    title="删除/隐藏会话"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-      {selectedSession && (
-        <DeleteSessionModal
-          session={selectedSession}
-          loading={deleteMutation.isPending}
-          onClose={() => setSelectedSession(null)}
-          onConfirm={(options) => deleteMutation.mutate({ session: selectedSession, options })}
-        />
-      )}
     </div>
   )
 }
