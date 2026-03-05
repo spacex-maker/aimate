@@ -28,3 +28,12 @@ export interface SystemConfigItem {
   configValue: string | null
   description: string | null
 }
+
+/** 宿主机负载历史记录，用于时间轴图表 */
+export interface HostLoadMetric {
+  hostName: string
+  timestamp: string
+  cpuLoadPercent: number | null
+  memAvailablePercent: number | null
+  rootFsUsedPercent: number | null
+}

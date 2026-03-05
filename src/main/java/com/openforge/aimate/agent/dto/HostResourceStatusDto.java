@@ -13,6 +13,7 @@ public record HostResourceStatusDto(
         Long hostAvailableMemoryBytes,
         Integer hostAvailableMemoryPercent,
         Integer rootFsUsedPercent,
+        Long rootFsTotalBytes,
         String dockerImage,
         String dockerMemoryLimit,
         Double dockerCpuLimit,

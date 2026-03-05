@@ -5,8 +5,9 @@ import { X, Activity, Box, RefreshCw, Users, SlidersHorizontal } from 'lucide-re
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { adminApi } from '../../api/admin'
-import type { SystemModelDto, ToolSettingsDto } from '../../types/agent'
+import type { HostResourceStatusDto, SystemModelDto, ToolSettingsDto } from '../../types/agent'
 import type { AdminUserListItem, SystemConfigItem, UserContainerStatus } from '../../types/admin'
+import { useHostStatusSocket } from '../../hooks/useHostStatusSocket'
 
 type AdminTab = 'containers' | 'models' | 'users' | 'systemConfig'
 
@@ -16,6 +17,53 @@ function formatBytes(v?: number | null): string {
   if (gb >= 1) return `${gb.toFixed(1)} GB`
   const mb = v / (1024 * 1024)
   return `${mb.toFixed(1)} MB`
+}
+
+function HostMetricLine({
+  label,
+  series,
+  colorClass,
+}: {
+  label: string
+  series: number[]
+  colorClass: string
+}) {
+  const safeSeries = series.filter((v) => Number.isFinite(v))
+  if (!safeSeries.length) {
+    return (
+      <div className="flex items-center justify-between text-[11px] text-white/45">
+        <span>{label}</span>
+        <span className="text-white/30">暂无数据</span>
+      </div>
+    )
+  }
+  const max = 100
+  const min = 0
+  const w = 140
+  const h = 28
+  const stepX = safeSeries.length <= 1 ? 0 : w / (safeSeries.length - 1)
+  const path = safeSeries
+    .map((v, idx) => {
+      const clamped = Math.min(max, Math.max(min, v))
+      const x = idx * stepX
+      const y = h - ((clamped - min) / (max - min || 1)) * h
+      return `${idx === 0 ? 'M' : 'L'} ${x} ${y}`
+    })
+    .join(' ')
+
+  const latest = safeSeries[safeSeries.length - 1]
+
+  return (
+    <div className="flex items-center justify-between gap-3 text-[11px] text-white/75">
+      <span className="text-white/60">{label}</span>
+      <div className="flex items-center gap-2">
+        <svg width={w} height={h} className="overflow-visible">
+          <path d={path} className={colorClass} strokeWidth={1.5} fill="none" />
+        </svg>
+        <span className="font-mono text-white/80">{latest.toFixed(1)}%</span>
+      </div>
+    </div>
+  )
 }
 
 function formatProvider(provider: string): string {
@@ -121,10 +169,35 @@ function ContainerMonitorContent() {
     queryFn: () => adminApi.getHostStatus(),
   })
 
-  const memAvailablePercent = hostStatus?.hostAvailableMemoryPercent ?? null
+  const [liveHostStatus, setLiveHostStatus] = useState<HostResourceStatusDto | null>(null)
+  useHostStatusSocket(true, (status) => {
+    setLiveHostStatus(status)
+  })
+
+  const effectiveHostStatus = liveHostStatus ?? hostStatus
+
+  const memAvailablePercent = effectiveHostStatus?.hostAvailableMemoryPercent ?? null
   const memUsedPercent =
     memAvailablePercent != null ? Math.min(100, Math.max(0, 100 - memAvailablePercent)) : null
-  const cpuLoadPercent = hostStatus?.systemCpuLoadPercent ?? null
+  const cpuLoadPercent = effectiveHostStatus?.systemCpuLoadPercent ?? null
+  const diskUsedPercent = effectiveHostStatus?.rootFsUsedPercent ?? null
+
+  const [rangeHours, setRangeHours] = useState<1 | 24 | 168>(24)
+  const { data: metrics = [], isLoading: isMetricsLoading } = useQuery({
+    queryKey: ['admin-host-metrics', rangeHours],
+    queryFn: async () => {
+      const nowMs = Date.now()
+      const fromMs = nowMs - rangeHours * 60 * 60 * 1000
+      return adminApi.listHostMetrics({ from: fromMs, to: nowMs })
+    },
+    refetchOnWindowFocus: false,
+  })
+
+  const cpuSeries = (metrics || []).map((m) => m.cpuLoadPercent ?? 0)
+  const memSeries = (metrics || []).map((m) =>
+    m.memAvailablePercent != null ? Math.max(0, 100 - m.memAvailablePercent) : 0
+  )
+  const diskSeries = (metrics || []).map((m) => m.rootFsUsedPercent ?? 0)
 
   return (
     <div className="h-full flex flex-col">
@@ -152,12 +225,12 @@ function ContainerMonitorContent() {
           </button>
         </div>
 
-        {hostStatus && (
+        {effectiveHostStatus && (
           <div className="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 flex flex-wrap items-center gap-x-6 gap-y-1.5 text-[11px]">
             <div className="text-white/75">
               <span className="text-white/40 mr-1.5">宿主机 CPU</span>
               <span className="font-mono">
-                {hostStatus.cpuCores ?? '未知'} 核
+                {effectiveHostStatus.cpuCores ?? '未知'} 核
                 {cpuLoadPercent != null ? ` / 负载 ${cpuLoadPercent.toFixed(1)}%` : ''}
               </span>
               {cpuLoadPercent != null && (
@@ -179,8 +252,8 @@ function ContainerMonitorContent() {
             <div className="text-white/75">
               <span className="text-white/40 mr-1.5">宿主机内存</span>
               <span className="font-mono">
-                {formatBytes(hostStatus.hostAvailableMemoryBytes)} / {formatBytes(hostStatus.hostTotalMemoryBytes)}
-                {hostStatus.hostAvailableMemoryPercent != null ? `（可用 ${hostStatus.hostAvailableMemoryPercent}%）` : ''}
+                {formatBytes(effectiveHostStatus.hostAvailableMemoryBytes)} / {formatBytes(effectiveHostStatus.hostTotalMemoryBytes)}
+                {effectiveHostStatus.hostAvailableMemoryPercent != null ? `（可用 ${effectiveHostStatus.hostAvailableMemoryPercent}%）` : ''}
               </span>
               {memUsedPercent != null && (
                 <div className="mt-1 w-40 h-1.5 rounded-full bg-white/10 overflow-hidden">
@@ -201,21 +274,75 @@ function ContainerMonitorContent() {
             <div className="text-white/75">
               <span className="text-white/40 mr-1.5">根分区使用</span>
               <span className="font-mono">
-                {hostStatus.rootFsUsedPercent != null ? `${hostStatus.rootFsUsedPercent}%` : '未知'}
+                {formatBytes(effectiveHostStatus.rootFsTotalBytes)} /{' '}
+                {effectiveHostStatus.rootFsUsedPercent != null ? `${effectiveHostStatus.rootFsUsedPercent}%` : '未知'}
               </span>
+              {diskUsedPercent != null && (
+                <div className="mt-1 w-40 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                  <div
+                    className={clsx(
+                      'h-full rounded-full transition-all',
+                      diskUsedPercent >= 90
+                        ? 'bg-red-500'
+                        : diskUsedPercent >= 75
+                          ? 'bg-amber-400'
+                          : 'bg-emerald-400'
+                    )}
+                    style={{ width: `${Math.min(100, Math.max(0, diskUsedPercent))}%` }}
+                  />
+                </div>
+              )}
             </div>
             <div className="text-white/75">
               <span className="text-white/40 mr-1.5">容器资源限制</span>
               <span className="font-mono">
-                {(hostStatus.dockerMemoryLimit || 'mem不限') +
+                {(effectiveHostStatus.dockerMemoryLimit || 'mem不限') +
                   ' / ' +
-                  (hostStatus.dockerCpuLimit && hostStatus.dockerCpuLimit > 0
-                    ? `${hostStatus.dockerCpuLimit}核`
+                  (effectiveHostStatus.dockerCpuLimit && effectiveHostStatus.dockerCpuLimit > 0
+                    ? `${effectiveHostStatus.dockerCpuLimit}核`
                     : 'CPU不限')}
               </span>
             </div>
           </div>
         )}
+
+        <div className="rounded-lg border border-white/10 bg-black/30 px-4 py-3 space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium text-white">系统负载时间轴</p>
+              <p className="text-[10px] text-white/40">查看最近一段时间 CPU / 内存 / 磁盘的变化趋势</p>
+            </div>
+            <div className="inline-flex items-center rounded-full bg-white/5 border border-white/10 p-0.5 text-[10px]">
+              {[1, 24, 168].map((h) => (
+                <button
+                  key={h}
+                  type="button"
+                  onClick={() => setRangeHours(h as 1 | 24 | 168)}
+                  className={clsx(
+                    'px-2.5 py-0.5 rounded-full transition-colors',
+                    rangeHours === h
+                      ? 'bg-white/90 text-black'
+                      : 'text-white/60 hover:bg-white/10'
+                  )}
+                >
+                  {h === 1 ? '1小时' : h === 24 ? '24小时' : '7天'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {isMetricsLoading ? (
+            <p className="text-[11px] text-white/40 py-1.5">加载历史数据中…</p>
+          ) : !metrics || metrics.length === 0 ? (
+            <p className="text-[11px] text-white/35 py-1.5">最近暂无负载记录，请稍后再试。</p>
+          ) : (
+            <div className="space-y-1.5">
+              <HostMetricLine label="CPU 负载" series={cpuSeries} colorClass="stroke-emerald-400" />
+              <HostMetricLine label="内存使用" series={memSeries} colorClass="stroke-sky-400" />
+              <HostMetricLine label="磁盘使用" series={diskSeries} colorClass="stroke-amber-400" />
+            </div>
+          )}
+        </div>
       </div>
       {isLoading ? (
         <div className="text-center py-10 text-white/40 text-sm">加载中...</div>

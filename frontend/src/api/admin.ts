@@ -1,5 +1,5 @@
 import type { HostResourceStatusDto, SystemModelDto, ToolSettingsDto } from '../types/agent'
-import type { AdminUserListItem, SystemConfigItem, UserContainerStatus } from '../types/admin'
+import type { AdminUserListItem, HostLoadMetric, SystemConfigItem, UserContainerStatus } from '../types/admin'
 import { http } from './httpClient'
 
 export const adminApi = {
@@ -45,6 +45,16 @@ export const adminApi = {
   /** 管理员：获取宿主机 / Docker 资源配置摘要 */
   getHostStatus: () =>
     http<HostResourceStatusDto>('/api/admin/host-status'),
+
+  /** 管理员：查询宿主机负载历史，用于图表（from/to 为 epoch ms） */
+  listHostMetrics: (params: { hostName?: string; from?: number; to?: number }) => {
+    const qs = new URLSearchParams()
+    if (params.hostName) qs.append('hostName', params.hostName)
+    if (params.from != null) qs.append('from', String(params.from))
+    if (params.to != null) qs.append('to', String(params.to))
+    const query = qs.toString()
+    return http<HostLoadMetric[]>('/api/admin/host-metrics' + (query ? `?${query}` : ''))
+  },
 
   /** 管理员：获取全部系统配置项 */
   listSystemConfigs: () =>

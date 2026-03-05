@@ -91,6 +91,7 @@ export interface HostResourceStatusDto {
   hostAvailableMemoryBytes: number | null
   hostAvailableMemoryPercent: number | null
   rootFsUsedPercent: number | null
+  rootFsTotalBytes: number | null
   dockerImage: string | null
   dockerMemoryLimit: string | null
   dockerCpuLimit: number | null
