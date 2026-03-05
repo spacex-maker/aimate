@@ -61,7 +61,15 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("http://localhost:3000", "http://localhost:*"));
+        // 允许本地开发、Netlify 站点与自定义域名访问后端
+        config.setAllowedOriginPatterns(List.of(
+                "http://localhost:3000",
+                "http://localhost:*",
+                "https://openforgex.netlify.app",
+                "https://*.netlify.app",
+                "http://agent.aimatex.com",
+                "https://agent.aimatex.com"
+        ));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);
