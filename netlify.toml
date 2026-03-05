@@ -1,3 +1,30 @@
+[build]
+  base     = "frontend"
+  command  = "npm run build"
+  publish  = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+## 先匹配 /api，再匹配 /ws，最后才是 SPA fallback
+[[redirects]]
+  from = "/api/*"
+  to   = "http://175.27.255.29:9299/api/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/ws"
+  to   = "http://175.27.255.29:9299/ws"
+  status = 200
+  force = true
+
+## 单页应用路由：所有前端路由回落到 index.html
+[[redirects]]
+  from = "/*"
+  to   = "/index.html"
+  status = 200
+
 # Netlify 仅部署前端（frontend/），后端需单独部署。
 # 在 Netlify 后台设置环境变量：VITE_API_BASE = 后端地址，如 https://api.example.com（不要末尾斜杠）
 
