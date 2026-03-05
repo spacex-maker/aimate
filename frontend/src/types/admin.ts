@@ -20,3 +20,11 @@ export interface AdminUserListItem {
   createTime: string | null
   lastLoginTime: string | null
 }
+
+/** 系统配置项（供管理员修改） */
+export interface SystemConfigItem {
+  id: number
+  configKey: string
+  configValue: string | null
+  description: string | null
+}
