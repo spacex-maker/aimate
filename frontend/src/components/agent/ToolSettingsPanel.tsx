@@ -1,7 +1,10 @@
+import { useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { agentApi } from '../../api/agent'
 import type { ToolSettingsDto } from '../../types/agent'
 import toast from 'react-hot-toast'
+
+const SAVE_DEBOUNCE_MS = 400
 
 interface Props {
   onClose?: () => void
@@ -42,6 +45,7 @@ function ToggleSwitch({
 
 export function ToolSettingsPanel({ onClose: _onClose }: Props) {
   const queryClient = useQueryClient()
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { data: settings, isLoading } = useQuery({
     queryKey: ['tool-settings'],
     queryFn: () => agentApi.getToolSettings(),
@@ -62,10 +66,20 @@ export function ToolSettingsPanel({ onClose: _onClose }: Props) {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['tool-settings'] }),
   })
 
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+  }, [])
+
   const handleToggle = (key: keyof ToolSettingsDto, value: boolean) => {
     if (!settings) return
     const next: ToolSettingsDto = { ...settings, [key]: value }
-    updateMutation.mutate(next)
+    queryClient.setQueryData<ToolSettingsDto>(['tool-settings'], next)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null
+      const latest = queryClient.getQueryData<ToolSettingsDto>(['tool-settings'])
+      if (latest) updateMutation.mutate(latest)
+    }, SAVE_DEBOUNCE_MS)
   }
 
   return (

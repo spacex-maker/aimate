@@ -44,12 +44,15 @@ public class UserToolSettingsService {
     public UserToolSettings update(Long userId, boolean memoryEnabled, boolean webSearchEnabled,
                                    boolean createToolEnabled, boolean scriptExecEnabled) {
         if (userId == null) return defaultSettings();
-        UserToolSettings s = ensureAndGet(userId);
-        s.setMemoryEnabled(memoryEnabled);
-        s.setWebSearchEnabled(webSearchEnabled);
-        s.setCreateToolEnabled(createToolEnabled);
-        s.setScriptExecEnabled(scriptExecEnabled);
-        return repository.save(s);
+        ensureAndGet(userId);
+        repository.updateFlagsByUserId(userId, memoryEnabled, webSearchEnabled, createToolEnabled, scriptExecEnabled);
+        return UserToolSettings.builder()
+                .userId(userId)
+                .memoryEnabled(memoryEnabled)
+                .webSearchEnabled(webSearchEnabled)
+                .createToolEnabled(createToolEnabled)
+                .scriptExecEnabled(scriptExecEnabled)
+                .build();
     }
 
     private static UserToolSettings defaultSettings() {
