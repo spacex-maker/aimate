@@ -120,6 +120,38 @@ CREATE TABLE IF NOT EXISTS user_embedding_models (
 
 
 -- ------------------------------------------------------------
+-- system_models
+--
+-- 系统级「模型底座」目录，供用户切换默认推理模型。
+-- 与 user_api_keys 配合：用户选择某条 system_model 后，用其 provider
+-- 解析用户在该 provider 下的 API Key，base_url 以 system_model 或 key 为准。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS system_models (
+    id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+
+    provider        VARCHAR(64)     NOT NULL COMMENT '厂商标识，与 user_api_keys.provider 一致：openai | anthropic | google | xai | deepseek',
+    model_id        VARCHAR(128)    NOT NULL COMMENT 'API 模型 ID，如 gpt-5.2、claude-opus-4-5-20251101、gemini-3.1-pro-preview',
+    display_name    VARCHAR(128)    NOT NULL COMMENT '前端展示名，如 GPT-5.2 Pro、Claude 4.5 Opus',
+    base_url        VARCHAR(512)             COMMENT '该模型默认 Base URL，空则使用该 provider 的常规默认',
+    sort_order      INT             NOT NULL DEFAULT 100 COMMENT '排序权重，数值越小越靠前',
+    enabled         TINYINT(1)      NOT NULL DEFAULT 1 COMMENT '是否在「切换模型」列表中展示',
+    description     VARCHAR(256)             COMMENT '简短说明，如能力或适用场景',
+
+    version         INT             NOT NULL DEFAULT 0,
+    create_time     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_system_models_provider_model (provider, model_id),
+    INDEX idx_system_models_provider (provider),
+    INDEX idx_system_models_enabled_sort (enabled, sort_order)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci
+  COMMENT='系统模型目录，用户可在此范围内切换推理底座';
+
+
+-- ------------------------------------------------------------
 -- agent_tools
 --
 -- Stores every tool the Agent can invoke, including dynamically

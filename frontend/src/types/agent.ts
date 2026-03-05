@@ -47,6 +47,17 @@ export interface AssistantVersionDto {
   createTime: string | null
 }
 
+/** 系统模型项，供输入框「模型选择」与密钥管理页服务商/默认模型；enabled 仅管理员接口返回 */
+export interface SystemModelDto {
+  id: number
+  provider: string
+  modelId: string
+  displayName: string
+  baseUrl: string | null
+  enabled?: boolean
+  description: string | null
+}
+
 /** 用户系统工具开关：长期记忆、联网搜索、AI 自主编写工具、用户系统脚本执行 */
 export interface ToolSettingsDto {
   memoryEnabled: boolean

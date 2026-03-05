@@ -172,6 +172,7 @@ public class LongTermMemoryService {
 
             milvusClient.insert(InsertReq.builder()
                     .collectionName(ctx.collectionName())
+
                     .data(List.of(row))
                     .build());
 

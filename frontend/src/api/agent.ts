@@ -1,4 +1,4 @@
-import type { AssistantVersionDto, ChatMessageDto, DockerInstallInfoDto, ScriptEnvStatusDto, SessionResponse, StartSessionRequest, ToolSettingsDto } from '../types/agent'
+import type { AssistantVersionDto, ChatMessageDto, DockerInstallInfoDto, ScriptEnvStatusDto, SessionResponse, StartSessionRequest, SystemModelDto, ToolSettingsDto } from '../types/agent'
 import { http } from './httpClient'
 
 const BASE = '/api/agent/sessions'
@@ -82,6 +82,10 @@ export const agentApi = {
   /** 某条 assistant 回复的历史版本列表 */
   getMessageVersions: (sessionId: string, messageId: number) =>
     http<AssistantVersionDto[]>(`${BASE}/${sessionId}/messages/${messageId}/versions`),
+
+  /** 系统模型列表（启用的、按 sort_order），供输入框模型选择 */
+  getSystemModels: () =>
+    http<SystemModelDto[]>('/api/agent/system-models'),
 
   /** 当前用户系统工具开关（长期记忆、联网搜索、AI 编写工具、脚本执行） */
   getToolSettings: () =>

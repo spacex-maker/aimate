@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Bot, Brain, Cpu, KeyRound, LayoutDashboard, LogOut, Activity } from 'lucide-react'
+import { Bot, Brain, Cpu, KeyRound, LayoutDashboard, LogOut, Settings2 } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../hooks/useAuth'
+import { AdminModal } from '../admin/AdminModal'
 
 const baseLinks = [
   { to: '/', label: '控制台', icon: LayoutDashboard },
@@ -14,6 +16,7 @@ const baseLinks = [
 export function Navbar() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const [adminModalOpen, setAdminModalOpen] = useState(false)
 
   const handleLogout = () => {
     logout()
@@ -54,23 +57,21 @@ export function Navbar() {
             {label}
           </NavLink>
         ))}
-        {user?.role === 'ADMIN' && (
-          <NavLink
-            to="/admin/containers"
-            className={({ isActive }) =>
-              clsx(
-                'mt-3 flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors',
-                isActive
-                  ? 'bg-emerald-600/20 text-emerald-300'
-                  : 'text-white/50 hover:text-white/80 hover:bg-white/5'
-              )
-            }
-          >
-            <Activity className="w-4 h-4 flex-shrink-0" />
-            容器监控
-          </NavLink>
-        )}
       </div>
+
+      {/* 管理入口（仅管理员） */}
+      {user?.role === 'ADMIN' && (
+        <div className="px-2 pb-2 border-t border-white/10 pt-2">
+          <button
+            type="button"
+            onClick={() => setAdminModalOpen(true)}
+            className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm text-white/50 hover:text-white/80 hover:bg-white/5 transition-colors"
+          >
+            <Settings2 className="w-4 h-4 flex-shrink-0" />
+            管理
+          </button>
+        </div>
+      )}
 
       {/* User info + logout */}
       <div className="px-3 py-3 border-t border-white/10 space-y-2">
@@ -99,6 +100,8 @@ export function Navbar() {
           <div className="text-[10px] text-white/20 font-mono">v0.1.0-SNAPSHOT</div>
         </div>
       </div>
+
+      {adminModalOpen && <AdminModal onClose={() => setAdminModalOpen(false)} />}
     </nav>
   )
 }
