@@ -6,22 +6,21 @@
 [build.environment]
   NODE_VERSION = "20"
 
-# SPA：所有路径回退到 index.html，由 React Router 处理
-[[redirects]]
-  from   = "/*"
-  to     = "/index.html"
-  status = 200
-
-# 后端 API 代理到你的 Spring Boot 服务
+# 先匹配 /api，再匹配 /ws，最后才是 SPA fallback
 [[redirects]]
   from = "/api/*"
   to   = "http://175.27.255.29:9299/api/:splat"
   status = 200
   force = true
 
-# WebSocket 代理（STOMP/SockJS）
 [[redirects]]
   from = "/ws"
   to   = "http://175.27.255.29:9299/ws"
   status = 200
   force = true
+
+# SPA：所有路径回退到 index.html，由 React Router 处理
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
