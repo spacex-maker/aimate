@@ -83,6 +83,21 @@ export interface ScriptEnvStatusDto {
   cpuLimit?: number | null
 }
 
+/** 宿主机 / Docker 资源配置摘要，用于管理端容器监控顶部展示 */
+export interface HostResourceStatusDto {
+  cpuCores: number | null
+  systemCpuLoadPercent: number | null
+  hostTotalMemoryBytes: number | null
+  hostAvailableMemoryBytes: number | null
+  hostAvailableMemoryPercent: number | null
+  rootFsUsedPercent: number | null
+  dockerImage: string | null
+  dockerMemoryLimit: string | null
+  dockerCpuLimit: number | null
+  lowMemoryFreePercent: number | null
+  message: string | null
+}
+
 /** Docker 安装说明（按操作系统返回） */
 export interface DockerInstallInfoDto {
   os: string

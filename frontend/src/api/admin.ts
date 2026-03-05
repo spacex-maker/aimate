@@ -1,4 +1,4 @@
-import type { SystemModelDto, ToolSettingsDto } from '../types/agent'
+import type { HostResourceStatusDto, SystemModelDto, ToolSettingsDto } from '../types/agent'
 import type { AdminUserListItem, SystemConfigItem, UserContainerStatus } from '../types/admin'
 import { http } from './httpClient'
 
@@ -41,6 +41,10 @@ export const adminApi = {
       body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
     }),
+
+  /** 管理员：获取宿主机 / Docker 资源配置摘要 */
+  getHostStatus: () =>
+    http<HostResourceStatusDto>('/api/admin/host-status'),
 
   /** 管理员：获取全部系统配置项 */
   listSystemConfigs: () =>

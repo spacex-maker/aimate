@@ -10,6 +10,14 @@ import type { AdminUserListItem, SystemConfigItem, UserContainerStatus } from '.
 
 type AdminTab = 'containers' | 'models' | 'users' | 'systemConfig'
 
+function formatBytes(v?: number | null): string {
+  if (v == null || v <= 0) return '未知'
+  const gb = v / (1024 * 1024 * 1024)
+  if (gb >= 1) return `${gb.toFixed(1)} GB`
+  const mb = v / (1024 * 1024)
+  return `${mb.toFixed(1)} MB`
+}
+
 function formatProvider(provider: string): string {
   const s = (provider || '').toLowerCase()
   if (s === 'xai') return 'xAI'
@@ -104,25 +112,110 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
 }
 
 function ContainerMonitorContent() {
-  const { data = [], isLoading, refetch } = useQuery({
+  const { data = [], isLoading, isFetching, refetch } = useQuery({
     queryKey: ['admin-containers'],
     queryFn: () => adminApi.listContainers(),
   })
+  const { data: hostStatus } = useQuery({
+    queryKey: ['admin-host-status'],
+    queryFn: () => adminApi.getHostStatus(),
+  })
+
+  const memAvailablePercent = hostStatus?.hostAvailableMemoryPercent ?? null
+  const memUsedPercent =
+    memAvailablePercent != null ? Math.min(100, Math.max(0, 100 - memAvailablePercent)) : null
+  const cpuLoadPercent = hostStatus?.systemCpuLoadPercent ?? null
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h3 className="text-sm font-medium text-white">容器监控</h3>
-          <p className="text-xs text-white/40 mt-0.5">查看所有用户脚本容器的运行状态与资源占用</p>
+      <div className="mb-4 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-medium text-white">容器监控</h3>
+            <p className="text-xs text-white/40 mt-0.5">查看所有用户脚本容器的运行状态与资源占用</p>
+          </div>
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-white/20 text-white/80 hover:text-white hover:bg-white/10 transition-colors',
+              isFetching && 'opacity-60 cursor-not-allowed hover:bg-transparent'
+            )}
+          >
+            <RefreshCw
+              className={clsx(
+                'w-3.5 h-3.5',
+                isFetching && 'animate-spin'
+              )}
+            />
+            {isFetching ? '刷新中…' : '刷新'}
+          </button>
         </div>
-        <button
-          onClick={() => refetch()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-white/20 text-white/80 hover:text-white hover:bg-white/10 transition-colors"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          刷新
-        </button>
+
+        {hostStatus && (
+          <div className="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 flex flex-wrap items-center gap-x-6 gap-y-1.5 text-[11px]">
+            <div className="text-white/75">
+              <span className="text-white/40 mr-1.5">宿主机 CPU</span>
+              <span className="font-mono">
+                {hostStatus.cpuCores ?? '未知'} 核
+                {cpuLoadPercent != null ? ` / 负载 ${cpuLoadPercent.toFixed(1)}%` : ''}
+              </span>
+              {cpuLoadPercent != null && (
+                <div className="mt-1 w-40 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                  <div
+                    className={clsx(
+                      'h-full rounded-full transition-all',
+                      cpuLoadPercent >= 85
+                        ? 'bg-red-500'
+                        : cpuLoadPercent >= 65
+                          ? 'bg-amber-400'
+                          : 'bg-emerald-400'
+                    )}
+                    style={{ width: `${Math.min(100, Math.max(0, cpuLoadPercent))}%` }}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="text-white/75">
+              <span className="text-white/40 mr-1.5">宿主机内存</span>
+              <span className="font-mono">
+                {formatBytes(hostStatus.hostAvailableMemoryBytes)} / {formatBytes(hostStatus.hostTotalMemoryBytes)}
+                {hostStatus.hostAvailableMemoryPercent != null ? `（可用 ${hostStatus.hostAvailableMemoryPercent}%）` : ''}
+              </span>
+              {memUsedPercent != null && (
+                <div className="mt-1 w-40 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                  <div
+                    className={clsx(
+                      'h-full rounded-full transition-all',
+                      memUsedPercent >= 85
+                        ? 'bg-red-500'
+                        : memUsedPercent >= 65
+                          ? 'bg-amber-400'
+                          : 'bg-emerald-400'
+                    )}
+                    style={{ width: `${memUsedPercent}%` }}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="text-white/75">
+              <span className="text-white/40 mr-1.5">根分区使用</span>
+              <span className="font-mono">
+                {hostStatus.rootFsUsedPercent != null ? `${hostStatus.rootFsUsedPercent}%` : '未知'}
+              </span>
+            </div>
+            <div className="text-white/75">
+              <span className="text-white/40 mr-1.5">容器资源限制</span>
+              <span className="font-mono">
+                {(hostStatus.dockerMemoryLimit || 'mem不限') +
+                  ' / ' +
+                  (hostStatus.dockerCpuLimit && hostStatus.dockerCpuLimit > 0
+                    ? `${hostStatus.dockerCpuLimit}核`
+                    : 'CPU不限')}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
       {isLoading ? (
         <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
