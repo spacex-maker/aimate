@@ -1,7 +1,7 @@
-import { useState, useCallback } from 'react'
+import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Send, ChevronRight, Clock, KeyRound, AlertTriangle, Trash2, Plus, SlidersHorizontal, Mic } from 'lucide-react'
+import { ChevronRight, Clock, KeyRound, AlertTriangle, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { agentApi } from '../api/agent'
 import { apikeyApi } from '../api/apikey'
@@ -9,6 +9,7 @@ import { useAuth } from '../hooks/useAuth'
 import { StatusBadge } from '../components/agent/StatusBadge'
 import type { SessionResponse } from '../types/agent'
 import { DeleteSessionModal } from '../components/agent/DeleteSessionModal'
+import { AgentInputBox } from '../components/agent/AgentInputBox'
 
 function formatSessionTime(iso: string): string {
   try {
@@ -72,18 +73,9 @@ export function HomePage() {
     onError: (err: Error) => toast.error(err.message),
   })
 
-  const handleSubmit = useCallback(
-    (e: React.FormEvent) => {
-      e.preventDefault()
-      if (!task.trim()) return
-      startMutation.mutate(task.trim())
-    },
-    [task, startMutation]
-  )
-
   return (
-    <div className="min-h-screen flex flex-col">
-      <div className="flex-1 max-w-3xl mx-auto px-6 py-10 space-y-10 w-full">
+    <div className="min-h-screen">
+      <div className="max-w-3xl mx-auto px-6 py-10 pb-48 space-y-10 w-full">
         {/* Header */}
         <div>
           <h1 className="text-2xl font-bold text-white">新建 Agent 任务</h1>
@@ -177,76 +169,16 @@ export function HomePage() {
         )}
       </div>
 
-      {/* 底部输入：复用会话页的大圆角输入框布局 */}
-      <form
-        onSubmit={handleSubmit}
-        className="flex-shrink-0 px-4 py-4 sm:px-6 border-t border-white/5 bg-black/60"
-      >
-        <div className="max-w-3xl mx-auto w-full">
-          <div className="rounded-3xl bg-white/[0.06] backdrop-blur-xl border border-white/10 shadow-xl focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10 transition-all overflow-hidden flex flex-col min-h-[120px]">
-            {/* 输入区：占满上方，多行可扩展 */}
-            <textarea
-              value={task}
-              onChange={e => setTask(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  if (task.trim() && !startMutation.isPending) {
-                    startMutation.mutate(task.trim())
-                  }
-                }
-              }}
-              rows={1}
-              className="flex-1 min-h-[56px] max-h-40 py-4 px-4 bg-transparent text-sm text-white placeholder-white/40 resize-none focus:outline-none"
-              placeholder="描述你想让 Agent 完成的任务，Enter 发送 · Shift+Enter 换行"
-            />
-            {/* 底部操作栏：左侧附加/工具，右侧发送与语音（占位） */}
-            <div className="flex-shrink-0 flex items-center justify-between px-3 py-2 border-t border-white/[0.06]">
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  className="p-2 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
-                  title="附加文件（敬请期待）"
-                >
-                  <Plus className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors text-xs"
-                  title="工具与设置（敬请期待）"
-                >
-                  <SlidersHorizontal className="w-4 h-4" />
-                  <span>工具</span>
-                </button>
-              </div>
-              <div className="flex items-center gap-0.5">
-                <button
-                  type="button"
-                  className="p-2 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
-                  title="语音输入（敬请期待）"
-                >
-                  <Mic className="w-4 h-4" />
-                </button>
-                <button
-                  type="submit"
-                  disabled={!task.trim() || startMutation.isPending}
-                  className="p-2.5 rounded-xl text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
-                  title="启动 Agent"
-                >
-                  {startMutation.isPending ? (
-                    <span className="text-xs px-1">启动中</span>
-                  ) : (
-                    <Send className="w-5 h-5" />
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-          <p className="mt-1.5 text-center text-xs text-white/35">
-            启动后，你可以在会话页底部继续追加问题，布局与此处保持一致。
-          </p>
-        </div>
-      </form>
+      <AgentInputBox
+        value={task}
+        onChange={setTask}
+        onSubmit={() => task.trim() && startMutation.mutate(task.trim())}
+        placeholder="描述你想让 Agent 完成的任务，Enter 发送 · Shift+Enter 换行"
+        hintText="启动后，你可以在会话页底部继续追加问题，布局与此处保持一致。"
+        isPending={startMutation.isPending}
+        pendingLabel="启动中"
+        submitTitle="启动 Agent"
+      />
     </div>
   )
 }

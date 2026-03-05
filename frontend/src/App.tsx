@@ -28,7 +28,7 @@ function AppLayout({ children }: { children: React.ReactNode }) {
       <div className="w-52 flex-shrink-0">
         <Navbar />
       </div>
-      <main className="flex-1 overflow-hidden">{children}</main>
+      <main className="flex-1 overflow-hidden [--sidebar-width:13rem]">{children}</main>
     </div>
   )
 }

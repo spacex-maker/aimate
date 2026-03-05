@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Pause, Play, StopCircle, ArrowLeft, Copy, Send, RefreshCw, BookOpen, Plus, SlidersHorizontal, Mic } from 'lucide-react'
+import { Pause, Play, StopCircle, ArrowLeft, Copy, RefreshCw, BookOpen } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { agentApi } from '../api/agent'
 import { useAgentSocket } from '../hooks/useAgentSocket'
 import { ThinkingStream } from '../components/agent/ThinkingStream'
 import { StatusBadge } from '../components/agent/StatusBadge'
+import { AgentInputBox } from '../components/agent/AgentInputBox'
 import type { AgentEvent, ChatMessageDto, PlanState, SessionResponse, StreamBlock, ToolCall } from '../types/agent'
 
 // ── Block reducer ─────────────────────────────────────────────────────────────
@@ -586,7 +587,7 @@ export function SessionPage() {
             </ul>
           </div>
         )}
-        <div className="flex-1 min-w-0 flex flex-col">
+        <div className="flex-1 min-w-0 flex flex-col pb-48">
           <ThinkingStream
             userMessage={historyMessages?.length ? null : (session?.taskDescription ?? null)}
             historyMessages={historyMessages ?? null}
@@ -605,85 +606,25 @@ export function SessionPage() {
         </div>
       </div>
 
-      {/* Follow-up input：Gemini 风格 — 大圆角容器，上方输入区，底部操作栏 */}
+      {/* 与首页完全一致的底部输入框：固定视口底部、安全区、大圆角 */}
       {session && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (!followup.trim() || !effectiveSessionId) return
-            continueMutation.mutate(followup.trim())
-          }}
-          className="flex-shrink-0 px-4 py-4 sm:px-6"
-        >
-          <div className="max-w-3xl mx-auto w-full">
-            <div className="rounded-3xl bg-white/[0.06] backdrop-blur-xl border border-white/10 shadow-xl focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10 transition-all overflow-hidden flex flex-col min-h-[120px]">
-              {/* 输入区：占满上方，多行可扩展 */}
-              <textarea
-                value={followup}
-                onChange={e => setFollowup(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault()
-                    if (followup.trim() && effectiveSessionId && !continueMutation.isPending) {
-                      continueMutation.mutate(followup.trim())
-                    }
-                  }
-                }}
-                rows={1}
-                className="flex-1 min-h-[56px] max-h-40 py-4 px-4 bg-transparent text-sm text-white placeholder-white/40 resize-none focus:outline-none"
-                placeholder={
-                  isRunning || isPaused
-                    ? '可随时发送，新消息将并行处理…'
-                    : '输入消息，Enter 发送 · Shift+Enter 换行'
-                }
-              />
-              {/* 底部操作栏：左侧附加/工具，右侧发送与语音 */}
-              <div className="flex-shrink-0 flex items-center justify-between px-3 py-2 border-t border-white/[0.06]">
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    className="p-2 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
-                    title="附加文件（敬请期待）"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors text-xs"
-                    title="工具与设置（敬请期待）"
-                  >
-                    <SlidersHorizontal className="w-4 h-4" />
-                    <span>工具</span>
-                  </button>
-                </div>
-                <div className="flex items-center gap-0.5">
-                  <button
-                    type="button"
-                    className="p-2 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
-                    title="语音输入（敬请期待）"
-                  >
-                    <Mic className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={!followup.trim() || continueMutation.isPending || !effectiveSessionId}
-                    className="p-2.5 rounded-xl text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
-                    title="发送"
-                  >
-                    {continueMutation.isPending ? (
-                      <span className="text-xs px-1">发送中</span>
-                    ) : (
-                      <Send className="w-5 h-5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-            <p className="mt-1.5 text-center text-xs text-white/35">
-              {isRunning || isPaused ? '新消息会立即开始回复，可与上一条并行' : '继续提问将基于当前会话上下文'}
-            </p>
-          </div>
-        </form>
+        <AgentInputBox
+          value={followup}
+          onChange={setFollowup}
+          onSubmit={() => followup.trim() && effectiveSessionId && continueMutation.mutate(followup.trim())}
+          placeholder={
+            isRunning || isPaused
+              ? '可随时发送，新消息将并行处理…'
+              : '输入消息，Enter 发送 · Shift+Enter 换行'
+          }
+          hintText={
+            isRunning || isPaused ? '新消息会立即开始回复，可与上一条并行' : '继续提问将基于当前会话上下文'
+          }
+          isPending={continueMutation.isPending}
+          pendingLabel="发送中"
+          submitTitle="发送"
+          disabled={!effectiveSessionId}
+        />
       )}
     </div>
   )

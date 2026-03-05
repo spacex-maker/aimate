@@ -25,6 +25,7 @@ import com.openforge.aimate.config.SystemConfigService;
 import com.openforge.aimate.memory.LongTermMemoryService;
 import com.openforge.aimate.memory.MemoryRecord;
 import com.openforge.aimate.memory.MemoryType;
+import com.openforge.aimate.domain.UserToolSettings;
 import com.openforge.aimate.repository.AgentSessionRepository;
 import com.openforge.aimate.repository.AgentToolRepository;
 import com.openforge.aimate.websocket.AgentEventPublisher;
@@ -125,6 +126,7 @@ public class AgentLoopService {
     private final AgentToolRepository    toolRepository;
     private final LongTermMemoryService  memoryService;
     private final ToolIndexService       toolIndexService;
+    private final UserToolSettingsService userToolSettingsService;
     private final SessionMessageService  sessionMessageService;
     private final SystemConfigService   systemConfigService;
     private final TavilySearchService   tavilySearchService;
@@ -1204,11 +1206,12 @@ public class AgentLoopService {
      * Load tools by semantic relevance to the current query (e.g. last user message).
      * Uses the current user's embedding model for tool search (same as memories).
      * When the index is unavailable or returns nothing, falls back to all active tools.
+     * Respects user tool settings (memory, web search, create_tool, script exec).
      */
     private List<Tool> loadRelevantTools(String queryText, int topK, Long userId) {
         List<String> relevantIds = toolIndexService.searchRelevantTools(queryText, topK, userId);
         if (relevantIds == null || relevantIds.isEmpty()) {
-            return loadAllTools();
+            return loadAllTools(userId);
         }
         List<Tool> fromSearch = new ArrayList<>();
         Set<String> added = new java.util.LinkedHashSet<>();
@@ -1216,13 +1219,11 @@ public class AgentLoopService {
             if (id == null || !added.add(id)) continue;
             toolRepository.findByToolName(id).map(this::toTool).ifPresent(fromSearch::add);
         }
-        List<Tool> tools = ensureSystemToolsFirst(fromSearch);
-        tools.add(buildCreateToolTool());
-        return tools;
+        return ensureSystemToolsFirst(fromSearch, userId);
     }
 
-    /** 从 agent_tools 表加载所有启用工具；若表为空则退回内置三件套。系统三件套始终排在最前，保证 recall_memory 等可被调用。 */
-    private List<Tool> loadAllTools() {
+    /** 从 agent_tools 表加载所有启用工具；若表为空则退回内置三件套。按用户工具开关过滤系统工具。 */
+    private List<Tool> loadAllTools(Long userId) {
         List<Tool> base = toolRepository.findByIsActiveTrue().stream()
                 .map(this::toTool)
                 .toList();
@@ -1230,26 +1231,42 @@ public class AgentLoopService {
         if (result.isEmpty()) {
             log.debug("[Agent] agent_tools 表为空，使用内置工具（可执行 seed_builtin_tools.sql 将内置工具入库）");
         }
-        result = ensureSystemToolsFirst(result);
-        result.add(buildInstallContainerPackageTool());
-        result.add(buildRunContainerCmdTool());
-        result.add(buildWriteContainerFileTool());
-        result.add(buildCreateToolTool());
-        return result;
+        return ensureSystemToolsFirst(result, userId);
     }
 
     private static final Set<String> SYSTEM_TOOL_NAMES_SET = Set.of("recall_memory", "store_memory", "tavily_search");
     /** 由代码直接构建、不从 DB 重复加载的工具名 */
     private static final Set<String> CODE_BUILT_TOOL_NAMES = Set.of("recall_memory", "store_memory", "tavily_search", "create_tool", "install_container_package", "run_container_cmd", "write_container_file");
 
-    /** 将 recall_memory / store_memory / tavily_search 置于列表最前，缺则补上；过滤掉由代码构建的工具避免重复。 */
-    private List<Tool> ensureSystemToolsFirst(List<Tool> tools) {
+    /**
+     * 按用户工具开关组装修复：长期记忆、联网搜索、AI 编写工具、脚本执行。
+     * 将启用的系统工具置于列表前，再追加 DB 中非内置工具。
+     */
+    private List<Tool> ensureSystemToolsFirst(List<Tool> tools, Long userId) {
+        UserToolSettings settings = userToolSettingsService.getOrCreate(userId);
+        boolean memoryEnabled = settings == null || Boolean.TRUE.equals(settings.getMemoryEnabled());
+        boolean webSearchEnabled = settings == null || Boolean.TRUE.equals(settings.getWebSearchEnabled());
+        boolean createToolEnabled = settings == null || Boolean.TRUE.equals(settings.getCreateToolEnabled());
+        boolean scriptExecEnabled = settings == null || Boolean.TRUE.equals(settings.getScriptExecEnabled());
+
         List<Tool> out = new ArrayList<>();
-        out.add(buildRecallMemoryTool());
-        out.add(buildStoreMemoryTool());
-        out.add(buildTavilySearchTool());
+        if (memoryEnabled) {
+            out.add(buildRecallMemoryTool());
+            out.add(buildStoreMemoryTool());
+        }
+        if (webSearchEnabled) {
+            out.add(buildTavilySearchTool());
+        }
         for (Tool t : tools) {
             if (!CODE_BUILT_TOOL_NAMES.contains(t.function().name())) out.add(t);
+        }
+        if (scriptExecEnabled) {
+            out.add(buildInstallContainerPackageTool());
+            out.add(buildRunContainerCmdTool());
+            out.add(buildWriteContainerFileTool());
+        }
+        if (createToolEnabled) {
+            out.add(buildCreateToolTool());
         }
         return out;
     }

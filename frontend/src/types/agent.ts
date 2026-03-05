@@ -47,6 +47,14 @@ export interface AssistantVersionDto {
   createTime: string | null
 }
 
+/** 用户系统工具开关：长期记忆、联网搜索、AI 自主编写工具、用户系统脚本执行 */
+export interface ToolSettingsDto {
+  memoryEnabled: boolean
+  webSearchEnabled: boolean
+  createToolEnabled: boolean
+  scriptExecEnabled: boolean
+}
+
 /** 脚本执行环境状态（会话页顶部展示 Docker 虚拟机状态） */
 export interface ScriptEnvStatusDto {
   dockerEnabled: boolean

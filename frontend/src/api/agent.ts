@@ -1,4 +1,4 @@
-import type { AssistantVersionDto, ChatMessageDto, DockerInstallInfoDto, ScriptEnvStatusDto, SessionResponse, StartSessionRequest } from '../types/agent'
+import type { AssistantVersionDto, ChatMessageDto, DockerInstallInfoDto, ScriptEnvStatusDto, SessionResponse, StartSessionRequest, ToolSettingsDto } from '../types/agent'
 import { http } from './httpClient'
 
 const BASE = '/api/agent/sessions'
@@ -82,4 +82,16 @@ export const agentApi = {
   /** 某条 assistant 回复的历史版本列表 */
   getMessageVersions: (sessionId: string, messageId: number) =>
     http<AssistantVersionDto[]>(`${BASE}/${sessionId}/messages/${messageId}/versions`),
+
+  /** 当前用户系统工具开关（长期记忆、联网搜索、AI 编写工具、脚本执行） */
+  getToolSettings: () =>
+    http<ToolSettingsDto>('/api/agent/tool-settings'),
+
+  /** 更新系统工具开关 */
+  updateToolSettings: (body: ToolSettingsDto) =>
+    http<ToolSettingsDto>('/api/agent/tool-settings', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
 }
