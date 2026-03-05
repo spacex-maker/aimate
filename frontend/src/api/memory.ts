@@ -6,7 +6,6 @@ import type {
   MemoryItem,
   MemoryPage,
   MemoryMeta,
-  MemoryMigrationEvent,
   MemorySearchParams,
   MemoryType,
   MigrationStatusResponse,
@@ -40,13 +39,15 @@ function buildQuery(params: Record<string, string | number | undefined>): string
 export const memoryApi = {
   list: async (params: MemorySearchParams = {}): Promise<MemoryPage> => {
     const qs = buildQuery({
-      type:    params.type,
+      type: params.type,
       session: params.session,
       keyword: params.keyword,
-      page:    params.page ?? 0,
-      size:    params.size ?? 20,
+      page: params.page ?? 0,
+      size: params.size ?? 20,
     })
-    const data = await http<{ items: Record<string, unknown>[]; total: number; page: number; size: number }>(`${BASE}${qs}`)
+    const data = await http<{ items: Record<string, unknown>[]; total: number; page: number; size: number }>(
+      `${BASE}${qs}`
+    )
     return { ...data, items: (data.items ?? []).map(fromMemoryItem) }
   },
 
@@ -72,15 +73,12 @@ export const memoryApi = {
     http<{ started: boolean }>(`${BASE}/migrate-to-current-collection`, { method: 'POST' }),
 
   /** 获取当前用户同步进度（刷新后恢复显示）. */
-  migrationStatus: () =>
-    http<MigrationStatusResponse>(`${BASE}/migration-status`),
+  migrationStatus: () => http<MigrationStatusResponse>(`${BASE}/migration-status`),
 
   /** 请求中断当前用户的同步. */
-  migrationCancel: () =>
-    http<{ message: string }>(`${BASE}/migration/cancel`, { method: 'POST' }),
+  migrationCancel: () => http<{ message: string }>(`${BASE}/migration/cancel`, { method: 'POST' }),
 
-  add: (body: AddMemoryRequest) =>
-    http<void>(BASE, { method: 'POST', body: JSON.stringify(body) }),
+  add: (body: AddMemoryRequest) => http<void>(BASE, { method: 'POST', body: JSON.stringify(body) }),
 
   /** 设置单条记忆的重要度（0–1），仅当前用户。 */
   updateImportance: (id: string, importance: number) =>
@@ -96,14 +94,11 @@ export const memoryApi = {
       body: JSON.stringify({ noCompress }),
     }),
 
-  deleteById: (id: string) =>
-    http<void>(`${BASE}/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  deleteById: (id: string) => http<void>(`${BASE}/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  deleteBySession: (sessionId: string) =>
-    http<void>(`${BASE}/session/${sessionId}`, { method: 'DELETE' }),
+  deleteBySession: (sessionId: string) => http<void>(`${BASE}/session/${sessionId}`, { method: 'DELETE' }),
 
-  deleteByType: (type: MemoryType) =>
-    http<void>(`${BASE}/type/${type}`, { method: 'DELETE' }),
+  deleteByType: (type: MemoryType) => http<void>(`${BASE}/type/${type}`, { method: 'DELETE' }),
 
   /** 清空当前用户全部长期记忆 */
   clearAll: () => http<void>(`${BASE}/clear`, { method: 'DELETE' }),
@@ -130,3 +125,4 @@ export const memoryApi = {
   compressExecute: (body: ExecuteCompressRequest) =>
     http<void>(`${BASE}/compress/execute`, { method: 'POST', body: JSON.stringify(body) }),
 }
+

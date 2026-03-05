@@ -130,6 +130,9 @@ public class LlmClient {
         String requestBody = serializeWithStream(effectiveRequest);
         log.debug("[LlmClient:{}] → streamChat POST body-length={}", config.name(), requestBody.length());
 
+        // 预估 prompt token 数，供组装 ChatResponse.usage 使用（provider 多数在流式模式下不返回 usage）
+        int estimatedPromptTokens = TokenCounter.estimateTokensForMessages(effectiveRequest.messages());
+
         HttpResponse<Stream<String>> httpResponse;
         try {
             httpResponse = httpClient.send(
@@ -168,7 +171,7 @@ public class LlmClient {
                             .formatted(config.name(), status, bodySnippet));
         }
 
-        return assembleStreamingResponse(httpResponse.body(), callbacks);
+        return assembleStreamingResponse(httpResponse.body(), callbacks, estimatedPromptTokens);
     }
 
     /** The model name configured for this provider (e.g. "gpt-4o"). */
@@ -188,7 +191,8 @@ public class LlmClient {
      *   complete ToolCall objects at the end.
      */
     private ChatResponse assembleStreamingResponse(Stream<String> lines,
-                                                   StreamCallbacks callbacks) {
+                                                   StreamCallbacks callbacks,
+                                                   int estimatedPromptTokens) {
         StringBuilder contentBuilder = new StringBuilder();
         // index → {id, type, name, argumentsBuilder}
         Map<Integer, ToolCallAccumulator> toolCallMap = new HashMap<>();
@@ -275,8 +279,15 @@ public class LlmClient {
                 .build();
 
         ChatResponse.Choice choice = new ChatResponse.Choice(0, assistantMessage, finishReason);
+
+        // 使用内容长度估算 completion tokens，结合上游估算的 prompt tokens，构造 usage 供日志使用
+        int completionTokens = TokenCounter.estimateTokens(assistantMessage.content());
+        int promptTokens = Math.max(0, estimatedPromptTokens);
+        int totalTokens = promptTokens + completionTokens;
+        ChatResponse.Usage usage = new ChatResponse.Usage(promptTokens, completionTokens, totalTokens);
+
         return new ChatResponse(responseId, "chat.completion", null,
-                responseModel, List.of(choice), null);
+                responseModel, List.of(choice), usage);
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────

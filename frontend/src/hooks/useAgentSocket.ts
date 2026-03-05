@@ -7,7 +7,9 @@ function getToken(): string | null {
     const raw = localStorage.getItem('ofx_auth_user')
     if (!raw) return null
     return (JSON.parse(raw) as { token?: string }).token ?? null
-  } catch { return null }
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -67,7 +69,12 @@ export function useAgentSocket(
         onConnect: () => {
           client.subscribe(topic, (frame) => {
             if (import.meta.env.DEV) {
-              console.log('[WS] 收到', frame.destination, 'body length:', frame.body?.length ?? 0)
+              console.log(
+                '[WS] 收到',
+                frame.headers?.destination ?? '(no-destination)',
+                'body length:',
+                frame.body?.length ?? 0
+              )
             }
             try {
               const event = JSON.parse(frame.body) as AgentEvent
@@ -95,3 +102,4 @@ export function useAgentSocket(
     }
   }, [sessionId])
 }
+

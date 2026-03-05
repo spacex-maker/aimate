@@ -16,8 +16,8 @@ export function LoginPage() {
   const [showPwd, setShowPwd] = useState(false)
 
   const mutation = useMutation({
-    mutationFn: (creds?: { identifier: string; password: string }) =>
-      authApi.login(creds ?? { identifier, password }),
+    mutationFn: (creds: { identifier: string; password: string }) =>
+      authApi.login(creds),
     onSuccess: (data) => {
       setAuthUser({
         userId: data.userId,
@@ -35,7 +35,7 @@ export function LoginPage() {
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
     if (!identifier.trim() || !password) return
-    mutation.mutate()
+    mutation.mutate({ identifier, password })
   }
 
   const handleTestLogin = () => {
@@ -73,13 +73,13 @@ export function LoginPage() {
                 placeholder="输入用户名或邮箱"
                 autoFocus
                 autoComplete="username"
-                className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white placeholder-white/20 focus:outline-none focus:border-blue-500/60 transition-colors"
+                className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2.5 text-sm text白 placeholder白/20 focus:outline-none focus:border-blue-500/60 transition-colors"
               />
             </div>
 
             {/* Password */}
             <div>
-              <label className="text-xs text-white/50 mb-1.5 block">密码</label>
+              <label className="text-xs text白/50 mb-1.5 block">密码</label>
               <div className="relative">
                 <input
                   type={showPwd ? 'text' : 'password'}
@@ -87,12 +87,12 @@ export function LoginPage() {
                   onChange={e => setPassword(e.target.value)}
                   placeholder="输入密码"
                   autoComplete="current-password"
-                  className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2.5 pr-10 text-sm text-white placeholder-white/20 focus:outline-none focus:border-blue-500/60 transition-colors"
+                  className="w-full bg-black/30 border border白/10 rounded-lg px-3 py-2.5 pr-10 text-sm text白 placeholder白/20 focus:outline-none focus:border-blue-500/60 transition-colors"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPwd(v => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text白/30 hover:text白/60"
                 >
                   {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -102,7 +102,7 @@ export function LoginPage() {
             <button
               type="submit"
               disabled={mutation.isPending || !identifier.trim() || !password}
-              className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2"
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm text白 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2"
             >
               {mutation.isPending ? '登录中...' : '登录'}
             </button>
@@ -111,14 +111,14 @@ export function LoginPage() {
               type="button"
               onClick={handleTestLogin}
               disabled={mutation.isPending}
-              className="w-full py-2 rounded-lg text-sm text-white/50 hover:text-white/80 hover:bg-white/5 border border-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2"
+              className="w-full py-2 rounded-lg text-sm text白/50 hover:text白/80 hover:bg白/5 border border白/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2"
             >
               测试登录（test / test1234）
             </button>
           </form>
         </div>
 
-        <p className="text-center text-sm text-white/35 mt-6">
+        <p className="text-center text-sm text白/35 mt-6">
           还没有账号？{' '}
           <Link to="/register" className="text-blue-400 hover:text-blue-300 transition-colors">
             立即注册
@@ -128,3 +128,4 @@ export function LoginPage() {
     </div>
   )
 }
+

@@ -1,0 +1,25 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+## 单页应用路由：所有前端路由回落到 index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+## 后端 API 代理（根据你的后端地址修改下面的域名和端口）
+## 例如后端部署在 https://api.your-domain.com 或 http://your-server:8080
+[[redirects]]
+  from = "/api/*"
+  to = "https://your-backend-domain.com/api/:splat"
+  status = 200
+  force = true
+
+## WebSocket 代理：前端 /ws 转发到后端 /ws（用于 STOMP/SockJS）
+[[redirects]]
+  from = "/ws"
+  to = "https://your-backend-domain.com/ws"
+  status = 200
+  force = true
+

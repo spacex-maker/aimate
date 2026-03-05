@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// 为了通过 TypeScript 检查，在这里声明一个简化版的 process 类型。
+declare const process: { env?: Record<string, string | undefined> }
+
 export default defineConfig({
   plugins: [react()],
   optimizeDeps: {
@@ -25,7 +28,7 @@ export default defineConfig({
       ignored: ['**/node_modules/**', '**/.git/**', '**/node_modules/.vite/**'],
       // 若改代码后 dev 进程直接退出：先试 false（原生监视）；若出现 0xC0000006 再改 true
       usePolling: false,
-      ...(process.env.VITE_USE_POLLING === '1' ? { usePolling: true, interval: 2000 } : {}),
+      ...(process.env?.VITE_USE_POLLING === '1' ? { usePolling: true, interval: 2000 } : {}),
     },
     proxy: {
       '/api': {
@@ -40,3 +43,4 @@ export default defineConfig({
     },
   },
 })
+
