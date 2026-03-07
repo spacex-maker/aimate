@@ -1,5 +1,5 @@
 import type { HostResourceStatusDto, SystemModelDto, ToolSettingsDto } from '../types/agent'
-import type { AdminUserListItem, HostLoadMetric, SystemConfigItem, UserContainerStatus } from '../types/admin'
+import type { AdminUserListItem, ComponentStatusDto, HostLoadMetric, SystemConfigItem, UserContainerStatus } from '../types/admin'
 import { http } from './httpClient'
 
 export const adminApi = {
@@ -45,6 +45,10 @@ export const adminApi = {
   /** 管理员：获取宿主机 / Docker 资源配置摘要 */
   getHostStatus: () =>
     http<HostResourceStatusDto>('/api/admin/host-status'),
+
+  /** 管理员：获取各组件（MySQL、Milvus、LLM、Embedding、Docker）连接状态 */
+  getComponentStatus: () =>
+    http<ComponentStatusDto>('/api/admin/component-status'),
 
   /** 管理员：查询宿主机负载历史，用于图表（from/to 为 epoch ms） */
   listHostMetrics: (params: { hostName?: string; from?: number; to?: number }) => {

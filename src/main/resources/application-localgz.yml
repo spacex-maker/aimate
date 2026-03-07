@@ -1,9 +1,9 @@
 # 本地开发环境。激活方式：-Dspring.profiles.active=local 或 SPRING_PROFILES_ACTIVE=local
 spring:
   datasource:
-    url: jdbc:mysql://170.106.105.131:3306/aimate?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-    username: admin
-    password: xp43520!@#
+    url: jdbc:mysql://127.0.0.1:3306/aimate?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: Aimate2026!MySQL
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 8
@@ -27,7 +27,7 @@ agent:
       model: gpt-4o
       timeout-seconds: 120
   embedding:
-    base-url: http://175.27.255.29:11434/v1
+    base-url: http://192.168.0.163:11434/v1
     api-key: ollama
     model: bge-m3
     dimensions: 1024
@@ -46,7 +46,7 @@ agent:
       script-idle-timeout-seconds: 90
   milvus:
     enabled: true
-    host: 175.27.255.29
+    host: 127.0.0.1
     port: 19530
     collection-name: agent_memories_v2
     vector-dimensions: 1024

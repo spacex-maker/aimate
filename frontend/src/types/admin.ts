@@ -37,3 +37,16 @@ export interface HostLoadMetric {
   memAvailablePercent: number | null
   rootFsUsedPercent: number | null
 }
+
+/** 各组件连接状态（与启动摘要一致） */
+export interface ComponentStatusDto {
+  server: { port: string; javaVersion: string; virtualThreadEnabled: boolean }
+  mysql: { ok: boolean; message: string }
+  milvus: { ok: boolean; host: string; port: number; collectionName: string; dimensions: number; message: string | null }
+  llm: {
+    primary: { name: string; model: string; keyOk: boolean }
+    fallback: { name: string; model: string; keyOk: boolean }
+  }
+  embedding: { ok: boolean; model: string; dimensions: number; baseUrl: string }
+  docker: { ok: boolean; version: string | null; enabled: boolean; image: string | null; message: string | null }
+}

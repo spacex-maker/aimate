@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { adminApi } from '../api/admin'
+import { ComponentStatusCard } from '../components/admin/ComponentStatusCard'
 import { useAuth } from '../hooks/useAuth'
 
 export function AdminContainerPage() {
@@ -7,6 +8,10 @@ export function AdminContainerPage() {
   const { data = [], isLoading, refetch } = useQuery({
     queryKey: ['admin-containers'],
     queryFn: () => adminApi.listContainers(),
+  })
+  const { data: componentStatus, isLoading: statusLoading } = useQuery({
+    queryKey: ['admin-component-status'],
+    queryFn: () => adminApi.getComponentStatus(),
   })
 
   if (!user || user.role !== 'ADMIN') {
@@ -28,7 +33,12 @@ export function AdminContainerPage() {
         </button>
       </div>
 
-      <div className="flex-1 overflow-auto px-6 py-4">
+      <div className="flex-1 overflow-auto px-6 py-4 space-y-4">
+        {!statusLoading && componentStatus && (
+          <ComponentStatusCard status={componentStatus} />
+        )}
+
+      <div>
         {isLoading ? (
           <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
         ) : data.length === 0 ? (
@@ -71,6 +81,7 @@ export function AdminContainerPage() {
             </tbody>
           </table>
         )}
+      </div>
       </div>
     </div>
   )

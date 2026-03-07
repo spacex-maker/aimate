@@ -5,6 +5,7 @@ import { X, Activity, Box, RefreshCw, Users, SlidersHorizontal } from 'lucide-re
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { adminApi } from '../../api/admin'
+import { ComponentStatusCard } from './ComponentStatusCard'
 import type { HostResourceStatusDto, SystemModelDto, ToolSettingsDto } from '../../types/agent'
 import type { AdminUserListItem, SystemConfigItem, UserContainerStatus } from '../../types/admin'
 import { useHostStatusSocket } from '../../hooks/useHostStatusSocket'
@@ -168,6 +169,10 @@ function ContainerMonitorContent() {
     queryKey: ['admin-host-status'],
     queryFn: () => adminApi.getHostStatus(),
   })
+  const { data: componentStatus } = useQuery({
+    queryKey: ['admin-component-status'],
+    queryFn: () => adminApi.getComponentStatus(),
+  })
 
   const [liveHostStatus, setLiveHostStatus] = useState<HostResourceStatusDto | null>(null)
   useHostStatusSocket(true, (status) => {
@@ -224,6 +229,8 @@ function ContainerMonitorContent() {
             {isFetching ? '刷新中…' : '刷新'}
           </button>
         </div>
+
+        {componentStatus && <ComponentStatusCard status={componentStatus} />}
 
         {effectiveHostStatus && (
           <div className="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 flex flex-wrap items-center gap-x-6 gap-y-1.5 text-[11px]">
