@@ -53,13 +53,14 @@ export function useAgentSocket(
         webSocketFactory: () => new SockJS(wsUrl) as WebSocket,
         reconnectDelay: 3000,
         connectHeaders: token ? { Authorization: `Bearer ${token}` } : {},
+        // 生产环境传 no-op，避免 STOMP 内部调用 this.debug() 报错
         debug: import.meta.env.DEV
           ? (msg) => {
               const m = msg.trim()
               if (m.startsWith('>>>')) console.log('[STOMP 发送]', m.slice(0, 120))
               else if (m.startsWith('<<<')) console.log('[STOMP 接收]', m.slice(0, 120))
             }
-          : undefined,
+          : () => {},
         onConnect: () => {
           client.subscribe(topic, (frame) => {
             if (import.meta.env.DEV) {

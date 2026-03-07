@@ -27,7 +27,7 @@ agent:
       model: gpt-4o
       timeout-seconds: 120
   embedding:
-    base-url: http://175.27.255.29:11434/v1
+    base-url: http://192.168.0.163:11434/v1
     api-key: ollama
     model: bge-m3
     dimensions: 1024
@@ -46,7 +46,7 @@ agent:
       script-idle-timeout-seconds: 90
   milvus:
     enabled: true
-    host: 175.27.255.29
+    host: 127.0.0.1
     port: 19530
     collection-name: agent_memories_v2
     vector-dimensions: 1024
