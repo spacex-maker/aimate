@@ -192,8 +192,8 @@ export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+    <div className="flex-1 min-w-0 overflow-y-auto">
+      <div className="max-w-3xl mx-auto px-4 py-6 space-y-6 min-w-0">
         {/* 历史消息：按条展示；重试时流式内容插到被重试用户消息下方或下一条 assistant 位置 */}
         {hasHistory && (
           <>
@@ -226,9 +226,9 @@ export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning
               const messageRow = (
                 <div
                   key={i}
-                  className={`group ${msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}`}
+                  className={`group min-w-0 ${msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}`}
                 >
-                  <div className={msg.role === 'user' ? 'flex flex-col items-end gap-1.5 max-w-[85%]' : 'flex flex-col items-start gap-1.5 max-w-[85%]'}>
+                  <div className={`min-w-0 w-full flex flex-col gap-1.5 max-w-[85%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                   {/* AI 回复消息卡上方：思考（展开后含思考文字 + 工具调用，工具显示在思考内容下方） */}
                   {msg.role === 'assistant' && (msg.thinkingContent || (msg.toolCalls && msg.toolCalls.length > 0)) && (
                     <div className="w-full min-w-0 mb-2">
@@ -274,7 +274,7 @@ export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning
                     </div>
                   )}
                   <div
-                    className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                    className={`min-w-0 max-w-full rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                       msg.role === 'user'
                         ? 'rounded-tr-md bg-white/10 text-white/95'
                         : 'rounded-tl-md bg-white/5 text-white/80'
@@ -301,7 +301,7 @@ export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning
                     {msg.role === 'assistant' ? (
                       <MarkdownContent content={msg.content || (msg.messageStatus === 'ANSWERING' ? '' : '(无内容)')} className="break-words" />
                     ) : (
-                      <span className="whitespace-pre-wrap break-words">{msg.content || ''}</span>
+                      <span className="block whitespace-pre-wrap break-all">{msg.content || ''}</span>
                   )}
                   {msg.createTime && (
                     <div className="mt-1 text-[10px] text-white/30 text-right">
@@ -355,10 +355,10 @@ export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning
         )}
         {/* 当前轮用户首条消息（无历史时展示；有历史时由上面展示） */}
         {userMessage && !hasHistory && (
-          <div className="group flex justify-end gap-2 items-end">
+          <div className="group min-w-0 flex justify-end gap-2 items-end">
             {/* 首条无 id 时不显示重试；重试需传 userMessageId */}
-            <div className="max-w-[85%] rounded-2xl rounded-tr-md bg-white/10 px-4 py-3 text-sm text-white/95 leading-relaxed">
-              {userMessage}
+            <div className="min-w-0 max-w-[85%] rounded-2xl rounded-tr-md bg-white/10 px-4 py-3 text-sm text-white/95 leading-relaxed">
+              <span className="block whitespace-pre-wrap break-all">{userMessage}</span>
             </div>
           </div>
         )}

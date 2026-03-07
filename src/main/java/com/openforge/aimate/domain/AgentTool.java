@@ -28,7 +28,7 @@ import lombok.*;
 @Entity
 @Table(
     name = "agent_tools",
-    uniqueConstraints = @UniqueConstraint(name = "uq_tool_name", columnNames = "tool_name")
+    uniqueConstraints = @UniqueConstraint(name = "uq_tool_name_user", columnNames = { "tool_name", "user_id" })
 )
 public class AgentTool extends BaseEntity {
 
@@ -85,4 +85,8 @@ public class AgentTool extends BaseEntity {
     @Builder.Default
     @Column(name = "is_system", nullable = false)
     private Boolean isSystem = false;
+
+    /** 所属用户 ID：null 表示系统工具（不可被用户修改/删除），非空表示用户创建的工具。 */
+    @Column(name = "user_id")
+    private Long userId;
 }

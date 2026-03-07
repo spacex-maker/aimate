@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Bot, Brain, Cpu, KeyRound, LayoutDashboard, LogOut, Settings2 } from 'lucide-react'
+import { Bot, Brain, Cpu, KeyRound, LayoutDashboard, LogOut, Settings2, Wrench } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../hooks/useAuth'
@@ -11,6 +11,7 @@ const baseLinks = [
   { to: '/memory', label: '长期记忆', icon: Brain },
   { to: '/api-keys', label: 'API 密钥', icon: KeyRound },
   { to: '/embedding-models', label: '向量模型', icon: Cpu },
+  { to: '/tools', label: '我的工具', icon: Wrench },
 ]
 
 export function Navbar() {

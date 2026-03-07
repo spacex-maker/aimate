@@ -10,6 +10,7 @@ import { SessionPage } from './pages/SessionPage'
 import { MemoryPage } from './pages/MemoryPage'
 import { ApiKeyPage } from './pages/ApiKeyPage'
 import { EmbeddingModelPage } from './pages/EmbeddingModelPage'
+import { ToolsPage } from './pages/ToolsPage'
 import { AdminContainerPage } from './pages/AdminContainerPage'
 
 const queryClient = new QueryClient({
@@ -91,6 +92,17 @@ export default function App() {
               <RequireAuth>
                 <AppLayout>
                   <EmbeddingModelPage />
+                </AppLayout>
+              </RequireAuth>
+            }
+          />
+
+          <Route
+            path="/tools"
+            element={
+              <RequireAuth>
+                <AppLayout>
+                  <ToolsPage />
                 </AppLayout>
               </RequireAuth>
             }

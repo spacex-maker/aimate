@@ -5,7 +5,19 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
  * 每用户一个独立 Linux 容器的配置：隔离执行环境，可安全执行任意命令。
- * 更标准做法：资源限制（memory/cpus）、只读根盘+tmpfs、非 root 运行；可选改用 Docker Engine API（如 docker-java）替代 CLI。
+ *
+ * 安全加固（在 UserContainerManager 中统一生效）：
+ * - 固定启用：--security-opt=no-new-privileges、--cap-drop=ALL --cap-add=CHOWN（防提权、仅保留 CHOWN 供 apt/chown）。
+ * - 可选：read-only 根盘 + tmpfs /tmp、runAsUser 非 root，进一步降低风险。
+ * 注意：容器逃逸无法完全杜绝（如内核 0day），当前配置旨在显著降低提权与逃逸面。
+ *
+ * 能力收紧后，用户容器内不可用或受限的常见操作：
+ * - ping / traceroute：需要 CAP_NET_RAW，已去掉，会报 Operation not permitted。
+ * - mount / umount：需要 CAP_SYS_ADMIN，不可用。
+ * - su / sudo 提权：no-new-privileges 下 setuid 无法获得新权限，无法真正提权。
+ * - 修改系统时间（date -s）、加载内核模块、ptrace 调试其他进程等：对应能力已去掉，不可用。
+ * - 绑定 &lt;1024 的端口：部分场景需要 CAP_NET_BIND_SERVICE，未添加；若需可再按需 cap-add。
+ *
  * 镜像为最小化 Linux（如 debian:bookworm-slim）；python3/node 等由 AI 通过 install_container_package 安装。
  */
 @ConfigurationProperties(prefix = "agent.script.docker")

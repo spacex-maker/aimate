@@ -38,10 +38,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -505,7 +502,7 @@ public class AgentLoopService {
             for (Tool t : tools) haveNames.add(t.function().name());
             for (String name : toolsCreatedThisRun) {
                 if (!haveNames.contains(name)) {
-                    toolRepository.findByToolName(name).map(this::toTool).ifPresent(t -> {
+                    findToolByNameAndUser(name, userId).map(this::toTool).ifPresent(t -> {
                         tools.add(t);
                         haveNames.add(name);
                     });
@@ -661,7 +658,7 @@ public class AgentLoopService {
         }
         // Built-in: create_tool — 编写工具的工具，将新工具注册到 agent_tools 表
         if ("create_tool".equals(toolName)) {
-            return executeCreateTool(arguments);
+            return executeCreateTool(arguments, userId);
         }
         // Built-in: install_container_package — 在用户隔离的 Linux 容器内安装软件（如 python3、nodejs）
         if ("install_container_package".equals(toolName)) {
@@ -676,7 +673,7 @@ public class AgentLoopService {
             return executeWriteContainerFile(sessionId, arguments, userId);
         }
 
-        AgentTool tool = toolRepository.findByToolName(toolName).orElse(null);
+        AgentTool tool = findToolByNameAndUser(toolName, userId).orElse(null);
         if (tool == null) return "[ToolError] Unknown tool: " + toolName;
 
         return switch (tool.getToolType()) {
@@ -797,7 +794,10 @@ public class AgentLoopService {
      * Built-in create_tool: 编写工具的工具。将新工具注册到 agent_tools 表，仅支持脚本类型（PYTHON_SCRIPT / NODE_SCRIPT / SHELL_CMD）。
      * 执行逻辑仍为占位，后续可接入真实脚本执行引擎。
      */
-    private String executeCreateTool(String argumentsJson) {
+    private String executeCreateTool(String argumentsJson, Long userId) {
+        if (userId == null) {
+            return "[ToolError] create_tool 需要已登录用户（工具将保存为您的自定义工具）。";
+        }
         try {
             JsonNode args = objectMapper.readTree(argumentsJson);
             String toolName = args.path("tool_name").asText("").trim();
@@ -837,7 +837,7 @@ public class AgentLoopService {
 
             objectMapper.readTree(inputSchemaRaw);
 
-            AgentTool entity = toolRepository.findByToolName(toolName).orElse(null);
+            AgentTool entity = toolRepository.findByToolNameAndUserId(toolName, userId).orElse(null);
             if (entity != null) {
                 entity.setToolDescription(toolDescription);
                 entity.setInputSchema(inputSchemaRaw);
@@ -846,8 +846,11 @@ public class AgentLoopService {
                 entity.setEntryPoint(entryPoint);
                 entity.setIsActive(true);
                 toolRepository.save(entity);
-                log.info("[Agent] create_tool: 已更新工具 {}", toolName);
+                log.info("[Agent] create_tool: 已更新用户工具 {} userId={}", toolName, userId);
                 return "工具已更新: " + toolName + "。后续对话中可调用此工具。";
+            }
+            if (toolRepository.findByToolNameAndUserIdIsNull(toolName).isPresent()) {
+                return "[ToolError] 工具名 " + toolName + " 与系统工具重名，请换一个名称。";
             }
             entity = AgentTool.builder()
                     .toolName(toolName)
@@ -857,9 +860,10 @@ public class AgentLoopService {
                     .scriptContent(scriptContent.isEmpty() ? null : scriptContent)
                     .entryPoint(entryPoint)
                     .isActive(true)
+                    .userId(userId)
                     .build();
             toolRepository.save(entity);
-            log.info("[Agent] create_tool: 已注册新工具 {}", toolName);
+            log.info("[Agent] create_tool: 已注册用户工具 {} userId={}", toolName, userId);
             return "工具已注册: " + toolName + "。后续对话中可调用此工具。注意：脚本类工具当前为占位执行，实际运行需接入执行引擎。";
         } catch (JsonProcessingException e) {
             return "[ToolError] input_schema 须为合法 JSON 对象: " + e.getMessage();
@@ -1217,21 +1221,30 @@ public class AgentLoopService {
         Set<String> added = new java.util.LinkedHashSet<>();
         for (String id : relevantIds) {
             if (id == null || !added.add(id)) continue;
-            toolRepository.findByToolName(id).map(this::toTool).ifPresent(fromSearch::add);
+            findToolByNameAndUser(id, userId).map(this::toTool).ifPresent(fromSearch::add);
         }
         return ensureSystemToolsFirst(fromSearch, userId);
     }
 
-    /** 从 agent_tools 表加载所有启用工具；若表为空则退回内置三件套。按用户工具开关过滤系统工具。 */
+    /** 从 agent_tools 表加载系统工具 + 当前用户工具；按用户工具开关过滤。 */
     private List<Tool> loadAllTools(Long userId) {
-        List<Tool> base = toolRepository.findByIsActiveTrue().stream()
-                .map(this::toTool)
-                .toList();
-        List<Tool> result = new ArrayList<>(base);
-        if (result.isEmpty()) {
+        List<AgentTool> systemTools = toolRepository.findByUserIdIsNullAndIsActiveTrue();
+        List<AgentTool> userTools = userId != null ? toolRepository.findByUserIdAndIsActiveTrue(userId) : List.of();
+        List<Tool> base = new ArrayList<>();
+        for (AgentTool t : systemTools) base.add(toTool(t));
+        for (AgentTool t : userTools) base.add(toTool(t));
+        if (base.isEmpty()) {
             log.debug("[Agent] agent_tools 表为空，使用内置工具（可执行 seed_builtin_tools.sql 将内置工具入库）");
         }
-        return ensureSystemToolsFirst(result, userId);
+        return ensureSystemToolsFirst(base, userId);
+    }
+
+    /** 先查系统工具，再查当前用户工具（用于执行与工具列表）。 */
+    private Optional<AgentTool> findToolByNameAndUser(String toolName, Long userId) {
+        Optional<AgentTool> sys = toolRepository.findByToolNameAndUserIdIsNull(toolName);
+        if (sys.isPresent()) return sys;
+        if (userId != null) return toolRepository.findByToolNameAndUserId(toolName, userId);
+        return Optional.empty();
     }
 
     private static final Set<String> SYSTEM_TOOL_NAMES_SET = Set.of("recall_memory", "store_memory", "tavily_search");

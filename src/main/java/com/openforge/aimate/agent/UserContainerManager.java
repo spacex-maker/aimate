@@ -219,12 +219,21 @@ public class UserContainerManager {
         }
     }
 
-    /** 按配置组装 docker run：资源限制、只读根盘+tmpfs、非 root 用户等标准选项 */
+    /**
+     * 按配置组装 docker run：资源限制、只读根盘+tmpfs、非 root 用户、防提权与能力收紧。
+     * 安全说明：
+     * - no-new-privileges：禁止进程通过 setuid/setgid 获得更高权限，降低容器内提权风险。
+     * - cap-drop=ALL 且仅 cap-add=CHOWN：CHOWN 为 apt 安装及脚本 chown 所需，其余能力全部去掉。
+     * 用户容器内不可用或受限的常见操作见 ScriptDockerProperties 类注释「能力收紧后不可用」。
+     */
     private List<String> buildDockerRunCommand(String containerName, String image) {
         List<String> cmd = new ArrayList<>();
         cmd.add("docker");
         cmd.add("run");
         cmd.add("-d");
+        cmd.add("--security-opt=no-new-privileges");
+        cmd.add("--cap-drop=ALL");
+        cmd.add("--cap-add=CHOWN");  // apt 安装及脚本 chown 需要，否则部分包 postinst 会失败
         // 使用默认网络，以便 AI 通过 install_container_package 在容器内执行 apt-get install
         if (scriptDockerProperties.isMemoryLimitSet()) {
             cmd.add("--memory");

@@ -51,12 +51,13 @@ public class ToolIndexService {
     private final HttpClient httpClient;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
-    /** Dimensions for which we have already written tool index (avoids re-index on every search). */
-    private final Set<Integer> populatedDimensions = ConcurrentHashMap.newKeySet();
+    /** (dimension, userId) 已写入索引的 key，避免重复全量索引。 */
+    private final Set<String> populatedKeys = ConcurrentHashMap.newKeySet();
 
     /**
      * Returns tool IDs most relevant to the query. Uses the current user's embedding
      * when userId is set (same as memories), so no OpenAI key is used if user has Ollama etc.
+     * Indexes system tools + current user's tools on first search for that (dimension, userId).
      */
     public List<String> searchRelevantTools(String queryText, int topK, @Nullable Long userId) {
         if (milvusClient == null || queryText == null || queryText.isBlank()) {
@@ -83,9 +84,10 @@ public class ToolIndexService {
             String collectionName = MilvusCollectionManager.toolIndexCollectionName(dimension);
             if (!collectionManager.ensureToolIndexCollection(dimension)) return List.of();
 
-            if (!populatedDimensions.contains(dimension)) {
-                indexAllToolsWith(client, dimension);
-                populatedDimensions.add(dimension);
+            String popKey = dimension + "_" + (userId != null ? userId : "null");
+            if (!populatedKeys.contains(popKey)) {
+                indexAllToolsWith(client, dimension, userId);
+                populatedKeys.add(popKey);
             }
 
             List<Float> vector = client.embed(queryText);
@@ -114,10 +116,13 @@ public class ToolIndexService {
     /**
      * Index a single tool by name (e.g. after create_tool). Uses the same embedding resolution as
      * searchRelevantTools so the tool is findable in the next semantic search.
+     * User tool: lookup by toolName + userId; system tool: lookup by toolName + userId null.
      */
     public void indexToolByName(String toolName, @Nullable Long userId) {
         if (milvusClient == null || toolName == null || toolName.isBlank()) return;
-        var opt = toolRepository.findByToolName(toolName);
+        var opt = userId != null
+                ? toolRepository.findByToolNameAndUserId(toolName, userId)
+                : toolRepository.findByToolNameAndUserIdIsNull(toolName);
         if (opt.isEmpty()) return;
         AgentTool t = opt.get();
         EmbeddingClient client;
@@ -150,14 +155,22 @@ public class ToolIndexService {
         log.debug("[ToolIndex] Indexed tool: {}", toolName);
     }
 
-    private void indexAllToolsWith(EmbeddingClient client, int dimension) {
+    private void indexAllToolsWith(EmbeddingClient client, int dimension, @Nullable Long userId) {
         String coll = MilvusCollectionManager.toolIndexCollectionName(dimension);
-        toolRepository.findByIsActiveTrue().forEach(t -> {
+        List<AgentTool> systemTools = toolRepository.findByUserIdIsNullAndIsActiveTrue();
+        List<AgentTool> userTools = userId != null ? toolRepository.findByUserIdAndIsActiveTrue(userId) : List.of();
+        for (AgentTool t : systemTools) {
             String schemaText = t.getInputSchema() != null && t.getInputSchema().length() <= 2000
                     ? t.getInputSchema()
                     : (t.getInputSchema() != null ? t.getInputSchema().substring(0, 2000) + "..." : "");
             indexToolInto(client, coll, t.getToolName(), t.getToolName(), t.getToolDescription(), schemaText);
-        });
+        }
+        for (AgentTool t : userTools) {
+            String schemaText = t.getInputSchema() != null && t.getInputSchema().length() <= 2000
+                    ? t.getInputSchema()
+                    : (t.getInputSchema() != null ? t.getInputSchema().substring(0, 2000) + "..." : "");
+            indexToolInto(client, coll, t.getToolName(), t.getToolName(), t.getToolDescription(), schemaText);
+        }
     }
 
     private void indexToolInto(EmbeddingClient client, String collectionName,
