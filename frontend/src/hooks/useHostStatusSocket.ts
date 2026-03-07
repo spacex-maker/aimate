@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Client } from '@stomp/stompjs'
 import type { HostResourceStatusDto } from '../types/agent'
+import { getWsUrl } from '../api/httpClient'
 
 function getToken(): string | null {
   try {
@@ -10,13 +11,6 @@ function getToken(): string | null {
   } catch {
     return null
   }
-}
-
-function getWsUrl(): string {
-  const base = (import.meta.env.VITE_API_BASE ?? '').toString().trim()
-  if (!base) return '/ws'
-  const origin = base.replace(/\/$/, '')
-  return (origin.startsWith('https') ? origin.replace(/^https/, 'wss') : origin.replace(/^http/, 'ws')) + '/ws'
 }
 
 /**

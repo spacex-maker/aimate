@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Client } from '@stomp/stompjs'
 import type { AgentEvent } from '../types/agent'
+import { getWsUrl } from '../api/httpClient'
 
 function getToken(): string | null {
   try {
@@ -21,15 +22,8 @@ function getToken(): string | null {
  * 4. 兜底：若前端连接/订阅晚于 Agent 开始（例如先创建会话再跳转），会漏事件；
  *    因此 onConnected 时必须用 HTTP 拉一次会话 + 消息列表，保证界面有最新状态。
  *
- * 开发环境：Vite proxy 把 /api 和 /ws 转到后端，wsUrl 用相对路径 /ws 即可。
- * 独立部署（如 Netlify）：设置 VITE_API_BASE 后，WS 地址为同源的 ws(s) + /ws。
+ * wsUrl 由 httpClient.getWsUrl() 提供：本地访问→本地后端 /ws，域名访问→VITE_API_BASE 对应 /ws。
  */
-function getWsUrl(): string {
-  const base = (import.meta.env.VITE_API_BASE ?? '').toString().trim()
-  if (!base) return '/ws'
-  const origin = base.replace(/\/$/, '')
-  return (origin.startsWith('https') ? origin.replace(/^https/, 'wss') : origin.replace(/^http/, 'ws')) + '/ws'
-}
 
 export function useAgentSocket(
   sessionId: string | null,

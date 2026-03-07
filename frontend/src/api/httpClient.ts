@@ -2,17 +2,36 @@
  * Central HTTP client.
  * Automatically attaches the JWT from localStorage to every request.
  * On 401, clears auth state, reminds user to re-login, and redirects to /login.
- * 独立部署（如 Netlify）时设置 VITE_API_BASE 为后端地址（如 https://api.example.com）。
+ *
+ * 后端地址规则（按前端访问方式）：
+ * - 前端通过本地访问（localhost / 127.0.0.1）→ 请求本地后端（默认 http://localhost:9299，可用 VITE_API_BASE 覆盖）
+ * - 前端通过域名访问 → 使用 VITE_API_BASE（同源部署时可不设，用相对路径）
  */
 
 import toast from 'react-hot-toast'
 
 const AUTH_KEY = 'ofx_auth_user'
+const DEFAULT_LOCAL_BACKEND = 'http://localhost:9299'
 
-/** 独立部署时的后端 origin，开发环境为空（走 Vite proxy）。 */
+function isLocalHost(): boolean {
+  if (typeof window === 'undefined') return false
+  const h = window.location.hostname
+  return h === 'localhost' || h === '127.0.0.1'
+}
+
+/** 根据当前访问方式返回后端 origin：本地访问用本地后端，域名访问用 VITE_API_BASE。 */
 export function getApiBase(): string {
-  const b = (import.meta.env.VITE_API_BASE ?? '').toString().trim()
-  return b ? b.replace(/\/$/, '') : ''
+  const envBase = (import.meta.env.VITE_API_BASE ?? '').toString().trim().replace(/\/$/, '')
+  if (isLocalHost()) return envBase || DEFAULT_LOCAL_BACKEND
+  return envBase
+}
+
+/** WebSocket 根地址：与 getApiBase 同源，用于 STOMP 连接。 */
+export function getWsUrl(): string {
+  const base = getApiBase()
+  if (!base) return '/ws'
+  const origin = base.replace(/\/$/, '')
+  return (origin.startsWith('https') ? origin.replace(/^https/, 'wss') : origin.replace(/^http/, 'ws')) + '/ws'
 }
 
 /** API 请求完整 URL：相对路径 + 可选的 VITE_API_BASE 前缀。 */

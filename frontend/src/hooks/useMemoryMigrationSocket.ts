@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Client } from '@stomp/stompjs'
 import type { MemoryMigrationEvent } from '../types/memory'
+import { getWsUrl } from '../api/httpClient'
 
 function getToken(): string | null {
   try {
@@ -8,13 +9,6 @@ function getToken(): string | null {
     if (!raw) return null
     return (JSON.parse(raw) as { token?: string }).token ?? null
   } catch { return null }
-}
-
-function getWsUrl(): string {
-  const base = (import.meta.env.VITE_API_BASE ?? '').toString().trim()
-  if (!base) return '/ws'
-  const origin = base.replace(/\/$/, '')
-  return (origin.startsWith('https') ? origin.replace(/^https/, 'wss') : origin.replace(/^http/, 'ws')) + '/ws'
 }
 
 export function useMemoryMigrationSocket(
