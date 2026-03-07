@@ -1,4 +1,4 @@
-import type { UpdateUserToolRequest, UserToolDto } from '../types/tools'
+import type { CreateUserToolRequest, UpdateUserToolRequest, UserToolDto } from '../types/tools'
 import { http } from './httpClient'
 
 function base(userId: number) {
@@ -8,6 +8,13 @@ function base(userId: number) {
 export const toolsApi = {
   list: (userId: number) =>
     http<UserToolDto[]>(base(userId)),
+
+  create: (userId: number, body: CreateUserToolRequest) =>
+    http<UserToolDto>(base(userId), {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
 
   update: (userId: number, toolId: number, body: UpdateUserToolRequest) =>
     http<UserToolDto>(`${base(userId)}/${toolId}`, {

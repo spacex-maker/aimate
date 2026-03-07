@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Wrench, Pencil, Trash2, Shield } from 'lucide-react'
+import { Wrench, Pencil, Trash2, Shield, Plus } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { toolsApi } from '../api/tools'
 import { useAuth } from '../hooks/useAuth'
-import type { UserToolDto, UpdateUserToolRequest } from '../types/tools'
+import type { CreateUserToolRequest, UserToolDto, UpdateUserToolRequest } from '../types/tools'
 
 export function ToolsPage() {
   const { user } = useAuth()
@@ -12,6 +12,8 @@ export function ToolsPage() {
   const userId = user?.userId
 
   const [editing, setEditing] = useState<UserToolDto | null>(null)
+  const [showCreate, setShowCreate] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<UserToolDto | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
 
   const { data: tools = [], isLoading } = useQuery({
@@ -26,6 +28,16 @@ export function ToolsPage() {
     onSuccess: () => {
       toast.success('已更新')
       setEditing(null)
+      if (userId != null) queryClient.invalidateQueries({ queryKey: ['user-tools', userId] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const createMutation = useMutation({
+    mutationFn: (body: CreateUserToolRequest) => toolsApi.create(userId!, body),
+    onSuccess: () => {
+      toast.success('已创建')
+      setShowCreate(false)
       if (userId != null) queryClient.invalidateQueries({ queryKey: ['user-tools', userId] })
     },
     onError: (e: Error) => toast.error(e.message),
@@ -53,11 +65,21 @@ export function ToolsPage() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex-shrink-0 px-6 py-4 border-b border-white/10">
-        <h1 className="text-base font-semibold text-white">我的工具</h1>
-        <p className="text-xs text-white/40 mt-0.5">
-          系统工具仅展示不可操作；您创建的工具可编辑、启用/停用或删除
-        </p>
+      <div className="flex-shrink-0 px-6 py-4 border-b border-white/10 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-base font-semibold text-white">我的工具</h1>
+          <p className="text-xs text-white/40 mt-0.5">
+            系统工具仅展示不可操作；您创建的工具可编辑、启用/停用或删除
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors"
+        >
+          <Plus className="w-4 h-4" />
+          新增工具
+        </button>
       </div>
 
       <div className="flex-1 overflow-auto px-6 py-4">
@@ -89,7 +111,7 @@ export function ToolsPage() {
                       tool={t}
                       isSystem={false}
                       onEdit={() => setEditing(t)}
-                      onDelete={() => deleteMutation.mutate(t.id)}
+                      onDelete={() => setConfirmDelete(t)}
                       isDeleting={deletingId === t.id}
                     />
                   ))}
@@ -100,6 +122,14 @@ export function ToolsPage() {
         )}
       </div>
 
+      {showCreate && (
+        <CreateToolModal
+          onClose={() => setShowCreate(false)}
+          onCreate={(body) => createMutation.mutate(body)}
+          isCreating={createMutation.isPending}
+        />
+      )}
+
       {editing && (
         <EditToolModal
           tool={editing}
@@ -109,6 +139,40 @@ export function ToolsPage() {
           }}
           isSaving={updateMutation.isPending}
         />
+      )}
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setConfirmDelete(null)}>
+          <div
+            className="bg-[#1a1a1a] border border-white/10 rounded-xl shadow-xl max-w-sm w-full mx-4 p-5 text-left"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-semibold text-white/90 mb-2">确认删除</h3>
+            <p className="text-xs text-white/60 mb-4">
+              确定要删除工具 <span className="font-mono text-white/80">{confirmDelete.toolName}</span> 吗？此操作不可恢复。
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(null)}
+                className="px-3 py-1.5 text-xs rounded-lg border border-white/20 text-white/70 hover:bg-white/10"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteMutation.mutate(confirmDelete.id)
+                  setConfirmDelete(null)
+                }}
+                disabled={deletingId === confirmDelete.id}
+                className="px-3 py-1.5 text-xs rounded-lg bg-red-600 text-white hover:bg-red-500 disabled:opacity-50"
+              >
+                {deletingId === confirmDelete.id ? '删除中…' : '确定删除'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -164,6 +228,174 @@ function ToolRow({
         </div>
       )}
     </li>
+  )
+}
+
+const INPUT_SCHEMA_PLACEHOLDER = `{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"}},"required":["query"]}`
+
+const RESERVED_NAMES = [
+  'recall_memory', 'store_memory', 'tavily_search', 'create_tool',
+  'install_container_package', 'run_container_cmd', 'write_container_file',
+]
+
+function CreateToolModal({
+  onClose,
+  onCreate,
+  isCreating,
+}: {
+  onClose: () => void
+  onCreate: (body: CreateUserToolRequest) => void
+  isCreating: boolean
+}) {
+  const [toolName, setToolName] = useState('')
+  const [toolDescription, setToolDescription] = useState('')
+  const [toolType, setToolType] = useState<CreateUserToolRequest['toolType']>('PYTHON_SCRIPT')
+  const [inputSchema, setInputSchema] = useState('')
+  const [scriptContent, setScriptContent] = useState('')
+  const [entryPoint, setEntryPoint] = useState('')
+  const [nameError, setNameError] = useState<string | null>(null)
+  const [schemaError, setSchemaError] = useState<string | null>(null)
+
+  const validateName = (name: string) => {
+    const t = name.trim()
+    if (!t) return '工具名不能为空'
+    if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(t)) return '须以字母开头，仅含字母、数字、下划线（如 get_weather）'
+    if (RESERVED_NAMES.includes(t)) return '不能与内置工具重名'
+    return null
+  }
+
+  const validateSchema = (json: string) => {
+    const t = json.trim()
+    if (!t) return '参数结构不能为空'
+    try {
+      const o = JSON.parse(t)
+      if (o === null || Array.isArray(o)) return '须为 JSON 对象'
+      return null
+    } catch {
+      return '须为合法 JSON'
+    }
+  }
+
+  const handleSubmit = () => {
+    const nErr = validateName(toolName)
+    const sErr = validateSchema(inputSchema)
+    setNameError(nErr)
+    setSchemaError(sErr)
+    if (nErr || sErr) return
+    const name = toolName.trim()
+    const desc = toolDescription.trim()
+    if (!desc) {
+      toast.error('请填写工具描述')
+      return
+    }
+    const schema = inputSchema.trim()
+    const script = scriptContent.trim() || undefined
+    const entry = entryPoint.trim() || undefined
+    onCreate({
+      toolName: name,
+      toolDescription: desc,
+      inputSchema: schema,
+      toolType,
+      scriptContent: script,
+      entryPoint: entry,
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 overflow-y-auto" onClick={onClose}>
+      <div
+        className="bg-[#1a1a1a] border border-white/10 rounded-xl shadow-xl max-w-lg w-full my-4 p-5 text-left"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-sm font-semibold text-white/90 mb-1">新增工具</h3>
+        <p className="text-xs text-white/45 mb-4">与 AI 生成工具规范一致：工具名、描述、参数结构（JSON Schema）、脚本类型及可选脚本内容</p>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-white/50 block mb-1">工具名 <span className="text-white/30">（唯一标识，字母开头，仅字母/数字/下划线）</span></label>
+            <input
+              type="text"
+              value={toolName}
+              onChange={(e) => { setToolName(e.target.value); setNameError(null) }}
+              onBlur={() => setNameError(validateName(toolName))}
+              placeholder="例如 get_weather、calc_sum"
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-blue-500/60 font-mono"
+            />
+            {nameError && <p className="text-xs text-red-400 mt-0.5">{nameError}</p>}
+          </div>
+          <div>
+            <label className="text-xs text-white/50 block mb-1">工具描述 <span className="text-white/30">（何时调用此工具，供模型理解）</span></label>
+            <textarea
+              value={toolDescription}
+              onChange={(e) => setToolDescription(e.target.value)}
+              rows={2}
+              placeholder="例如：根据城市名查询当前天气"
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-blue-500/60"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-white/50 block mb-1">工具类型</label>
+            <select
+              value={toolType}
+              onChange={(e) => setToolType(e.target.value as CreateUserToolRequest['toolType'])}
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500/60"
+            >
+              <option value="PYTHON_SCRIPT">PYTHON_SCRIPT（Python 脚本）</option>
+              <option value="NODE_SCRIPT">NODE_SCRIPT（Node.js 脚本）</option>
+              <option value="SHELL_CMD">SHELL_CMD（Shell 命令）</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-white/50 block mb-1">参数结构 input_schema <span className="text-white/30">（JSON 对象，定义工具入参）</span></label>
+            <textarea
+              value={inputSchema}
+              onChange={(e) => { setInputSchema(e.target.value); setSchemaError(null) }}
+              onBlur={() => setSchemaError(validateSchema(inputSchema))}
+              rows={4}
+              placeholder={INPUT_SCHEMA_PLACEHOLDER}
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/40 focus:outline-none focus:border-blue-500/60 font-mono text-xs"
+            />
+            {schemaError && <p className="text-xs text-red-400 mt-0.5">{schemaError}</p>}
+          </div>
+          <div>
+            <label className="text-xs text-white/50 block mb-1">脚本内容 <span className="text-white/30">（可选，可后续在对话中由 AI 补充）</span></label>
+            <textarea
+              value={scriptContent}
+              onChange={(e) => setScriptContent(e.target.value)}
+              rows={4}
+              placeholder={toolType === 'PYTHON_SCRIPT' ? '# 例如：print("hello")' : toolType === 'NODE_SCRIPT' ? '// 例如：console.log("hello")' : '# 例如：echo hello'}
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/40 focus:outline-none focus:border-blue-500/60 font-mono text-xs"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-white/50 block mb-1">入口文件名 entry_point <span className="text-white/30">（可选，默认 工具名+.py/.js/.sh）</span></label>
+            <input
+              type="text"
+              value={entryPoint}
+              onChange={(e) => setEntryPoint(e.target.value)}
+              placeholder={`例如 ${toolName || 'tool_name'}.py`}
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-blue-500/60 font-mono"
+            />
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-1.5 text-xs rounded-lg border border-white/20 text-white/70 hover:bg-white/10"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={isCreating}
+            className="px-3 py-1.5 text-xs rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
+          >
+            {isCreating ? '创建中…' : '创建'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

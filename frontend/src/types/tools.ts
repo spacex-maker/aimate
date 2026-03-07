@@ -20,3 +20,13 @@ export interface UpdateUserToolRequest {
   entryPoint?: string
   isActive?: boolean
 }
+
+/** 新增用户工具请求，与 AI 生成工具规范一致 */
+export interface CreateUserToolRequest {
+  toolName: string
+  toolDescription: string
+  inputSchema: string
+  toolType: 'PYTHON_SCRIPT' | 'NODE_SCRIPT' | 'SHELL_CMD'
+  scriptContent?: string
+  entryPoint?: string
+}
