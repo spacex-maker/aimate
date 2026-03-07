@@ -26,12 +26,12 @@ export function getApiBase(): string {
   return envBase
 }
 
-/** WebSocket 根地址：与 getApiBase 同源，用于 STOMP 连接。 */
+/** WebSocket 根地址：与 getApiBase 同源，用于 STOMP/SockJS。SockJS 要求使用 http(s) 协议，不要传 ws(s)。 */
 export function getWsUrl(): string {
   const base = getApiBase()
   if (!base) return '/ws'
   const origin = base.replace(/\/$/, '')
-  return (origin.startsWith('https') ? origin.replace(/^https/, 'wss') : origin.replace(/^http/, 'ws')) + '/ws'
+  return origin + '/ws'
 }
 
 /** API 请求完整 URL：相对路径 + 可选的 VITE_API_BASE 前缀。 */
