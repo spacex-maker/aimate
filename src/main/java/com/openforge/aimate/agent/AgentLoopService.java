@@ -276,7 +276,7 @@ public class AgentLoopService {
                 String displayAnswer = (result.finalAnswer() != null && !result.finalAnswer().isBlank())
                         ? result.finalAnswer()
                         : (result.thinkingContent() != null && !result.thinkingContent().isEmpty() ? FALLBACK_EMPTY_ANSWER : "");
-                sessionMessageService.saveNewVersion(placeholderId, displayAnswer, result.thinkingContent());
+                sessionMessageService.saveNewVersion(placeholderId, displayAnswer, result.thinkingContent(), result.thinkingBlocks());
                 session = sessionRepository.findBySessionId(sessionId).orElseThrow();
                 session.setResult(displayAnswer);
                 publisher.publish(AgentEvent.stepComplete(sessionId, 3, EXECUTION_PLAN.get(2), displayAnswer));
@@ -352,7 +352,7 @@ public class AgentLoopService {
                 String displayAnswer = (result.finalAnswer() != null && !result.finalAnswer().isBlank())
                         ? result.finalAnswer()
                         : (result.thinkingContent() != null && !result.thinkingContent().isEmpty() ? FALLBACK_EMPTY_ANSWER : "");
-                sessionMessageService.saveNewVersion(assistantId, displayAnswer, result.thinkingContent());
+                sessionMessageService.saveNewVersion(assistantId, displayAnswer, result.thinkingContent(), result.thinkingBlocks());
                 session = sessionRepository.findBySessionId(sessionId).orElseThrow();
                 session.setResult(displayAnswer);
                 publisher.publish(AgentEvent.stepComplete(sessionId, 3, EXECUTION_PLAN.get(2), displayAnswer));
@@ -447,9 +447,11 @@ public class AgentLoopService {
                 toAppend.add(assistantMessage);
                 for (ToolCall toolCall : assistantMessage.toolCalls()) {
                     publisher.publish(AgentEvent.toolCall(sessionId, toolCall, finalIter));
+                    long toolStartMs = System.currentTimeMillis();
                     String toolResult = executeTool(toolCall, sessionId, userId, finalIter);
+                    long durationMs = System.currentTimeMillis() - toolStartMs;
                     publisher.publish(AgentEvent.toolResult(
-                            sessionId, toolCall.function().name(), toolResult, finalIter));
+                            sessionId, toolCall.function().name(), toolResult, finalIter, durationMs));
                     toAppend.add(Message.toolResult(toolCall.id(), toolResult));
                     maybeRememberToolResult(sessionId, toolCall.function().name(), toolResult, userId);
                 }
@@ -471,8 +473,9 @@ public class AgentLoopService {
         }
     }
 
-    /** 单条回复的 think 循环返回：最终回答 + 思考过程（供入库展示）。 */
-    private record RunResult(String finalAnswer, String thinkingContent) {}
+    /** 单条回复的 think 循环返回：最终回答 + 思考过程文本 + 标准化时间线（供入库与回放）。 */
+    private record RunResult(String finalAnswer, String thinkingContent,
+                             java.util.List<com.openforge.aimate.agent.dto.StreamBlockDto> thinkingBlocks) {}
 
     /**
      * 单条回复的 think 循环：context 来自消息表且可变，追加写回 appendToRun；每轮检查占位条是否被中断。
@@ -484,17 +487,35 @@ public class AgentLoopService {
                                                        java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse> llmCaller,
                                                        Long userId) {
         StringBuilder thinkingContent = new StringBuilder();
+        java.util.List<com.openforge.aimate.agent.dto.StreamBlockDto> blocks = new java.util.ArrayList<>();
         int iteration = 0;
         Set<String> toolsCreatedThisRun = new java.util.LinkedHashSet<>();
         while (true) {
             SessionMessage p = sessionMessageService.findById(placeholderId).orElse(null);
             if (p == null || !SessionMessage.STATUS_ANSWERING.equals(p.getMessageStatus())) {
                 log.info("[Agent:{}] Placeholder {} interrupted or gone, exit loop.", sessionId, placeholderId);
-                return new RunResult(null, thinkingContent.isEmpty() ? null : thinkingContent.toString());
+                return new RunResult(
+                        null,
+                        thinkingContent.isEmpty() ? null : thinkingContent.toString(),
+                        blocks
+                );
             }
 
             iteration++;
             publisher.publish(AgentEvent.iterationStart(sessionId, iteration));
+            // 记录第 N 轮开始（预留给前端按轮展示）
+            blocks.add(new com.openforge.aimate.agent.dto.StreamBlockDto(
+                    "iteration",
+                    iteration,
+                    "iter-" + iteration,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+            ));
 
             String queryForTools = lastUserMessageFrom(context, session.getTaskDescription());
             List<Tool> tools = loadRelevantTools(queryForTools, TOP_K_TOOLS, userId);
@@ -524,6 +545,22 @@ public class AgentLoopService {
 
             Message assistantMessage = response.firstMessage();
 
+            // 当前轮思考内容作为一个 thinking block（若有）
+            if (!currentIterReasoning.isEmpty()) {
+                blocks.add(new com.openforge.aimate.agent.dto.StreamBlockDto(
+                        "thinking",
+                        null,
+                        "iter-" + iteration + "-thinking",
+                        currentIterReasoning.toString(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        Boolean.TRUE,
+                        null
+                ));
+            }
+
             if (response.hasToolCalls()) {
                 List<Message> toAppend = new ArrayList<>();
                 Message assistantWithReasoning = Message.builder()
@@ -535,7 +572,9 @@ public class AgentLoopService {
                 toAppend.add(assistantWithReasoning);
                 for (ToolCall toolCall : assistantMessage.toolCalls()) {
                     publisher.publish(AgentEvent.toolCall(sessionId, toolCall, finalIter));
+                    long toolStartMs = System.currentTimeMillis();
                     String toolResult = executeTool(toolCall, sessionId, userId, finalIter);
+                    long durationMs = System.currentTimeMillis() - toolStartMs;
                     if ("create_tool".equals(toolCall.function().name()) && toolResult != null && !toolResult.startsWith("[ToolError]")) {
                         String createdName = parseToolNameFromCreateToolArgs(toolCall.function().arguments());
                         if (createdName != null && !createdName.isBlank()) {
@@ -544,12 +583,33 @@ public class AgentLoopService {
                         }
                     }
                     publisher.publish(AgentEvent.toolResult(
-                            sessionId, toolCall.function().name(), toolResult, finalIter));
+                            sessionId, toolCall.function().name(), toolResult, finalIter, durationMs));
                     toAppend.add(Message.toolResult(toolCall.id(), toolResult));
                     maybeRememberToolResult(sessionId, toolCall.function().name(), toolResult, userId);
 
-                    // 为历史查看构建「思考+工具」统一时间线：在思考文本中插入精简的工具调用摘要
-                    appendToolSummaryToThinking(thinkingContent, toolCall, toolResult, finalIter);
+                    // 将每次工具调用追加为一个 toolCall block，便于历史回放还原时间线（含耗时）
+                    com.openforge.aimate.llm.model.FunctionCallResult func =
+                            toolCall.function() != null
+                                    ? toolCall.function()
+                                    : new com.openforge.aimate.llm.model.FunctionCallResult("", "");
+                    com.openforge.aimate.llm.model.ToolCall callForBlock =
+                            new com.openforge.aimate.llm.model.ToolCall(
+                                    toolCall.id(),
+                                    toolCall.type(),
+                                    func
+                            );
+                    blocks.add(new com.openforge.aimate.agent.dto.StreamBlockDto(
+                            "toolCall",
+                            null,
+                            "iter-" + iteration + "-tool-" + callForBlock.id(),
+                            null,
+                            callForBlock,
+                            toolResult,
+                            null,
+                            null,
+                            null,
+                            durationMs
+                    ));
                 }
                 context.addAll(toAppend);
                 sessionMessageService.appendToRun(session, placeholderId, toAppend.toArray(new Message[0]));
@@ -561,7 +621,26 @@ public class AgentLoopService {
                     log.debug("[Agent:{}] LLM returned empty content but had reasoning ({} chars), using fallback.", sessionId, thinkingContent.length());
                     answer = FALLBACK_EMPTY_ANSWER;
                 }
-                return new RunResult(answer, thinkingContent.isEmpty() ? null : thinkingContent.toString());
+                // 最终回答作为 finalAnswer block 追加
+                if (answer != null && !answer.isBlank()) {
+                    blocks.add(new com.openforge.aimate.agent.dto.StreamBlockDto(
+                            "finalAnswer",
+                            null,
+                            "final-" + placeholderId,
+                            answer,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null
+                    ));
+                }
+                return new RunResult(
+                        answer,
+                        thinkingContent.isEmpty() ? null : thinkingContent.toString(),
+                        blocks
+                );
             }
         }
     }
@@ -597,17 +676,11 @@ public class AgentLoopService {
                                              ToolCall toolCall,
                                              String toolResult,
                                              int iteration) {
-        if (thinking == null || toolCall == null) return;
-        String name = toolCall.function() != null ? toolCall.function().name() : "";
-        String args = toolCall.function() != null && toolCall.function().arguments() != null
-                ? toolCall.function().arguments() : "";
-        thinking.append("\n\n[工具调用 第 ").append(iteration).append(" 轮] ")
-                .append(name).append("(\n  args=")
-                .append(truncateForThinking(args, 320))
-                .append("\n)");
-        if (toolResult != null && !toolResult.isBlank()) {
-            thinking.append("\n[工具结果摘要] ")
-                    .append(truncateForThinking(toolResult, 480));
+        // 已改为通过 SessionMessage.thinkingBlocksJson 标准化存储「思考 + 工具调用」时间线，
+        // 不再向 thinkingContent 里注入工具调用摘要，避免重复与错乱展示。
+        // 保留该方法以兼容旧调用点，但不再修改 thinking。
+        if (thinking == null || toolCall == null) {
+            return;
         }
     }
 

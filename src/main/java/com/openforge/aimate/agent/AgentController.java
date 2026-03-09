@@ -151,12 +151,19 @@ public class AgentController {
 
     /**
      * Load conversation history for a session (from agent_session_messages).
-     * Used by the frontend to display past messages when opening an existing session.
+     * 按需分页：limit 默认 10；不传 beforeSeq 时返回最近 N 条；传 beforeSeq 时返回该 seq 之前的 N 条（用于「加载更多」）。
      */
     @GetMapping("/{sessionId}/messages")
-    public ResponseEntity<List<ChatMessageDto>> getSessionMessages(@PathVariable String sessionId) {
+    public ResponseEntity<List<ChatMessageDto>> getSessionMessages(
+            @PathVariable String sessionId,
+            @RequestParam(required = false, defaultValue = "10") int limit,
+            @RequestParam(required = false) Integer beforeSeq) {
         AgentSession session = findOrThrow(sessionId);
-        return ResponseEntity.ok(sessionMessageService.loadDtos(session));
+        int effectiveLimit = limit <= 0 ? 0 : Math.min(Math.max(1, limit), 500);
+        List<ChatMessageDto> list = beforeSeq != null
+                ? sessionMessageService.loadDtosBefore(session, effectiveLimit, beforeSeq)
+                : sessionMessageService.loadDtos(session, effectiveLimit);
+        return ResponseEntity.ok(list);
     }
 
     // ── Pause ────────────────────────────────────────────────────────────────

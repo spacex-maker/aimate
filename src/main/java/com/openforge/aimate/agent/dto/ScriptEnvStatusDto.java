@@ -29,14 +29,18 @@ public record ScriptEnvStatusDto(
     /** Docker 已启用，当前用户有运行中容器 */
     public static ScriptEnvStatusDto dockerRunning(String containerName, int idleMinutes, Boolean dockerAvailable, String dockerVersion,
                                                    String image, String memoryLimit, Double cpuLimit) {
-        return new ScriptEnvStatusDto(true, "running", containerName, idleMinutes,
-                "脚本在 Docker 容器中执行，空闲 %d 分钟后将自动回收".formatted(idleMinutes), dockerAvailable, dockerVersion, image, memoryLimit, cpuLimit);
+        String message = idleMinutes <= 0
+                ? "脚本在 Docker 容器中执行，不自动回收（常驻任务、容器内 cron 等定时任务可一直运行）"
+                : "脚本在 Docker 容器中执行，空闲 %d 分钟后将自动回收（容器内定时任务请配置 idle-minutes: 0）".formatted(idleMinutes);
+        return new ScriptEnvStatusDto(true, "running", containerName, idleMinutes, message, dockerAvailable, dockerVersion, image, memoryLimit, cpuLimit);
     }
 
     /** Docker 已启用，当前用户暂无容器（首次执行脚本时会自动创建） */
     public static ScriptEnvStatusDto dockerNoContainer(int idleMinutes, Boolean dockerAvailable, String dockerVersion,
                                                        String image, String memoryLimit, Double cpuLimit) {
-        return new ScriptEnvStatusDto(true, "none", null, idleMinutes,
-                "脚本将在 Docker 容器中执行，首次调用工具时自动创建容器，空闲 %d 分钟后回收".formatted(idleMinutes), dockerAvailable, dockerVersion, image, memoryLimit, cpuLimit);
+        String message = idleMinutes <= 0
+                ? "脚本将在 Docker 容器中执行，首次调用工具时自动创建容器，不自动回收（常驻任务、容器内 cron 等定时任务可一直运行）"
+                : "脚本将在 Docker 容器中执行，首次调用工具时自动创建容器，空闲 %d 分钟后回收（容器内定时任务请配置 idle-minutes: 0）".formatted(idleMinutes);
+        return new ScriptEnvStatusDto(true, "none", null, idleMinutes, message, dockerAvailable, dockerVersion, image, memoryLimit, cpuLimit);
     }
 }

@@ -50,6 +50,13 @@ public class SessionMessage extends BaseEntity {
     @Column(name = "thinking_content", columnDefinition = "LONGTEXT")
     private String thinkingContent;
 
+    /**
+     * 仅 assistant：本条回复的思考+工具调用时间线（StreamBlock JSON 数组），
+     * 用于历史回放时还原与实时思考相同的展示效果。
+     */
+    @Column(name = "thinking_blocks_json", columnDefinition = "LONGTEXT")
+    private String thinkingBlocksJson;
+
     /** 归属某条 assistant 回复（如工具消息）；NULL=主序消息。 */
     @Column(name = "reply_to_message_id")
     private Long replyToMessageId;

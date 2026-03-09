@@ -38,7 +38,8 @@ agent:
   script:
     docker:
       enabled: true
-      idle-minutes: 4320
+      # 空闲 N 分钟后自动回收（暂停）容器；0=不自动回收（共用内核的 Linux 容器不回收问题不大，常驻/定时任务可跑）
+      idle-minutes: 0
       image: debian:bookworm-slim
       memory-limit: 4g
       cpu-limit: 2

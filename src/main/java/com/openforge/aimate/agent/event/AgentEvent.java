@@ -51,8 +51,13 @@ public record AgentEvent(
     }
 
     public static AgentEvent toolResult(String sessionId, String toolName, String result, int iteration) {
+        return toolResult(sessionId, toolName, result, iteration, null);
+    }
+
+    /** 带耗时的工具结果事件，durationMs 为执行耗时（毫秒），供流式与历史展示。 */
+    public static AgentEvent toolResult(String sessionId, String toolName, String result, int iteration, Long durationMs) {
         return new AgentEvent(sessionId, EventType.TOOL_RESULT, result,
-                new ToolResultPayload(toolName, result), iteration, now(), nextEventId());
+                new ToolResultPayload(toolName, result, durationMs), iteration, now(), nextEventId());
     }
 
     /** 长耗时工具（如 run_container_cmd）执行过程中推送的实时输出片段；payload = ToolOutputChunkPayload */
@@ -109,7 +114,12 @@ public record AgentEvent(
 
     // ── Nested payload types ─────────────────────────────────────────────────
 
-    public record ToolResultPayload(String toolName, String output) {}
+    /** toolName, output, 以及可选的执行耗时（毫秒），供前端在工具卡片上展示。 */
+    public record ToolResultPayload(String toolName, String output, Long durationMs) {
+        public ToolResultPayload(String toolName, String output) {
+            this(toolName, output, null);
+        }
+    }
 
     /** TOOL_OUTPUT_CHUNK 的 payload：当前工具调用 id 与本次输出的片段 */
     public record ToolOutputChunkPayload(String toolCallId, String chunk) {}

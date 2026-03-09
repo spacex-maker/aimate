@@ -29,14 +29,18 @@ export interface ToolCallDisplayDto {
   result: string
 }
 
-/** 历史消息单条，用于会话页展示；id 用于消息级中断/重试/版本查询；messageStatus 仅 assistant；thinkingContent、toolCalls 仅 assistant 可折叠展示 */
+/** 历史消息单条，用于会话页展示；seq 用于「加载更多」游标 beforeSeq；id 用于消息级中断/重试/版本查询 */
 export interface ChatMessageDto {
   id?: number | null
+  /** 会话内顺序，用于加载更多时传 beforeSeq */
+  seq?: number | null
   role: 'user' | 'assistant' | 'tool'
   content: string
   messageStatus?: 'ANSWERING' | 'DONE' | 'INTERRUPTED' | null
   thinkingContent?: string | null
   toolCalls?: ToolCallDisplayDto[] | null
+  /** 标准化思考+工具调用时间线（与实时 StreamBlock 结构一致），历史回放优先使用 */
+  thinkingBlocks?: StreamBlock[] | null
   createTime?: string | null
 }
 
@@ -142,6 +146,8 @@ export interface ToolCall {
 export interface ToolResultPayload {
   toolName: string
   output: string
+  /** 执行耗时（毫秒），可选 */
+  durationMs?: number | null
 }
 
 export interface AgentEvent {
@@ -168,6 +174,6 @@ export interface PlanState {
 export type StreamBlock =
   | { kind: 'iteration'; number: number; id: string }
   | { kind: 'thinking'; content: string; complete: boolean; id: string }
-  | { kind: 'toolCall'; call: ToolCall; result: string | null; streamingOutput?: string; id: string }
+  | { kind: 'toolCall'; call: ToolCall; result: string | null; streamingOutput?: string; durationMs?: number | null; id: string }
   | { kind: 'finalAnswer'; content: string; id: string }
   | { kind: 'error'; message: string; id: string }

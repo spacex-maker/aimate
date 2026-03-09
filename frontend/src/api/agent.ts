@@ -26,8 +26,12 @@ export const agentApi = {
   getSession: (sessionId: string) =>
     http<SessionResponse>(`${BASE}/${sessionId}`),
 
-  getSessionMessages: (sessionId: string) =>
-    http<ChatMessageDto[]>(`${BASE}/${sessionId}/messages`),
+  /** 会话消息列表：limit 默认 10；beforeSeq 不传则最近 N 条，传则取该 seq 之前的 N 条（加载更多） */
+  getSessionMessages: (sessionId: string, limit: number = 10, beforeSeq?: number | null) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (beforeSeq != null) params.set('beforeSeq', String(beforeSeq))
+    return http<ChatMessageDto[]>(`${BASE}/${sessionId}/messages?${params}`)
+  },
 
   pauseSession: (sessionId: string) =>
     http<SessionResponse>(`${BASE}/${sessionId}/pause`, { method: 'POST' }),

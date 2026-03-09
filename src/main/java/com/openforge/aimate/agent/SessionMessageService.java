@@ -16,9 +16,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.openforge.aimate.agent.dto.ChatMessageDto;
+import com.openforge.aimate.agent.dto.StreamBlockDto;
 import com.openforge.aimate.agent.dto.ToolCallDisplayDto;
 
+import org.springframework.data.domain.PageRequest;
+
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -31,6 +35,7 @@ import java.util.stream.Collectors;
 public class SessionMessageService {
 
     private static final TypeReference<List<ToolCall>> TOOL_CALLS_TYPE = new TypeReference<>() {};
+    private static final TypeReference<List<StreamBlockDto>> STREAM_BLOCKS_TYPE = new TypeReference<>() {};
 
     private final SessionMessageRepository messageRepository;
     private final AssistantMessageVersionRepository versionRepository;
@@ -93,26 +98,91 @@ public class SessionMessageService {
      * 按会话顺序加载消息，转为前端 DTO（含 messageStatus，用于展示「回答中」等状态）。
      * 仅返回 user 与「主」assistant（reply_to_message_id 为 null 的占位条），不返回 tool，
      * 也不返回多轮 tool call 时追加的仅含 tool_calls、content 为空的 assistant，避免最后出现「(无内容)」。
+     *
+     * @param limit 最多返回的主序消息条数；≤0 表示不限制，返回全部。
      */
     @Transactional(readOnly = true)
-    public List<ChatMessageDto> loadDtos(AgentSession session) {
-        List<SessionMessage> rows = messageRepository.findByAgentSession_IdOrderBySeqAsc(session.getId());
+    public List<ChatMessageDto> loadDtos(AgentSession session, int limit) {
+        List<SessionMessage> rows;
+        if (limit > 0) {
+            List<SessionMessage> lastN = messageRepository.findMainMessagesBySessionIdOrderBySeqDesc(
+                    session.getId(), PageRequest.of(0, limit));
+            rows = new ArrayList<>(lastN);
+            Collections.reverse(rows);
+        } else {
+            rows = messageRepository.findByAgentSession_IdOrderBySeqAsc(session.getId());
+            rows = rows.stream()
+                    .filter(r -> "user".equals(r.getRole())
+                            || ("assistant".equals(r.getRole()) && r.getReplyToMessageId() == null))
+                    .collect(Collectors.toList());
+        }
         return rows.stream()
-                .filter(r -> "user".equals(r.getRole())
-                        || ("assistant".equals(r.getRole()) && r.getReplyToMessageId() == null))
                 .map(r -> {
                     List<ToolCallDisplayDto> toolCalls = "assistant".equals(r.getRole())
                             ? loadToolCallsForAssistant(r.getId()) : null;
+                    List<StreamBlockDto> thinkingBlocks = null;
+                    if ("assistant".equals(r.getRole())
+                            && r.getThinkingBlocksJson() != null
+                            && !r.getThinkingBlocksJson().isBlank()) {
+                        try {
+                            thinkingBlocks = objectMapper.readValue(r.getThinkingBlocksJson(), STREAM_BLOCKS_TYPE);
+                        } catch (JsonProcessingException e) {
+                            log.warn("[SessionMessage] Failed to deserialize thinking_blocks_json for id {}: {}", r.getId(), e.getMessage());
+                        }
+                    }
                     String createTimeStr = r.getCreateTime() != null
                             ? r.getCreateTime().toString()
                             : null;
                     return new ChatMessageDto(
                             r.getId(),
+                            r.getSeq(),
                             r.getRole(),
                             r.getContent() != null ? r.getContent() : "",
                             r.getMessageStatus(),
                             "assistant".equals(r.getRole()) ? r.getThinkingContent() : null,
                             toolCalls,
+                            thinkingBlocks,
+                            createTimeStr
+                    );
+                })
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 加载「比 beforeSeq 更早」的最近 limit 条主序消息（用于前端「加载更多」向前分页）。
+     * 返回按 seq 升序（时间正序），便于前端 prepend 到已有列表。
+     */
+    @Transactional(readOnly = true)
+    public List<ChatMessageDto> loadDtosBefore(AgentSession session, int limit, int beforeSeq) {
+        if (limit <= 0) return List.of();
+        List<SessionMessage> rows = messageRepository.findMainMessagesBySessionIdAndSeqBeforeOrderBySeqDesc(
+                session.getId(), beforeSeq, PageRequest.of(0, limit));
+        List<SessionMessage> chronological = new ArrayList<>(rows);
+        Collections.reverse(chronological);
+        return chronological.stream()
+                .map(r -> {
+                    List<ToolCallDisplayDto> toolCalls = "assistant".equals(r.getRole())
+                            ? loadToolCallsForAssistant(r.getId()) : null;
+                    List<StreamBlockDto> thinkingBlocks = null;
+                    if ("assistant".equals(r.getRole())
+                            && r.getThinkingBlocksJson() != null
+                            && !r.getThinkingBlocksJson().isBlank()) {
+                        try {
+                            thinkingBlocks = objectMapper.readValue(r.getThinkingBlocksJson(), STREAM_BLOCKS_TYPE);
+                        } catch (JsonProcessingException e) {
+                            log.warn("[SessionMessage] Failed to deserialize thinking_blocks_json for id {}: {}", r.getId(), e.getMessage());
+                        }
+                    }
+                    String createTimeStr = r.getCreateTime() != null ? r.getCreateTime().toString() : null;
+                    return new ChatMessageDto(
+                            r.getId(),
+                            r.getSeq(),
+                            r.getRole(),
+                            r.getContent() != null ? r.getContent() : "",
+                            r.getMessageStatus(),
+                            "assistant".equals(r.getRole()) ? r.getThinkingContent() : null,
+                            toolCalls,
+                            thinkingBlocks,
                             createTimeStr
                     );
                 })
@@ -238,10 +308,15 @@ public class SessionMessageService {
 
     /**
      * 重试后保存新版本：写入 versions 表并更新 session_message.content（最新版本给上下文用）。
+     *
      * @param thinkingContent 思考过程，可选，写入该条 assistant 的 thinking_content
+     * @param thinkingBlocks  标准化思考+工具调用时间线（StreamBlock 列表），可选，写入 thinking_blocks_json 供历史回放
      */
     @Transactional
-    public void saveNewVersion(long assistantMessageId, String content, String thinkingContent) {
+    public void saveNewVersion(long assistantMessageId,
+                               String content,
+                               String thinkingContent,
+                               List<StreamBlockDto> thinkingBlocks) {
         SessionMessage msg = messageRepository.findById(assistantMessageId).orElse(null);
         if (msg == null) return;
         int nextVersion = versionRepository.findByAgentSessionMessage_IdOrderByVersionDesc(assistantMessageId)
@@ -258,9 +333,107 @@ public class SessionMessageService {
         versionRepository.save(v);
         msg.setContent(contentToStore);
         msg.setMessageStatus(SessionMessage.STATUS_DONE);
-        if (thinkingContent != null && !thinkingContent.isBlank()) msg.setThinkingContent(thinkingContent);
+        if (thinkingContent != null && !thinkingContent.isBlank()) {
+            msg.setThinkingContent(thinkingContent);
+        }
+        // 标准化思考+工具调用时间线写入 thinking_blocks_json，供历史回放复用 BlocksArea 渲染
+        try {
+            List<StreamBlockDto> blocksToStore = thinkingBlocks;
+            if ((blocksToStore == null || blocksToStore.isEmpty())
+                    && (thinkingContent != null || (msg.getToolCallsJson() != null && !msg.getToolCallsJson().isBlank()))) {
+                // 兼容：未显式传入 blocks 时，基于 thinking/toolCalls 构造简化版本
+                blocksToStore = buildThinkingBlocks(msg, contentToStore, thinkingContent);
+            }
+            if (blocksToStore != null && !blocksToStore.isEmpty()) {
+                String json = objectMapper.writeValueAsString(blocksToStore);
+                msg.setThinkingBlocksJson(json);
+            } else {
+                msg.setThinkingBlocksJson(null);
+            }
+        } catch (Exception e) {
+            log.warn("[SessionMessage] Failed to build thinkingBlocks for assistant message {}: {}", assistantMessageId, e.getMessage());
+        }
         messageRepository.save(msg);
         log.debug("[SessionMessage] Saved version {} for assistant message {}", nextVersion, assistantMessageId);
+    }
+
+    /**
+     * 兼容旧调用：不显式传入 thinkingBlocks 时，仅基于 thinkingContent/toolCalls 构造简化 blocks。
+     */
+    @Transactional
+    public void saveNewVersion(long assistantMessageId, String content, String thinkingContent) {
+        saveNewVersion(assistantMessageId, content, thinkingContent, null);
+    }
+
+    /**
+     * 基于 thinkingContent + 工具调用列表 + 最终回答，构造简化版 StreamBlock 序列：
+     * - thinking：整段思考文本，complete=true
+     * - toolCall：每次工具调用的名称/参数/结果
+     * - finalAnswer：最终回答内容
+     */
+    private List<StreamBlockDto> buildThinkingBlocks(SessionMessage msg, String content, String thinkingContent) {
+        List<StreamBlockDto> out = new ArrayList<>();
+        String idBase = "m-" + msg.getId();
+
+        String trimmedThinking = thinkingContent != null && !thinkingContent.isBlank()
+                ? thinkingContent
+                : null;
+        if (trimmedThinking != null) {
+            out.add(new StreamBlockDto(
+                    "thinking",
+                    null,
+                    idBase + "-thinking",
+                    trimmedThinking,
+                    null,
+                    null,
+                    null,
+                    null,
+                    Boolean.TRUE,
+                    null
+            ));
+        }
+
+        List<ToolCallDisplayDto> toolCalls = loadToolCallsForAssistant(msg.getId());
+        if (toolCalls != null && !toolCalls.isEmpty()) {
+            int idx = 0;
+            for (ToolCallDisplayDto tc : toolCalls) {
+                var func = new com.openforge.aimate.llm.model.FunctionCallResult(
+                        tc.name(),
+                        tc.arguments()
+                );
+                ToolCall call = new ToolCall("", "function", func);
+                out.add(new StreamBlockDto(
+                        "toolCall",
+                        null,
+                        idBase + "-tool-" + idx,
+                        null,
+                        call,
+                        tc.result(),
+                        null,
+                        null,
+                        null,
+                        null
+                ));
+                idx++;
+            }
+        }
+
+        String trimmedAnswer = content != null && !content.isBlank() ? content : null;
+        if (trimmedAnswer != null) {
+            out.add(new StreamBlockDto(
+                    "finalAnswer",
+                    null,
+                    idBase + "-final",
+                    trimmedAnswer,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+            ));
+        }
+        return out;
     }
 
     /** 兼容：无思考内容时调用。 */

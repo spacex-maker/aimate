@@ -23,8 +23,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 @ConfigurationProperties(prefix = "agent.script.docker")
 public record ScriptDockerProperties(
         @DefaultValue("true") boolean enabled,
-        // 默认空闲 3 天后再回收（分钟）
-        @DefaultValue("4320") int idleMinutes,
+        /** 空闲超过此分钟数后自动回收（暂停）容器；≤0 表示不自动回收（默认 0，共用内核 Linux 容器不回收问题不大） */
+        @DefaultValue("0") int idleMinutes,
         @DefaultValue("debian:bookworm-slim") String image,
         /** 内存上限，如 4g、512m；空则不限制 */
         @DefaultValue("4g") String memoryLimit,

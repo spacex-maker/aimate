@@ -1,6 +1,7 @@
 package com.openforge.aimate.repository;
 
 import com.openforge.aimate.domain.SessionMessage;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -13,6 +14,19 @@ import java.util.List;
 public interface SessionMessageRepository extends JpaRepository<SessionMessage, Long> {
 
     List<SessionMessage> findByAgentSession_IdOrderBySeqAsc(Long agentSessionId);
+
+    /** 仅主序消息（user 或 reply_to 为空的 assistant），按 seq 降序，用于「最近 N 条」分页。 */
+    @Query("SELECT m FROM SessionMessage m WHERE m.agentSession.id = :sessionId " +
+           "AND (m.role = 'user' OR (m.role = 'assistant' AND m.replyToMessageId IS NULL)) " +
+           "ORDER BY m.seq DESC")
+    List<SessionMessage> findMainMessagesBySessionIdOrderBySeqDesc(@Param("sessionId") Long sessionId, Pageable pageable);
+
+    /** 仅主序消息且 seq < beforeSeq，按 seq 降序取 N 条，用于「加载更多」向前分页。 */
+    @Query("SELECT m FROM SessionMessage m WHERE m.agentSession.id = :sessionId AND m.seq < :beforeSeq " +
+           "AND (m.role = 'user' OR (m.role = 'assistant' AND m.replyToMessageId IS NULL)) " +
+           "ORDER BY m.seq DESC")
+    List<SessionMessage> findMainMessagesBySessionIdAndSeqBeforeOrderBySeqDesc(
+            @Param("sessionId") Long sessionId, @Param("beforeSeq") int beforeSeq, Pageable pageable);
 
     /** 某条回复的上下文：主序消息 seq≤maxSeq 或归属该回复的消息，按 seq 升序。 */
     @Query("SELECT m FROM SessionMessage m WHERE m.agentSession.id = :sessionId " +

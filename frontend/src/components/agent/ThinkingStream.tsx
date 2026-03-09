@@ -12,6 +12,26 @@ const BLOCKS_AREA_HEIGHT = 'min(70vh, 520px)'
 function BlocksArea({ blocks, isRunning }: { blocks: StreamBlock[]; isRunning: boolean }) {
   const lastBlock = blocks[blocks.length - 1]
   const streamingThinkingInProgress = isRunning && lastBlock?.kind === 'thinking' && !lastBlock.complete
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const stickToBottomRef = useRef(true)
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const handleScroll = () => {
+      const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+      stickToBottomRef.current = distanceToBottom < 40
+    }
+    el.addEventListener('scroll', handleScroll)
+    return () => el.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (!stickToBottomRef.current) return
+    el.scrollTop = el.scrollHeight
+  }, [blocks, streamingThinkingInProgress])
 
   return (
     <div className="w-full min-w-0 flex flex-col rounded-xl border border-white/10 bg-white/[0.06] overflow-hidden" style={{ height: BLOCKS_AREA_HEIGHT }}>
@@ -21,7 +41,10 @@ function BlocksArea({ blocks, isRunning }: { blocks: StreamBlock[]; isRunning: b
         {streamingThinkingInProgress && <span className="text-white/40 text-xs">（输出中…）</span>}
       </div>
       {/* 按事件顺序：思考内容、第 N 轮、工具调用、思考、… 在同一流中显示 */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4">
+      <div
+        ref={scrollRef}
+        className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4"
+      >
         {blocks.length === 0 ? (
           <p className="text-white/40 text-sm">暂无内容</p>
         ) : (
@@ -48,7 +71,12 @@ function BlocksArea({ blocks, isRunning }: { blocks: StreamBlock[]; isRunning: b
             if (block.kind === 'toolCall') {
               return (
                 <div key={block.id} className="animate-fade-in">
-                  <ToolCallCard call={block.call} result={block.result} streamingOutput={block.streamingOutput} />
+                  <ToolCallCard
+                    call={block.call}
+                    result={block.result}
+                    streamingOutput={block.streamingOutput}
+                    durationMs={block.durationMs}
+                  />
                 </div>
               )
             }
@@ -148,8 +176,10 @@ function VersionsButton({ sessionId, messageId, open, onToggle }: { sessionId: s
 interface Props {
   /** 用户首条消息（无历史时展示；有历史时由 historyMessages 展示） */
   userMessage: string | null
-  /** 从服务端加载的历史消息，点击会话时展示 */
+  /** 从服务端加载的历史消息（含「加载更多」合并后的完整列表），点击会话时展示 */
   historyMessages?: ChatMessageDto[] | null
+  /** 滚动区顶部插槽，用于「加载更多」按钮等 */
+  topSlot?: React.ReactNode
   blocks: StreamBlock[]
   isRunning: boolean
   /** 重试时：被重试的那条用户消息 id，流式内容插到该条下方或下一条 assistant 位置 */
@@ -164,8 +194,9 @@ interface Props {
   sessionId?: string
 }
 
-export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning, retryTargetUserMessageId, canRetry, onRetry, onInterrupt, sessionId }: Props) {
-  const bottomRef = useRef<HTMLDivElement>(null)
+export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, isRunning, retryTargetUserMessageId, canRetry, onRetry, onInterrupt, sessionId }: Props) {
+  const outerScrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
   const [versionsOpenForId, setVersionsOpenForId] = useState<number | null>(null)
   const [expandedThinkingIndex, setExpandedThinkingIndex] = useState<number | null>(null)
 
@@ -178,10 +209,30 @@ export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning
   const showBlocksInline = retryTargetUserMessageId != null && retryIndex >= 0 && blocks.length > 0
   const showBlocksAtBottom = blocks.length > 0 && !showBlocksInline
 
+  // 监听外层对话区域的滚动，仅在用户本来就在底部附近时才自动滚到底，避免打断用户上滑查看历史
   useEffect(() => {
-    if (!showBlocksAtBottom) return
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-  }, [blocks, userMessage, historyMessages, showBlocksAtBottom])
+    const el = outerScrollRef.current
+    if (!el) return
+    const handleScroll = () => {
+      const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+      stickToBottomRef.current = distanceToBottom < 80
+    }
+    el.addEventListener('scroll', handleScroll)
+    return () => el.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  // 仅当「列表尾部」变化时滚到底：首次加载有消息、或尾部新增消息；不在「加载更多」（仅头部 prepend）时滚动
+  const lastMessageId = hasHistory && historyMessages!.length > 0 ? historyMessages![historyMessages!.length - 1]?.id ?? null : null
+  useEffect(() => {
+    if (lastMessageId == null || !outerScrollRef.current) return
+    const el = outerScrollRef.current
+    const id = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight
+    })
+    return () => cancelAnimationFrame(id)
+  }, [lastMessageId])
+
+  // 思考区滚动仅由 BlocksArea 内部 scrollRef 负责，不再用 scrollIntoView 驱动外层会话滚动，避免把会话列表拉到底
 
   if (isEmpty) {
     return (
@@ -192,8 +243,9 @@ export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning
   }
 
   return (
-    <div className="flex-1 min-w-0 overflow-y-auto">
+    <div ref={outerScrollRef} className="flex-1 min-w-0 overflow-y-auto">
       <div className="max-w-3xl mx-auto px-4 py-6 space-y-6 min-w-0">
+        {topSlot}
         {/* 历史消息：按条展示；重试时流式内容插到被重试用户消息下方或下一条 assistant 位置 */}
         {hasHistory && (
           <>
@@ -230,7 +282,11 @@ export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning
                 >
                   <div className={`min-w-0 w-full flex flex-col gap-1.5 max-w-[85%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                   {/* AI 回复消息卡上方：思考（展开后含思考文字 + 工具调用，工具显示在思考内容下方） */}
-                  {msg.role === 'assistant' && (msg.thinkingContent || (msg.toolCalls && msg.toolCalls.length > 0)) && (
+                  {msg.role === 'assistant' && (
+                    (msg.thinkingBlocks && msg.thinkingBlocks.length > 0) ||
+                    msg.thinkingContent ||
+                    (msg.toolCalls && msg.toolCalls.length > 0)
+                  ) && (
                     <div className="w-full min-w-0 mb-2">
                       <button
                         type="button"
@@ -245,28 +301,78 @@ export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning
                         )}
                         {expandedThinkingIndex === i ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                       </button>
-                      {/* 展开后：先思考文字，再工具调用列表，均不超出消息区域 */}
+                      {/* 展开后：优先使用标准化 thinkingBlocks 渲染；无 blocks 时回退到旧逻辑 */}
                       {expandedThinkingIndex === i && (
                         <div className="mt-2 w-full min-w-0 rounded-xl border border-white/10 bg-white/[0.06] overflow-hidden">
-                          <div className="px-4 py-3 text-sm text-white/70 leading-relaxed max-h-[28rem] overflow-auto space-y-4">
-                            {msg.thinkingContent && (
-                              <div className="break-words">
-                                <p className="text-[11px] text-white/40 uppercase tracking-wider mb-2">思考过程</p>
-                                {/* 用 Markdown 渲染历史思考内容，保持与流式期间工具调用渲染风格一致 */}
-                                <MarkdownContent content={msg.thinkingContent} className="break-words" />
-                              </div>
-                            )}
-                            {msg.toolCalls && msg.toolCalls.length > 0 && (
-                              <div className="space-y-2 overflow-x-auto overflow-y-visible">
-                                <p className="text-[11px] text-white/40 uppercase tracking-wider mb-1.5">调用的工具</p>
-                                {msg.toolCalls.map((tc, idx) => (
-                                  <ToolCallCard
-                                    key={idx}
-                                    call={{ id: '', type: 'function', function: { name: tc.name, arguments: tc.arguments } }}
-                                    result={tc.result ?? null}
-                                  />
-                                ))}
-                              </div>
+                          <div className="px-4 py-3 text-sm text-white/70 leading-relaxed max-h-[28rem] overflow-auto space-y-3">
+                            {msg.thinkingBlocks && msg.thinkingBlocks.length > 0 ? (
+                              <BlocksArea blocks={msg.thinkingBlocks} isRunning={false} />
+                            ) : (
+                              <>
+                                {msg.thinkingContent && (
+                                  <div className="break-words space-y-2">
+                                    <p className="text-[11px] text-white/40 uppercase tracking-wider mb-1.5">
+                                      思考过程（含工具调用）
+                                    </p>
+                                    {msg.thinkingContent
+                                      .split(/\r?\n/)
+                                      .map((line, idxLine) => {
+                                        const m = line.match(/^\[工具调用 第 (\d+) 轮]/)
+                                        if (m) {
+                                          const round = Number(m[1])
+                                          const tc = msg.toolCalls && msg.toolCalls[round - 1]
+                                          if (tc) {
+                                            return (
+                                              <div key={`tool-${idxLine}`} className="mt-1">
+                                                <ToolCallCard
+                                                  call={{
+                                                    id: '',
+                                                    type: 'function',
+                                                    function: { name: tc.name, arguments: tc.arguments },
+                                                  }}
+                                                  result={tc.result ?? null}
+                                                />
+                                              </div>
+                                            )
+                                          }
+                                          // 无匹配工具时退化为普通文本
+                                          return (
+                                            <MarkdownContent
+                                              key={`line-${idxLine}`}
+                                              content={line}
+                                              className="break-words"
+                                            />
+                                          )
+                                        }
+                                        if (!line.trim()) return null
+                                        return (
+                                          <MarkdownContent
+                                            key={`line-${idxLine}`}
+                                            content={line}
+                                            className="break-words"
+                                          />
+                                        )
+                                      })}
+                                  </div>
+                                )}
+                                {!msg.thinkingContent &&
+                                  msg.toolCalls &&
+                                  msg.toolCalls.length > 0 && (
+                                    <div className="space-y-2 overflow-x-auto overflow-y-visible">
+                                      {msg.toolCalls.map((tc, idx) => (
+                                        <ToolCallCard
+                                          key={idx}
+                                          call={{
+                                            id: '',
+                                            type: 'function',
+                                            function: { name: tc.name, arguments: tc.arguments },
+                                          }}
+                                          result={tc.result ?? null}
+                                        />
+                                      ))}
+                                    </div>
+                                  )}
+                              </>
                             )}
                           </div>
                         </div>
@@ -371,8 +477,6 @@ export function ThinkingStream({ userMessage, historyMessages, blocks, isRunning
             </div>
           </div>
         )}
-
-        <div ref={bottomRef} />
       </div>
     </div>
   )

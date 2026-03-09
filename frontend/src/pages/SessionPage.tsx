@@ -16,7 +16,7 @@ type Action =
   | { type: 'THINKING_TOKEN'; token: string }
   | { type: 'TOOL_CALL'; call: ToolCall }
   | { type: 'TOOL_OUTPUT_CHUNK'; chunk: string }
-  | { type: 'TOOL_RESULT'; toolCallId: string; result: string }
+  | { type: 'TOOL_RESULT'; toolCallId: string; result: string; durationMs?: number | null }
   | { type: 'FINAL_ANSWER'; content: string }
   | { type: 'ERROR'; message: string }
   | { type: 'CLEAR' }
@@ -47,7 +47,7 @@ function reducer(state: StreamBlock[], action: Action): StreamBlock[] {
       // Close current thinking block first
       return [
         ...closeThinking(state),
-        { kind: 'toolCall', call: action.call, result: null, streamingOutput: '', id: uid() },
+        { kind: 'toolCall', call: action.call, result: null, streamingOutput: '', durationMs: undefined, id: uid() },
       ]
 
     case 'TOOL_OUTPUT_CHUNK': {
@@ -70,7 +70,7 @@ function reducer(state: StreamBlock[], action: Action): StreamBlock[] {
       const updated = [...state]
       const block = updated[realIdx]
       if (block.kind === 'toolCall') {
-        updated[realIdx] = { ...block, result: action.result }
+        updated[realIdx] = { ...block, result: action.result, durationMs: action.durationMs ?? undefined }
       }
       return updated
     }
@@ -132,9 +132,40 @@ export function SessionPage() {
 
   const { data: historyMessages } = useQuery({
     queryKey: ['session-messages', sessionId],
-    queryFn: () => agentApi.getSessionMessages(effectiveSessionId!),
+    queryFn: () => agentApi.getSessionMessages(effectiveSessionId!, 10),
     enabled: !!effectiveSessionId && !!session,
   })
+
+  // 往上滚动加载更多：已加载的「更早」消息，与接口返回的最近 N 条合并展示
+  const [olderMessages, setOlderMessages] = useState<ChatMessageDto[]>([])
+  const [hasNoMoreOlder, setHasNoMoreOlder] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  useEffect(() => {
+    setOlderMessages([])
+    setHasNoMoreOlder(false)
+  }, [sessionId])
+
+  const mergedMessages: ChatMessageDto[] = [...olderMessages, ...(historyMessages ?? [])]
+  const oldestSeq = mergedMessages[0]?.seq
+  const canLoadMore = mergedMessages.length > 0 && !hasNoMoreOlder && oldestSeq != null && !loadingMore
+
+  const loadMoreOlder = useCallback(async () => {
+    if (!effectiveSessionId || oldestSeq == null || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const list = await agentApi.getSessionMessages(effectiveSessionId, 10, oldestSeq)
+      setOlderMessages(prev => [...list, ...prev])
+      if (list.length < 10) setHasNoMoreOlder(true)
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [effectiveSessionId, oldestSeq, loadingMore])
+
+  // 初始只拉最近 10 条时，若不足 10 条说明没有更早消息
+  useEffect(() => {
+    if (olderMessages.length > 0) return
+    if (historyMessages != null && historyMessages.length < 10) setHasNoMoreOlder(true)
+  }, [historyMessages, olderMessages.length])
 
   const { data: scriptEnv, refetch: refetchScriptStatus } = useQuery({
     queryKey: ['script-status', effectiveSessionId],
@@ -251,8 +282,8 @@ export function SessionPage() {
         break
       }
       case 'TOOL_RESULT': {
-        const p = event.payload as { toolName: string; output: string }
-        dispatch({ type: 'TOOL_RESULT', toolCallId: '', result: p?.output ?? '' })
+        const p = event.payload as { toolName: string; output: string; durationMs?: number }
+        dispatch({ type: 'TOOL_RESULT', toolCallId: '', result: p?.output ?? '', durationMs: p?.durationMs ?? undefined })
         break
       }
       case 'FINAL_ANSWER': {
@@ -464,9 +495,11 @@ export function SessionPage() {
                   {scriptEnv.containerStatus === 'none' && (
                     <span className="text-amber-400/80">· 首次执行时自动创建</span>
                   )}
-                  {scriptEnv.idleMinutes != null && (
-                    <span className="text-white/40">· 空闲 {scriptEnv.idleMinutes} 分钟后自动回收</span>
-                  )}
+                  {scriptEnv.idleMinutes != null && scriptEnv.idleMinutes <= 0 ? (
+                    <span className="text-white/40">· 不自动回收（常驻/定时任务可一直运行）</span>
+                  ) : scriptEnv.idleMinutes != null ? (
+                    <span className="text-white/40">· 空闲 {scriptEnv.idleMinutes} 分钟后自动回收（回收即暂停，数据保留；容器内 cron 等定时任务需配置为不回收）</span>
+                  ) : null}
                 </>
               )}
             </>
@@ -589,8 +622,20 @@ export function SessionPage() {
         )}
         <div className="flex-1 min-w-0 flex flex-col pb-48">
           <ThinkingStream
-            userMessage={historyMessages?.length ? null : (session?.taskDescription ?? null)}
-            historyMessages={historyMessages ?? null}
+            userMessage={mergedMessages.length ? null : (session?.taskDescription ?? null)}
+            historyMessages={mergedMessages.length ? mergedMessages : null}
+            topSlot={canLoadMore ? (
+              <div className="flex justify-center py-3">
+                <button
+                  type="button"
+                  onClick={loadMoreOlder}
+                  disabled={loadingMore}
+                  className="px-4 py-2 text-sm text-white/70 hover:text-white bg-white/10 hover:bg-white/15 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {loadingMore ? '加载中…' : '加载更多历史消息'}
+                </button>
+              </div>
+            ) : undefined}
             blocks={displayBlocks}
             isRunning={isRunning}
             retryTargetUserMessageId={retryTargetUserMessageId}

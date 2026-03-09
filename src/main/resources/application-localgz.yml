@@ -36,8 +36,8 @@ agent:
     docker:
       enabled: true
       idle-minutes: 30
-      image: debian:bookworm-slim
-      memory-limit: 4g
+      image: ubuntu:22.04
+      memory-limit: 2g
       cpu-limit: 2
       read-only-rootfs: false
       run-container-cmd-timeout-seconds: 300

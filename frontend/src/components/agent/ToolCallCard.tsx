@@ -7,9 +7,20 @@ interface Props {
   result: string | null
   /** 执行中时实时输出的日志片段（如 run_container_cmd 的 stdout） */
   streamingOutput?: string
+  /** 执行耗时（毫秒），完成后展示在标题旁 */
+  durationMs?: number | null
 }
 
-export function ToolCallCard({ call, result, streamingOutput }: Props) {
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  const sec = ms / 1000
+  if (sec < 60) return `${sec.toFixed(1)}s`
+  const min = Math.floor(sec / 60)
+  const s = Math.floor(sec % 60)
+  return `${min}m${s}s`
+}
+
+export function ToolCallCard({ call, result, streamingOutput, durationMs }: Props) {
   const [open, setOpen] = useState(false)
 
   let args: unknown
@@ -28,6 +39,11 @@ export function ToolCallCard({ call, result, streamingOutput }: Props) {
         <span className="text-sm text-white/70 truncate flex-1 min-w-0">
           {call.function.name}
         </span>
+        {durationMs != null && durationMs >= 0 && !isPending && (
+          <span className="text-[11px] text-white/40 tabular-nums flex-shrink-0" title={`耗时 ${durationMs}ms`}>
+            {formatDuration(durationMs)}
+          </span>
+        )}
         {isPending ? (
           <Loader className="w-3.5 h-3.5 text-white/40 animate-spin flex-shrink-0" />
         ) : (

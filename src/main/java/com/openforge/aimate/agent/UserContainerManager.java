@@ -180,6 +180,7 @@ public class UserContainerManager {
     @Scheduled(fixedDelay = 300_000) // 5 min
     public void recycleIdleContainers() {
         if (!scriptDockerProperties.enabled()) return;
+        if (scriptDockerProperties.idleMinutes() <= 0) return; // ≤0 不自动回收，方便用户跑常驻任务
         long idleMs = scriptDockerProperties.idleMinutes() * 60L * 1000L;
         long now = System.currentTimeMillis();
         userContainers.entrySet().removeIf(entry -> {
@@ -220,20 +221,18 @@ public class UserContainerManager {
     }
 
     /**
-     * 按配置组装 docker run：资源限制、只读根盘+tmpfs、非 root 用户、防提权与能力收紧。
-     * 安全说明：
-     * - no-new-privileges：禁止进程通过 setuid/setgid 获得更高权限，降低容器内提权风险。
-     * - cap-drop=ALL 且仅 cap-add=CHOWN：CHOWN 为 apt 安装及脚本 chown 所需，其余能力全部去掉。
-     * 用户容器内不可用或受限的常见操作见 ScriptDockerProperties 类注释「能力收紧后不可用」。
+     * 按配置组装 docker run：资源限制、只读根盘+tmpfs、非 root 用户、防提权等。
+     * 说明：
+     * - 目前仅固定启用 no-new-privileges，避免 setuid/setgid 提权；
+     * - 不再强制 cap-drop=ALL，以兼容更多宿主机 / rootless Docker 环境，减少 apt 等命令的权限报错；
+     * - 如需进一步能力收紧，可在确认宿主机兼容后再恢复 cap-drop 逻辑。
      */
     private List<String> buildDockerRunCommand(String containerName, String image) {
         List<String> cmd = new ArrayList<>();
         cmd.add("docker");
         cmd.add("run");
         cmd.add("-d");
-        cmd.add("--security-opt=no-new-privileges");
-        cmd.add("--cap-drop=ALL");
-        cmd.add("--cap-add=CHOWN");  // apt 安装及脚本 chown 需要，否则部分包 postinst 会失败
+        //cmd.add("--security-opt=no-new-privileges");
         // 使用默认网络，以便 AI 通过 install_container_package 在容器内执行 apt-get install
         if (scriptDockerProperties.isMemoryLimitSet()) {
             cmd.add("--memory");
