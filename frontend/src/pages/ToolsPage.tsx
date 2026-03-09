@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Wrench, Pencil, Trash2, Shield, Plus } from 'lucide-react'
+import { Pencil, Trash2, Shield, Plus } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { toolsApi } from '../api/tools'
 import { useAuth } from '../hooks/useAuth'
