@@ -48,10 +48,13 @@ public class DockerDetector {
                     .start();
             String out = readFully(p.getInputStream());
             int exit = p.waitFor();
-            if (exit != 0 || out == null || out.isBlank()) return Optional.empty();
+            if (exit != 0 || out == null || out.isBlank()) {
+                log.warn("[DockerDetector] docker version 不可用: exit={}, out={}（请确认 Docker 已安装且 daemon 已启动）", exit, out == null || out.isBlank() ? "(empty)" : out.trim());
+                return Optional.empty();
+            }
             return Optional.of(out.trim());
         } catch (Exception e) {
-            log.debug("[DockerDetector] Docker not available: {}", e.getMessage());
+            log.warn("[DockerDetector] Docker 检测异常: {}（如 docker 未安装或不在 PATH）", e.getMessage());
             return Optional.empty();
         }
     }

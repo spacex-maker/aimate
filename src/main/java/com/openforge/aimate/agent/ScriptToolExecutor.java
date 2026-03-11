@@ -56,6 +56,9 @@ public class ScriptToolExecutor {
         if (!isSystemTool && scriptDockerProperties.enabled() && userId != null) {
             String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
             if (containerIdOrName != null) {
+                if (!userContainerManager.ensureContainerRunning(containerIdOrName)) {
+                    return "[ToolError] 用户容器已停止且无法重新启动，请刷新页面或联系管理员检查 Docker。";
+                }
                 log.debug("[ScriptTool] Executing in Docker container: {}", containerIdOrName);
                 return dockerScriptRunner.runInContainer(containerIdOrName, tool, argumentsJson, outputChunkConsumer);
             }

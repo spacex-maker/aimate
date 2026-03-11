@@ -245,6 +245,8 @@ export function SessionPage() {
       refetch()
       // 立即拉取消息列表，否则「回答中」占位条可能不显示（后端已写入，前端仅 invalidate 不会马上请求）
       queryClient.refetchQueries({ queryKey: ['session-messages', sessionId] })
+      // 发消息会触发后端预创建/启动脚本容器，延迟刷新脚本状态以便 UI 显示「容器已就绪」
+      setTimeout(() => refetchScriptStatus(), 2000)
       toast.success('已发送后续问题')
     },
     onError: (e: Error) => toast.error(e.message),
@@ -294,9 +296,12 @@ export function SessionPage() {
         }))
         break
       }
-      case 'ITERATION_START':
+      case 'ITERATION_START': {
         dispatch({ type: 'ITERATION_START', iteration: event.iteration })
+        // 第一轮开始时后端已完成容器预创建，刷新脚本状态以便 UI 显示「容器已就绪」
+        if (event.iteration === 1) refetchScriptStatus()
         break
+      }
       case 'THINKING':
         if (event.content) dispatch({ type: 'THINKING_TOKEN', token: event.content })
         break
@@ -370,7 +375,7 @@ export function SessionPage() {
         break
       }
     }
-  }, [refetch, queryClient, effectiveSessionId, sessionId])
+  }, [refetch, queryClient, effectiveSessionId, sessionId, refetchScriptStatus])
 
   // 连接/重连后同步会话+消息，避免订阅晚于 Agent 导致漏事件、界面不更新
   const onWsConnected = useCallback(() => {

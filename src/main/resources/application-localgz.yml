@@ -35,7 +35,7 @@ agent:
   script:
     docker:
       enabled: true
-      idle-minutes: 30
+      idle-minutes: 0
       image: ubuntu:22.04
       memory-limit: 2g
       cpu-limit: 2

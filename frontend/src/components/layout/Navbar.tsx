@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Bot, Brain, Cpu, KeyRound, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Settings2, Wrench, Clock } from 'lucide-react'
+import { Bot, Brain, Cog, Cpu, KeyRound, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Settings2, Wrench, Clock } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../hooks/useAuth'
 import { AdminModal } from '../admin/AdminModal'
+import { SystemSettingsModal } from '../settings/SystemSettingsModal'
 import { agentApi } from '../../api/agent'
 import { StatusBadge } from '../agent/StatusBadge'
 import type { SessionResponse } from '../../types/agent'
@@ -27,6 +28,7 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [adminModalOpen, setAdminModalOpen] = useState(false)
+  const [systemSettingsOpen, setSystemSettingsOpen] = useState(false)
 
   const { data: recentSessions = [], isLoading: recentLoading } = useQuery<SessionResponse[]>({
     queryKey: ['recent-sessions', user?.userId],
@@ -157,8 +159,21 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
         </div>
       )}
 
-      {/* User info + logout */}
+      {/* 系统设置 + 个人信息 */}
       <div className={clsx('border-t border-white/10 space-y-2 flex-shrink-0', collapsed ? 'px-0 py-3 flex flex-col items-center' : 'px-3 py-3')}>
+        {/* 系统设置：个人信息上方 */}
+        <button
+          type="button"
+          onClick={() => setSystemSettingsOpen(true)}
+          title="系统设置"
+          className={clsx(
+            'flex items-center w-full rounded-lg text-sm text-white/50 hover:text-white/80 hover:bg-white/5 transition-colors',
+            collapsed ? 'justify-center p-2' : 'gap-3 px-3 py-2'
+          )}
+        >
+          <Cog className="w-4 h-4 flex-shrink-0" />
+          {!collapsed && <span>系统设置</span>}
+        </button>
         {user && (
           <div className={clsx('flex items-center py-1.5', collapsed ? 'flex-col gap-1' : 'gap-2.5 px-2')}>
             <div
@@ -192,6 +207,7 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
       </div>
 
       {adminModalOpen && <AdminModal onClose={() => setAdminModalOpen(false)} />}
+      {systemSettingsOpen && <SystemSettingsModal onClose={() => setSystemSettingsOpen(false)} />}
     </nav>
   )
 }

@@ -5,10 +5,12 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenForgeX — Autonomous Agent</title>
-    <script type="module" crossorigin src="/assets/index-ilC74XFb.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-B8ykKyNl.css">
+    <script type="module" crossorigin src="/assets/index-BOmXK03O.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Do3cv2JV.css">
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"></div>
+    <!-- sockjs-client 等依赖在浏览器中会访问 global，需先挂到 window -->
+    <script>window.global = window.globalThis || window;</script>
   </body>
 </html>

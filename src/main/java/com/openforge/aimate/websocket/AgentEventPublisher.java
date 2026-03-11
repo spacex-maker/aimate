@@ -1,7 +1,6 @@
 package com.openforge.aimate.websocket;
 
 import com.openforge.aimate.agent.event.AgentEvent;
-import com.openforge.aimate.agent.event.EventType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -41,13 +40,6 @@ public class AgentEventPublisher {
         String destination = TOPIC_PREFIX + event.sessionId();
         try {
             messagingTemplate.convertAndSend(destination, event);
-            if (log.isDebugEnabled()) {
-                log.debug("[WS] 发送 {} -> {}", event.type(), destination);
-            }
-            if (event.type() == EventType.FINAL_ANSWER || event.type() == EventType.STATUS_CHANGE) {
-                log.info("[WS] 发送 {} -> {} (content length {})", event.type(), destination,
-                        event.content() != null ? event.content().length() : 0);
-            }
         } catch (Exception e) {
             log.warn("[Publisher] Failed to deliver {} event to {}: {}",
                     event.type(), destination, e.getMessage());

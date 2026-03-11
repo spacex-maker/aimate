@@ -12,6 +12,18 @@ export const agentApi = {
   refreshScriptStatus: () =>
     http<void>('/api/agent/script-status/refresh', { method: 'POST' }),
 
+  /** 用户手动启动自己的容器 */
+  startContainer: () =>
+    http<{ success: boolean; message?: string; containerName?: string }>('/api/agent/container/start', { method: 'POST' }),
+
+  /** 用户手动重启自己的容器 */
+  restartContainer: () =>
+    http<{ success: boolean; message?: string; containerName?: string }>('/api/agent/container/restart', { method: 'POST' }),
+
+  /** 用户手动关闭自己的容器 */
+  stopContainer: () =>
+    http<{ success: boolean; message?: string; containerName?: string }>('/api/agent/container/stop', { method: 'POST' }),
+
   /** 获取当前系统对应的 Docker 安装说明与链接 */
   getDockerInstallInfo: () =>
     http<DockerInstallInfoDto>('/api/agent/docker-install-info'),

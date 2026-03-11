@@ -421,6 +421,15 @@ public class AgentLoopService {
 
             var llmCaller = buildCaller(session);
             Long userId = session.getUserId();
+            // 用户发送消息即预创建/启动脚本执行容器，后续执行 run_container_cmd / 脚本工具时无需等待
+            if (scriptDockerProperties.enabled() && userId != null) {
+                String container = userContainerManager.getOrCreateContainer(userId);
+                if (container != null) {
+                    log.info("[Agent:{}] Pre-warmed script container for userId={}: {}", sessionId, userId, container);
+                } else {
+                    log.warn("[Agent:{}] Pre-warm container for userId={} failed (Docker disabled or create failed).", sessionId, userId);
+                }
+            }
             List<Message> context = sessionMessageService.loadContextForReply(session, placeholder);
             context = trimTrailingEmptyAssistant(context);
 
@@ -497,6 +506,14 @@ public class AgentLoopService {
 
             var llmCaller = buildCaller(session);
             Long userId = session.getUserId();
+            if (scriptDockerProperties.enabled() && userId != null) {
+                String container = userContainerManager.getOrCreateContainer(userId);
+                if (container != null) {
+                    log.info("[Agent:{}] Pre-warmed script container for userId={} (retry): {}", sessionId, userId, container);
+                } else {
+                    log.warn("[Agent:{}] Pre-warm container for userId={} failed (retry).", sessionId, userId);
+                }
+            }
             List<Message> context = sessionMessageService.loadContextUpToSeq(session, userSeq);
             context = trimTrailingEmptyAssistant(context);
 
@@ -1145,6 +1162,9 @@ public class AgentLoopService {
             if (containerIdOrName == null) {
                 return "[ToolError] 无法获取或创建用户 Linux 容器，请确认 Docker 已启动。";
             }
+            if (!userContainerManager.ensureContainerRunning(containerIdOrName)) {
+                return "[ToolError] 用户容器已停止且无法重新启动，请刷新页面或稍后重试。";
+            }
             String pkgList = String.join(" ", packages);
             ProcessBuilder pb = new ProcessBuilder(
                     "docker", "exec", containerIdOrName,
@@ -1223,6 +1243,9 @@ public class AgentLoopService {
             String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
             if (containerIdOrName == null) {
                 return "[ToolError] 无法获取或创建用户 Linux 容器，请确认 Docker 已启动。";
+            }
+            if (!userContainerManager.ensureContainerRunning(containerIdOrName)) {
+                return "[ToolError] 用户容器已停止且无法重新启动，请刷新页面或稍后重试。";
             }
             int idleSec = scriptDockerProperties.runContainerCmdIdleTimeoutSeconds();
             long idleMs = idleSec * 1000L;
@@ -1319,6 +1342,9 @@ public class AgentLoopService {
             String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
             if (containerIdOrName == null) {
                 return "[ToolError] 无法获取或创建用户 Linux 容器。";
+            }
+            if (!userContainerManager.ensureContainerRunning(containerIdOrName)) {
+                return "[ToolError] 用户容器已停止且无法重新启动，请刷新页面或稍后重试。";
             }
             tempFile = Files.createTempFile("aimate_wcf_", ".dat");
             Files.writeString(tempFile, path + "\n" + content, StandardCharsets.UTF_8);
@@ -1761,13 +1787,18 @@ public class AgentLoopService {
     }
 
     private Tool toTool(AgentTool agentTool) {
-        // 将 agent_tools.input_schema 以「纯字符串」形式传给大模型：
-        // ToolFunction.parameters 使用 JsonNode 的 text node，序列化后为
-        // "parameters": "<原始 JSON 字符串>"，由大模型自行解析/使用。
+        // OpenAI/DeepSeek 要求 parameters 为 JSON 对象，不能是字符串；否则会报 Invalid schema ... is not of types "boolean", "object"
         com.fasterxml.jackson.databind.JsonNode parameters = null;
         String rawSchema = agentTool.getInputSchema();
         if (rawSchema != null && !rawSchema.isBlank()) {
-            parameters = objectMapper.getNodeFactory().textNode(rawSchema);
+            try {
+                parameters = objectMapper.readTree(rawSchema);
+                if (parameters != null && !parameters.isObject()) {
+                    parameters = null; // 非对象则忽略，避免 400
+                }
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                log.warn("[Agent] Invalid input_schema for tool {}: {}", agentTool.getToolName(), e.getMessage());
+            }
         }
 
         return Tool.ofFunction(new ToolFunction(

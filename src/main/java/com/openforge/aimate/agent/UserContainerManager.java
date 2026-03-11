@@ -45,12 +45,42 @@ public class UserContainerManager {
     }
 
     /**
+     * 仅查询容器状态，不创建、不启动。用于 script-status 等只读场景，避免「关闭后刷新状态」时误把容器拉起来。
+     * @return RUNNING(容器名) / STOPPED(容器名) / NONE(null)，第二个为容器名（存在时）
+     */
+    public ContainerStatusReadOnly getContainerStatusReadOnly(Long userId) {
+        if (userId == null || !scriptDockerProperties.enabled()) {
+            return new ContainerStatusReadOnly(ContainerState.NONE, null);
+        }
+        String name = CONTAINER_NAME_PREFIX + userId;
+        ContainerInfo info = userContainers.get(userId);
+        if (info != null && isContainerRunning(info.containerId)) {
+            return new ContainerStatusReadOnly(ContainerState.RUNNING, info.containerId);
+        }
+        if (!containerExists(name)) {
+            return new ContainerStatusReadOnly(ContainerState.NONE, null);
+        }
+        return new ContainerStatusReadOnly(isContainerRunning(name) ? ContainerState.RUNNING : ContainerState.STOPPED, name);
+    }
+
+    public enum ContainerState { RUNNING, STOPPED, NONE }
+
+    public record ContainerStatusReadOnly(ContainerState state, @Nullable String containerName) {}
+
+    /**
      * Returns the container ID for this user, creating and starting the container if needed.
      * Updates last-used timestamp. Returns null if Docker is disabled or creation fails.
      */
     @Nullable
     public String getOrCreateContainer(Long userId) {
-        if (userId == null || !scriptDockerProperties.enabled()) return null;
+        if (userId == null) {
+            log.warn("[UserContainer] getOrCreateContainer skipped: userId is null (未登录或认证未注入 userId)");
+            return null;
+        }
+        if (!scriptDockerProperties.enabled()) {
+            log.warn("[UserContainer] getOrCreateContainer skipped: script Docker is disabled (agent.script.docker.enabled=false)");
+            return null;
+        }
         ContainerInfo info = userContainers.get(userId);
         if (info != null && isContainerRunning(info.containerId)) {
             info.setLastUsedAt(System.currentTimeMillis());
@@ -62,10 +92,10 @@ public class UserContainerManager {
         String name = CONTAINER_NAME_PREFIX + userId;
         String wantedImage = scriptDockerProperties.image();
         // 先看是否已有同名容器（例如上次进程未回收或重启后 map 清空）
-        // 若已有容器但镜像与配置不一致（如从 python:3.11-slim 改为 debian:bookworm-slim），则删除旧容器并用新镜像创建
         String existing = useExistingContainerIfPresent(name, userId, wantedImage);
         if (existing != null) return existing;
 
+        log.info("[UserContainer] No existing container for user {}, creating with image={}", userId, wantedImage);
         String image = scriptDockerProperties.image();
         List<String> run = buildDockerRunCommand(name, image);
         try {
@@ -77,14 +107,14 @@ public class UserContainerManager {
                     String reused = useExistingContainerIfPresent(name, userId, wantedImage);
                     if (reused != null) return reused;
                 }
-                log.warn("[UserContainer] docker run failed for user {}: {}", userId, out);
+                log.warn("[UserContainer] docker run failed for user {} (exit={}): {}", userId, exit, out);
                 return null;
             }
             userContainers.put(userId, new ContainerInfo(name, System.currentTimeMillis()));
             log.info("[UserContainer] Created container for user {}: {}", userId, name);
             return name;
         } catch (Exception e) {
-            log.warn("[UserContainer] Failed to create container for user {}: {}", userId, e.getMessage());
+            log.warn("[UserContainer] Failed to create container for user {}: {}", userId, e.getMessage(), e);
             return null;
         }
     }
@@ -95,14 +125,16 @@ public class UserContainerManager {
      */
     @Nullable
     private String useExistingContainerIfPresent(String name, Long userId, String wantedImage) {
-        if (!containerExists(name)) return null;
+        if (!containerExists(name)) {
+            log.debug("[UserContainer] useExistingContainerIfPresent: no container named {}", name);
+            return null;
+        }
         String currentImage = getContainerImage(name);
         if (currentImage != null && !normalizeImageRef(currentImage).equals(normalizeImageRef(wantedImage))) {
             log.info("[UserContainer] Existing container {} has image {} but config wants {}, removing and will recreate.", name, currentImage, wantedImage);
             removeContainer(name);
             return null;
         }
-        // 旧版本曾用 --network none 创建容器，无网络则无法 apt-get，需删掉重建
         if ("none".equalsIgnoreCase(getContainerNetworkMode(name))) {
             log.info("[UserContainer] Existing container {} has network=none (no DNS), removing so apt-get can work.", name);
             removeContainer(name);
@@ -111,8 +143,9 @@ public class UserContainerManager {
         if (!isContainerRunning(name)) {
             try {
                 runDocker("start", name);
+                log.info("[UserContainer] Started stopped container {}", name);
             } catch (Exception e) {
-                log.warn("[UserContainer] docker start failed for {}: {}", name, e.getMessage());
+                log.warn("[UserContainer] docker start failed for {}: {} (容器存在但无法 start)", name, e.getMessage());
                 return null;
             }
         }
@@ -165,13 +198,15 @@ public class UserContainerManager {
         return s;
     }
 
+    /** 精确判断同名容器是否存在（不用 docker ps -f name= 子串匹配）。 */
     private boolean containerExists(String name) {
+        if (name == null || name.isBlank()) return false;
         try {
-            Process p = new ProcessBuilder("docker", "ps", "-a", "-q", "-f", "name=" + name)
-                    .redirectErrorStream(true).start();
-            String out = readFully(p.getInputStream());
+            Process p = new ProcessBuilder("docker", "inspect", name)
+                    .redirectErrorStream(true).redirectError(ProcessBuilder.Redirect.PIPE).start();
+            readFully(p.getInputStream());
             p.waitFor();
-            return out != null && !out.trim().isEmpty();
+            return p.exitValue() == 0;
         } catch (Exception e) {
             return false;
         }
@@ -208,16 +243,81 @@ public class UserContainerManager {
         }
     }
 
+    /**
+     * 精确判断指定名称/ID 的容器是否在运行。
+     * 不用 docker ps -f name=xxx（会子串匹配：aimate-user-1 会匹配到 aimate-user-10，导致误判）。
+     */
     private boolean isContainerRunning(String containerIdOrName) {
+        if (containerIdOrName == null || containerIdOrName.isBlank()) return false;
         try {
-            Process p = new ProcessBuilder("docker", "ps", "-q", "-f", "name=" + containerIdOrName)
+            Process p = new ProcessBuilder("docker", "inspect", "-f", "{{.State.Running}}", containerIdOrName)
                     .redirectErrorStream(true).start();
             String out = readFully(p.getInputStream());
             p.waitFor();
-            return out != null && !out.trim().isEmpty();
+            return p.exitValue() == 0 && "true".equalsIgnoreCase(out != null ? out.trim() : "");
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * 在执行 docker exec 前调用：若容器已停止则先 start，避免「容器已回收/停止」导致 exec 报错。
+     * 解决 getOrCreateContainer 返回后、exec 执行前被空闲回收任务停掉容器的竞态。
+     *
+     * @return true 表示容器在运行，可安全 exec；false 表示无法启动，调用方应返回错误
+     */
+    public boolean ensureContainerRunning(String containerIdOrName) {
+        if (containerIdOrName == null || containerIdOrName.isBlank()) return false;
+        if (isContainerRunning(containerIdOrName)) return true;
+        try {
+            runDocker("start", containerIdOrName);
+            boolean now = isContainerRunning(containerIdOrName);
+            if (now) log.info("[UserContainer] Started stopped container: {}", containerIdOrName);
+            return now;
+        } catch (Exception e) {
+            log.warn("[UserContainer] Failed to start container {}: {}", containerIdOrName, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 用户手动启动自己的容器：若已存在则 start，不存在则创建。仅操作 aimate-user-{userId}。
+     * @return 容器名表示成功，null 表示 Docker 未启用、userId 为空或操作失败
+     */
+    @Nullable
+    public String startUserContainer(Long userId) {
+        return getOrCreateContainer(userId);
+    }
+
+    /**
+     * 用户手动停止自己的容器：从 map 移除并执行 docker stop（仅停止，不 rm）。
+     * @return true 表示已停止或本就不存在/未运行，false 表示 stop 失败
+     */
+    public boolean stopUserContainer(Long userId) {
+        if (userId == null || !scriptDockerProperties.enabled()) return false;
+        String name = CONTAINER_NAME_PREFIX + userId;
+        userContainers.remove(userId);
+        if (!containerExists(name)) return true;
+        if (!isContainerRunning(name)) return true;
+        try {
+            runDocker("stop", name);
+            log.info("[UserContainer] User stopped container: {}", name);
+            return true;
+        } catch (Exception e) {
+            log.warn("[UserContainer] docker stop failed for {}: {}", name, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 用户手动重启自己的容器：先 stop 再 getOrCreate（会 start 或新建）。
+     * @return 容器名表示成功，null 表示失败
+     */
+    @Nullable
+    public String restartUserContainer(Long userId) {
+        if (userId == null || !scriptDockerProperties.enabled()) return null;
+        stopUserContainer(userId);
+        return getOrCreateContainer(userId);
     }
 
     /**
@@ -322,7 +422,10 @@ public class UserContainerManager {
                 if (userId == null) continue;
                 ContainerInfo info = userContainers.get(userId);
                 Long lastUsedAt = info != null ? info.getLastUsedAt() : null;
+                // docker stats 的 .Name 可能带前导斜杠，兼容两种 key
                 String[] stat = statsMap.get(name);
+                if (stat == null && !name.startsWith("/")) stat = statsMap.get("/" + name);
+                if (stat == null && name.startsWith("/")) stat = statsMap.get(name.substring(1));
                 String cpu = stat != null ? stat[0] : null;
                 String memUsage = stat != null ? stat[1] : null;
                 String memPerc = stat != null ? stat[2] : null;
