@@ -1,30 +1,15 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, Clock, KeyRound, AlertTriangle, Trash2 } from 'lucide-react'
+import { KeyRound, AlertTriangle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { agentApi } from '../api/agent'
 import { apikeyApi } from '../api/apikey'
 import { useAuth } from '../hooks/useAuth'
-import { StatusBadge } from '../components/agent/StatusBadge'
 import type { SessionResponse } from '../types/agent'
 import { useModelSelection } from '../state/modelSelection.ts'
 import { DeleteSessionModal } from '../components/agent/DeleteSessionModal'
 import { AgentInputBox } from '../components/agent/AgentInputBox'
-
-function formatSessionTime(iso: string): string {
-  try {
-    const d = new Date(iso)
-    const now = new Date()
-    const diff = now.getTime() - d.getTime()
-    if (diff < 60_000) return '刚刚'
-    if (diff < 3600_000) return `${Math.floor(diff / 60_000)} 分钟前`
-    if (diff < 86400_000) return `${Math.floor(diff / 3600_000)} 小时前`
-    return d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
-  } catch {
-    return ''
-  }
-}
 
 const EXAMPLES = [
   '用 Python 写一个能批量压缩图片的脚本，并解释每一步',
@@ -46,14 +31,6 @@ export function HomePage() {
     enabled: !!user?.userId,
   })
   const hasDefaultLlmKey = apiKeys.some(k => k.keyType === 'LLM' && k.isDefault)
-
-  // 最近会话：请求接口获取当前用户详细会话列表（状态、轮数、创建时间等）
-  const { data: recentSessions = [], isLoading: recentLoading } = useQuery({
-    queryKey: ['recent-sessions', user?.userId],
-    queryFn: () => agentApi.getRecentSessions(10),
-    enabled: !!user?.userId,
-    refetchInterval: 30_000,
-  })
 
   const startMutation = useMutation({
     mutationFn: (payload: {
@@ -118,54 +95,7 @@ export function HomePage() {
           </div>
         </div>
 
-        {/* Recent sessions：来自接口的详细会话列表（移到中部区域，支持上下滚动） */}
-        {(recentLoading || recentSessions.length > 0) && (
-          <div className="space-y-2">
-            <p className="text-xs text-white/30 font-medium uppercase tracking-wider">最近会话</p>
-            {recentLoading ? (
-              <div className="text-center py-8 text-white/25 text-sm">加载中...</div>
-            ) : (
-              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                {recentSessions.map(s => (
-                  <div
-                    key={s.sessionId}
-                    className="w-full flex items-center gap-3 px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] rounded-lg transition-colors group"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/session/${s.sessionId}`)}
-                      className="flex-1 flex items-center gap-4 text-left"
-                    >
-                      <StatusBadge status={s.status} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm text-white/75 truncate">{s.taskDescription || '会话'}</div>
-                        <div className="flex items-center gap-3 mt-0.5">
-                          <span className="text-[10px] text-white/25 font-mono">{s.sessionId.slice(0, 8)}…</span>
-                          <span className="flex items-center gap-1 text-[10px] text-white/25">
-                            <Clock className="w-2.5 h-2.5" />
-                            {s.iterationCount} 轮
-                          </span>
-                          {s.createTime && (
-                            <span className="text-[10px] text-white/20">{formatSessionTime(s.createTime)}</span>
-                          )}
-                        </div>
-                      </div>
-                      <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-white/40 flex-shrink-0" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedSession(s)}
-                      className="p-2 rounded-full text-white/30 hover:text-red-400 hover:bg-red-500/10 flex-shrink-0 transition-colors"
-                      title="删除/隐藏会话"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+        {/* 最近会话模块已移动到左侧导航栏中显示，这里不再单独展示 */}
         {selectedSession && (
           <DeleteSessionModal
             session={selectedSession}

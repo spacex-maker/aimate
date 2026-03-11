@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Pause, Play, StopCircle, ArrowLeft, Copy, RefreshCw, BookOpen } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { agentApi } from '../api/agent'
 import { useAgentSocket } from '../hooks/useAgentSocket'
 import { ThinkingStream } from '../components/agent/ThinkingStream'
-import { StatusBadge } from '../components/agent/StatusBadge'
 import { AgentInputBox } from '../components/agent/AgentInputBox'
 import { useModelSelection } from '../state/modelSelection.ts'
 import { useChatInput } from '../state/chatInput.ts'
 import type { AgentEvent, ChatMessageDto, PlanState, SessionResponse, StreamBlock, ToolCall } from '../types/agent'
+import { PlanPanel } from './SessionPage/PlanPanel'
+import { SessionHeader } from './SessionPage/SessionHeader'
+import { ScriptEnvBanner } from './SessionPage/ScriptEnvBanner'
+import { DockerInstallModal } from './SessionPage/DockerInstallModal'
 
 // ── Block reducer ─────────────────────────────────────────────────────────────
 type Action =
@@ -102,104 +104,6 @@ function closeThinking(blocks: StreamBlock[]): StreamBlock[] {
   return blocks
 }
 
-// ── Plan Panel（右下角小面板，仅显示执行计划） ────────────────────────────────
-
-function PlanPanel({ plan }: { plan: PlanState }) {
-  if (!plan.steps || plan.steps.length === 0) return null
-  const currentIndex = (plan.currentStepIndex ?? 1) - 1
-
-  return (
-    <div className="fixed right-4 bottom-28 z-30 w-60 max-h-40 rounded-xl border border-white/10 bg-gray-900/95 backdrop-blur shadow-xl overflow-hidden text-xs">
-      <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between">
-        <span className="text-[11px] font-semibold text-white/70">执行计划</span>
-        <span className="text-[10px] text-white/40">
-          第 {Math.min(Math.max(plan.currentStepIndex || 1, 1), plan.steps.length)} / {plan.steps.length} 步
-        </span>
-      </div>
-      <div className="max-h-28 overflow-y-auto px-2 py-2 space-y-1">
-        {plan.steps.map((title, i) => {
-          const stepNum = i + 1
-          const isCurrent = currentIndex === i
-          const summary = plan.stepSummaries[stepNum]
-          const isDone = !!summary
-          return (
-            <div
-              key={stepNum}
-              className={`rounded-lg px-2 py-1.5 transition-colors ${
-                isCurrent
-                  ? 'bg-blue-500/20 text-white'
-                  : isDone
-                    ? 'bg-green-500/10 text-green-100/90'
-                    : 'bg-white/5 text-white/70'
-              }`}
-            >
-              <div className="flex items-center gap-2 mb-0.5">
-                <span className="text-[10px] font-mono opacity-80">Step {stepNum}</span>
-                {isDone && <span className="text-[10px] text-green-300">✓ 已完成</span>}
-                {isCurrent && !isDone && <span className="text-[10px] text-blue-300">进行中</span>}
-              </div>
-              <div className="text-[11px] truncate">{title}</div>
-              {summary && (
-                <div className="text-[10px] text-white/50 mt-0.5 line-clamp-2">
-                  {summary}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-// ── Left panel: session list ──────────────────────────────────────────────────
-
-interface SessionListPanelProps {
-  sessions: SessionResponse[]
-  loading: boolean
-  selectedSessionId?: string
-  onSelect: (id: string) => void
-}
-
-function SessionListPanel({ sessions, loading, selectedSessionId, onSelect }: SessionListPanelProps) {
-  return (
-    <aside className="w-64 border-r border-white/10 bg-black/20 flex-shrink-0 flex flex-col min-h-0">
-      <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
-        <span className="text-xs font-semibold text-white/60 uppercase tracking-wider">最近会话</span>
-      </div>
-      {loading ? (
-        <div className="flex-1 flex items-center justify-center text-xs text-white/30">加载中...</div>
-      ) : sessions.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center px-3 text-xs text-white/25 text-center">
-          暂无会话
-        </div>
-      ) : (
-        <div className="flex-1 overflow-y-auto py-2 space-y-1">
-          {sessions.map((s) => {
-            const active = s.sessionId === selectedSessionId
-            return (
-              <button
-                key={s.sessionId}
-                type="button"
-                onClick={() => onSelect(s.sessionId)}
-                className={`w-full px-3 py-2 text-left text-xs flex items-center gap-2 transition-colors ${
-                  active ? 'bg-white/10 text-white' : 'bg-transparent text-white/70 hover:bg-white/5'
-                }`}
-              >
-                <StatusBadge status={s.status} />
-                <div className="flex-1 min-w-0">
-                  <div className="truncate">{s.taskDescription || '会话'}</div>
-                  <div className="text-[10px] text-white/30 truncate">{s.sessionId}</div>
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </aside>
-  )
-}
-
 // ── Component ─────────────────────────────────────────────────────────────────
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
@@ -235,11 +139,6 @@ export function SessionPage() {
     queryKey: ['session-messages', sessionId],
     queryFn: () => agentApi.getSessionMessages(effectiveSessionId!, 10),
     enabled: !!effectiveSessionId && !!session,
-  })
-
-  const { data: recentSessions = [], isLoading: recentLoading } = useQuery({
-    queryKey: ['recent-sessions'],
-    queryFn: () => agentApi.getRecentSessions(20),
   })
 
   // 往上滚动加载更多：已加载的「更早」消息，与接口返回的最近 N 条合并展示
@@ -507,256 +406,76 @@ export function SessionPage() {
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="flex-shrink-0 border-b border-white/10 px-6 py-4 flex items-center gap-4">
-        <button
-          onClick={() => navigate('/')}
-          className="text-white/30 hover:text-white/70 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-        </button>
+      <SessionHeader
+        session={session}
+        sessionId={sessionId}
+        effectiveSessionId={effectiveSessionId}
+        isRunning={!!isRunning}
+        isPaused={!!isPaused}
+        isTerminal={!!isTerminal}
+        pausePending={pauseMutation.isPending}
+        resumePending={resumeMutation.isPending}
+        abortPending={abortMutation.isPending}
+        onBack={() => navigate('/')}
+        onCopyId={() => {
+          navigator.clipboard.writeText(effectiveSessionId ?? '')
+          toast.success('已复制')
+        }}
+        onPause={() => pauseMutation.mutate()}
+        onResume={() => resumeMutation.mutate()}
+        onAbort={() => abortMutation.mutate()}
+      />
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-3">
-            {session && <StatusBadge status={session.status} />}
-            <span className="text-xs font-mono text-white/25">
-              {sessionId?.slice(0, 8)}…
-            </span>
-            {session && (
-              <span className="text-xs text-white/30">
-                {session.iterationCount} 轮迭代
-              </span>
-            )}
-          </div>
-          {session && (
-            <p className="text-sm text-white/70 mt-0.5 truncate">{session.taskDescription}</p>
-          )}
-        </div>
+      <ScriptEnvBanner
+        scriptEnv={scriptEnv}
+        refreshPending={refreshDockerMutation.isPending}
+        onRefreshDocker={() => refreshDockerMutation.mutate()}
+        onOpenDockerInstall={() => setDockerInstallModalOpen(true)}
+      />
 
-        {/* Actions */}
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <button
-            onClick={() => { navigator.clipboard.writeText(effectiveSessionId ?? ''); toast.success('已复制') }}
-            disabled={!effectiveSessionId}
-            className="p-2 text-white/30 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Copy className="w-4 h-4" />
-          </button>
+      <DockerInstallModal
+        open={dockerInstallModalOpen}
+        dockerInstallInfo={dockerInstallInfo}
+        onClose={() => setDockerInstallModalOpen(false)}
+        onCopyCommand={(command) => {
+          navigator.clipboard.writeText(command ?? '')
+          toast.success('已复制命令')
+        }}
+      />
 
-          {isRunning && (
-            <>
-              <button
-                onClick={() => pauseMutation.mutate()}
-                disabled={pauseMutation.isPending || !effectiveSessionId}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-orange-400 border border-orange-400/30 hover:bg-orange-400/10 rounded-lg transition-colors disabled:opacity-50"
-              >
-                <Pause className="w-3.5 h-3.5" /> 暂停
-              </button>
-            </>
-          )}
-          {isPaused && (
-            <button
-              onClick={() => resumeMutation.mutate()}
-              disabled={resumeMutation.isPending || !effectiveSessionId}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-green-400 border border-green-400/30 hover:bg-green-400/10 rounded-lg transition-colors disabled:opacity-50"
-            >
-              <Play className="w-3.5 h-3.5" /> 恢复
-            </button>
-          )}
-          {!isTerminal && (
-            <button
-              onClick={() => abortMutation.mutate()}
-              disabled={abortMutation.isPending || !effectiveSessionId}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-400 border border-red-400/30 hover:bg-red-400/10 rounded-lg transition-colors disabled:opacity-50"
-            >
-              <StopCircle className="w-3.5 h-3.5" /> 中止
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* 脚本执行环境状态（独立隔离虚拟机）+ 自动检测与安装说明 */}
-      {scriptEnv && (
-        <div className="flex-shrink-0 px-6 py-2 border-b border-white/10 bg-black/20 flex items-center flex-wrap gap-x-3 gap-y-1.5 text-xs text-white/60">
-          <span className="font-medium text-white/70">脚本执行环境：</span>
-          {scriptEnv.dockerEnabled ? (
-            <>
-              {scriptEnv.dockerAvailable === false ? (
-                <>
-                  <span className="text-amber-400/90">未检测到 Docker</span>
-                  <button
-                    type="button"
-                    onClick={() => refreshDockerMutation.mutate()}
-                    disabled={refreshDockerMutation.isPending}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
-                  >
-                    <RefreshCw className={`w-3 h-3 ${refreshDockerMutation.isPending ? 'animate-spin' : ''}`} />
-                    重新检测
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDockerInstallModalOpen(true)}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
-                  >
-                    <BookOpen className="w-3 h-3" />
-                    安装说明
-                  </button>
-                </>
-              ) : (
-                <>
-                  <span className="text-green-400/90">独立隔离环境</span>
-                  <span className="text-white/50">— 您拥有专属 Linux 虚拟机，脚本与命令在隔离容器中运行</span>
-                  {scriptEnv.dockerVersion && (
-                    <span className="text-white/40">Docker v{scriptEnv.dockerVersion}</span>
-                  )}
-                  {scriptEnv.image && (
-                    <span className="font-mono text-white/45" title="基础镜像">镜像 {scriptEnv.image}</span>
-                  )}
-                  {scriptEnv.containerStatus === 'running' && scriptEnv.containerName && (
-                    <span className="font-mono text-white/50" title="当前容器">· {scriptEnv.containerName}</span>
-                  )}
-                  {scriptEnv.containerStatus === 'running' && (scriptEnv.memoryLimit || scriptEnv.cpuLimit != null) && (
-                    <span className="text-white/40">
-                      资源 {[scriptEnv.memoryLimit, scriptEnv.cpuLimit != null ? `CPU ${scriptEnv.cpuLimit} 核` : null].filter(Boolean).join(' · ')}
-                    </span>
-                  )}
-                  {scriptEnv.containerStatus === 'none' && (
-                    <span className="text-amber-400/80">· 首次执行时自动创建</span>
-                  )}
-                  {scriptEnv.idleMinutes != null && scriptEnv.idleMinutes <= 0 ? (
-                    <span className="text-white/40">· 不自动回收（常驻/定时任务可一直运行）</span>
-                  ) : scriptEnv.idleMinutes != null ? (
-                    <span className="text-white/40">· 空闲 {scriptEnv.idleMinutes} 分钟后自动回收（回收即暂停，数据保留；容器内 cron 等定时任务需配置为不回收）</span>
-                  ) : null}
-                </>
-              )}
-            </>
-          ) : (
-            <>
-              <span>本机执行（Docker 未启用）</span>
-              {scriptEnv.dockerAvailable === true && scriptEnv.dockerVersion && (
-                <span className="text-white/40">· 已检测到 Docker v{scriptEnv.dockerVersion}</span>
-              )}
-              {scriptEnv.dockerAvailable === false && (
-                <>
-                  <span className="text-white/40">· 未检测到 Docker</span>
-                  <button
-                    type="button"
-                    onClick={() => refreshDockerMutation.mutate()}
-                    disabled={refreshDockerMutation.isPending}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
-                  >
-                    <RefreshCw className={`w-3 h-3 ${refreshDockerMutation.isPending ? 'animate-spin' : ''}`} />
-                    重新检测
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDockerInstallModalOpen(true)}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/80"
-                  >
-                    <BookOpen className="w-3 h-3" />
-                    安装说明
-                  </button>
-                </>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Docker 安装说明弹窗 */}
-      {dockerInstallModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setDockerInstallModalOpen(false)}>
-          <div className="bg-gray-900 border border-white/20 rounded-xl shadow-xl max-w-md w-full mx-4 p-5 text-left" onClick={e => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-white/90 mb-3">安装 Docker</h3>
-            {dockerInstallInfo ? (
-              <>
-                <p className="text-xs text-white/70 whitespace-pre-wrap mb-3">{dockerInstallInfo.instructions}</p>
-                {dockerInstallInfo.copyCommand && (
-                  <div className="flex gap-2 mb-3">
-                    <code className="flex-1 px-3 py-2 rounded bg-black/40 text-xs text-green-300 font-mono break-all">
-                      {dockerInstallInfo.copyCommand}
-                    </code>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(dockerInstallInfo.copyCommand ?? '')
-                        toast.success('已复制命令')
-                      }}
-                      className="flex-shrink-0 px-3 py-2 rounded bg-white/10 hover:bg-white/20 text-white/80 text-xs"
-                    >
-                      <Copy className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
-                {dockerInstallInfo.docUrl && (
-                  <a
-                    href={dockerInstallInfo.docUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-blue-400 hover:underline"
-                  >
-                    官方安装文档 →
-                  </a>
-                )}
-              </>
-            ) : (
-              <p className="text-xs text-white/50">加载中…</p>
-            )}
-            <div className="mt-4 flex justify-end">
+      {/* Stream 主区域 */}
+      <div className="flex-1 min-h-0 flex flex-col">
+        <ThinkingStream
+          userMessage={mergedMessages.length ? null : (session?.taskDescription ?? null)}
+          historyMessages={mergedMessages.length ? mergedMessages : null}
+          topSlot={canLoadMore ? (
+            <div className="flex justify-center py-3">
               <button
                 type="button"
-                onClick={() => setDockerInstallModalOpen(false)}
-                className="px-3 py-1.5 text-xs rounded bg-white/10 hover:bg-white/20 text-white/80"
+                onClick={loadMoreOlder}
+                disabled={loadingMore}
+                className="px-4 py-2 text-sm text-white/70 hover:text-white bg-white/10 hover:bg-white/15 rounded-lg transition-colors disabled:opacity-50"
               >
-                关闭
+                {loadingMore ? '加载中…' : '加载更多历史消息'}
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* 会话列表 + Stream 主区域（执行计划通过右下角 PlanPanel 展示） */}
-      <div className="flex-1 flex min-h-0">
-        <SessionListPanel
-          sessions={recentSessions}
-          loading={recentLoading}
-          selectedSessionId={effectiveSessionId}
-          onSelect={(id) => navigate(`/session/${id}`)}
+          ) : undefined}
+          blocks={displayBlocks}
+          isRunning={isRunning}
+          retryTargetUserMessageId={retryTargetUserMessageId}
+          canRetry
+          onRetry={(userMessageId) => {
+            setRetryTargetUserMessageId(userMessageId)
+            if (!effectiveSessionId) return
+            retryMutation.mutate({
+              sessionId: effectiveSessionId,
+              userMessageId,
+            })
+          }}
+          isRetrying={retryMutation.isPending}
+          sessionId={effectiveSessionId ?? undefined}
+          onInterrupt={(id) => interruptMutation.mutate(id)}
         />
-        <div className="flex-1 min-w-0 flex flex-col relative">
-          <ThinkingStream
-            userMessage={mergedMessages.length ? null : (session?.taskDescription ?? null)}
-            historyMessages={mergedMessages.length ? mergedMessages : null}
-            topSlot={canLoadMore ? (
-              <div className="flex justify-center py-3">
-                <button
-                  type="button"
-                  onClick={loadMoreOlder}
-                  disabled={loadingMore}
-                  className="px-4 py-2 text-sm text-white/70 hover:text-white bg-white/10 hover:bg-white/15 rounded-lg transition-colors disabled:opacity-50"
-                >
-                  {loadingMore ? '加载中…' : '加载更多历史消息'}
-                </button>
-              </div>
-            ) : undefined}
-            blocks={displayBlocks}
-            isRunning={isRunning}
-            retryTargetUserMessageId={retryTargetUserMessageId}
-            canRetry
-            onRetry={(userMessageId) => {
-              setRetryTargetUserMessageId(userMessageId)
-              if (!effectiveSessionId) return
-              retryMutation.mutate({
-                sessionId: effectiveSessionId,
-                userMessageId,
-              })
-            }}
-            isRetrying={retryMutation.isPending}
-            sessionId={effectiveSessionId ?? undefined}
-            onInterrupt={(id) => interruptMutation.mutate(id)}
-          />
-        </div>
       </div>
 
       {/* 与首页完全一致的底部输入框：固定视口底部、安全区、大圆角 */}
@@ -776,7 +495,6 @@ export function SessionPage() {
           selectedSystemModelId={
             globalModelSelection?.source === 'SYSTEM' ? globalModelSelection.systemModelId ?? null : null
           }
-          className="ml-64"
           onModelChange={(sel) => setGlobalModelSelection(sel)}
           placeholder={
             isRunning || isPaused
@@ -786,13 +504,13 @@ export function SessionPage() {
           hintText={
             isRunning || isPaused ? '新消息会立即开始回复，可与上一条并行' : '继续提问将基于当前会话上下文'
           }
+          bottomRightSlot={<PlanPanel plan={plan} />}
           isPending={continueMutation.isPending}
           pendingLabel="发送中"
           submitTitle="发送"
           disabled={!effectiveSessionId}
         />
       )}
-      <PlanPanel plan={plan} />
     </div>
   )
 }

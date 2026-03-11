@@ -244,7 +244,7 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
 
   return (
     <div ref={outerScrollRef} className="flex-1 min-w-0 overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-4 py-6 space-y-6 min-w-0">
+      <div className="max-w-3xl mx-auto px-4 pt-6 pb-40 space-y-6 min-w-0">
         {topSlot}
         {/* 历史消息：按条展示；重试时流式内容插到被重试用户消息下方或下一条 assistant 位置 */}
         {hasHistory && (

@@ -126,7 +126,7 @@ export function ApiKeyFormModal({ initial, onClose, onSubmit, isLoading }: Props
     queryFn: () => agentApi.getSystemModels(),
   })
 
-  // 从系统模型推导：服务商列表（去重、保序）、按服务商分组的模型列表
+  // 从「已开启的系统模型」推导：服务商列表（去重、保序）、按服务商分组的模型列表
   const { providerOptions, modelsByProvider, defaultBaseUrlByProvider } = useMemo(() => {
     const seen = new Set<string>()
     const providers: { value: string; label: string }[] = []
@@ -141,7 +141,8 @@ export function ApiKeyFormModal({ initial, onClose, onSubmit, isLoading }: Props
       if (m.baseUrl && !baseByProvider[m.provider]) baseByProvider[m.provider] = m.baseUrl
     }
     return {
-      providerOptions: providers.length > 0 ? providers : PROVIDERS.map(p => ({ value: p.value, label: p.label })),
+      // 仅允许选择系统当前开启的 provider；若为空，则前端表单将引导用户联系管理员开启模型
+      providerOptions: providers,
       modelsByProvider: byProvider,
       defaultBaseUrlByProvider: baseByProvider,
     }
@@ -242,13 +243,17 @@ export function ApiKeyFormModal({ initial, onClose, onSubmit, isLoading }: Props
               open={providerOpen}
               onOpenChange={setProviderOpen}
             />
-            {keyType === 'LLM' && modelsForCurrentProvider.length > 0 && (model === '' || modelsForCurrentProvider.some(m => m.modelId === model)) ? (
+            {keyType === 'LLM' ? (
               <DarkSelect
                 label="模型名称"
                 value={model}
-                options={[{ value: '', label: '请选择' }, ...modelsForCurrentProvider.map(m => ({ value: m.modelId, label: m.displayName }))]}
+                options={
+                  modelsForCurrentProvider.length > 0
+                    ? modelsForCurrentProvider.map(m => ({ value: m.modelId, label: m.displayName }))
+                    : []
+                }
                 onChange={setModel}
-                placeholder="请选择"
+                placeholder={modelsForCurrentProvider.length > 0 ? '请选择' : '暂无可用模型，请联系管理员开启'}
                 buttonRef={modelButtonRef}
                 open={modelOpen}
                 onOpenChange={setModelOpen}

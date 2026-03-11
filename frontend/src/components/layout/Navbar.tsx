@@ -1,10 +1,14 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Bot, Brain, Cpu, KeyRound, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Settings2, Wrench } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { Bot, Brain, Cpu, KeyRound, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Settings2, Wrench, Clock } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../hooks/useAuth'
 import { AdminModal } from '../admin/AdminModal'
+import { agentApi } from '../../api/agent'
+import { StatusBadge } from '../agent/StatusBadge'
+import type { SessionResponse } from '../../types/agent'
 
 const baseLinks = [
   { to: '/', label: '控制台', icon: LayoutDashboard },
@@ -23,6 +27,13 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [adminModalOpen, setAdminModalOpen] = useState(false)
+
+  const { data: recentSessions = [], isLoading: recentLoading } = useQuery<SessionResponse[]>({
+    queryKey: ['recent-sessions', user?.userId],
+    queryFn: () => agentApi.getRecentSessions(6),
+    enabled: !!user?.userId,
+    refetchInterval: 30_000,
+  })
 
   const handleLogout = () => {
     logout()
@@ -68,20 +79,64 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
         </button>
       </div>
 
-      {/* Nav links */}
-      <div className="flex-1 py-3 px-2 space-y-1 overflow-y-auto">
-        {baseLinks.map(({ to, label, icon: Icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            className={({ isActive }) => linkClass(isActive)}
-            title={collapsed ? label : undefined}
-          >
-            <Icon className="w-4 h-4 flex-shrink-0" />
-            {!collapsed && <span>{label}</span>}
-          </NavLink>
-        ))}
+      {/* Nav links + 最近会话 */}
+      <div className="flex-1 py-3 px-2 space-y-2 overflow-y-auto">
+        <div className="space-y-1">
+          {baseLinks.map(({ to, label, icon: Icon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === '/'}
+              className={({ isActive }) => linkClass(isActive)}
+              title={collapsed ? label : undefined}
+            >
+              <Icon className="w-4 h-4 flex-shrink-0" />
+              {!collapsed && <span>{label}</span>}
+            </NavLink>
+          ))}
+        </div>
+
+        {/* 会话区：显示在「我的工具」下方，仅展开侧栏时展示 */}
+        {!collapsed && (recentLoading || recentSessions.length > 0) && (
+          <div className="mt-4 space-y-1">
+            <div className="px-1 flex items-center justify-between text-[11px] text-white/35 uppercase tracking-wide">
+              <span>会话</span>
+              {recentSessions.length > 0 && (
+                <span className="text-white/25">{recentSessions.length}</span>
+              )}
+            </div>
+            <div className="space-y-1">
+              {recentLoading && recentSessions.length === 0 ? (
+                <div className="px-2 py-2 text-[11px] text-white/30">加载中…</div>
+              ) : recentSessions.length === 0 ? (
+                <div className="px-2 py-2 text-[11px] text-white/30">暂无会话</div>
+              ) : (
+                recentSessions.map((s) => (
+                  <button
+                    key={s.sessionId}
+                    type="button"
+                    onClick={() => navigate(`/session/${s.sessionId}`)}
+                    className="w-full px-2.5 py-2 rounded-lg bg-white/0 hover:bg-white/5 text-left text-[11px] text-white/70 flex items-center gap-2 transition-colors"
+                  >
+                    <StatusBadge status={s.status} />
+                    <div className="flex-1 min-w-0">
+                      <div className="truncate text-xs text-white/80">
+                        {s.taskDescription || '会话'}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5 text-[10px] text-white/35">
+                        <span className="font-mono truncate">{s.sessionId.slice(0, 8)}…</span>
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-2.5 h-2.5" />
+                          {s.iterationCount} 轮
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 管理入口（仅管理员） */}

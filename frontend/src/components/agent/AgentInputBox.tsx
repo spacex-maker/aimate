@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Send, Plus, SlidersHorizontal, Mic, ChevronDown } from 'lucide-react'
@@ -35,6 +35,8 @@ export interface AgentInputBoxProps {
   onSystemModelChange?: (model: SystemModelDto | null) => void
   /** 模型选择变化时的回调（包含 source / id 信息），用于页面级逻辑（如重试时携带当前模型） */
   onModelChange?: (selection: { source: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null }) => void
+  /** 底部提示行右侧的自定义插槽（例如执行计划小面板） */
+  bottomRightSlot?: ReactNode
 }
 
 /**
@@ -56,6 +58,7 @@ export function AgentInputBox({
   selectedSystemModelId: controlledModelId,
   onSystemModelChange,
   onModelChange,
+  bottomRightSlot,
 }: AgentInputBoxProps) {
   const canSubmit = value.trim() !== '' && !isPending && !disabled
   const [glow, setGlow] = useState(false)
@@ -83,12 +86,14 @@ export function AgentInputBox({
     selectedSource === 'SYSTEM' && selectedModelId != null
       ? systemModels.find((m) => m.id === selectedModelId) ?? null
       : null
+
+  // 按用户期望：按钮上仅显示模型名称，不再附带 provider，名称过长时允许区域适当变宽
   const displayModelLabel = modelsLoading
     ? '模型加载中…'
     : selectedSource === 'USER_KEY' && selectedUserModel
-      ? `${formatProvider(selectedUserModel.provider)} · ${selectedUserModel.label || selectedUserModel.model || '我的模型'}`
+      ? selectedUserModel.label || selectedUserModel.model || '我的模型'
       : selectedModel
-        ? `${formatProvider(selectedModel.provider)} · ${selectedModel.displayName}`
+        ? selectedModel.displayName
         : '模型'
 
   // 首次进入时，优先使用后端记录的用户首选模型；仅初始化一次，不再覆盖用户手动选择
@@ -281,16 +286,16 @@ export function AgentInputBox({
                   type="button"
                   onClick={() => !modelsLoading && setModelOpen((o) => !o)}
                   disabled={modelsLoading}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors max-w-[180px] truncate ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors ${
                     modelsLoading
                       ? 'text-white/40 bg-white/5 cursor-wait'
                       : modelOpen
                         ? 'text-white/90 bg-white/10'
                         : 'text-white/50 hover:text-white/80 hover:bg-white/10'
                   }`}
-                  title={modelsLoading ? '模型列表加载中…' : selectedModel ? `${formatProvider(selectedModel.provider)} · ${selectedModel.displayName}` : '选择推理模型'}
+                  title={modelsLoading ? '模型列表加载中…' : displayModelLabel}
                 >
-                  <span className="truncate">{displayModelLabel}</span>
+                  <span>{displayModelLabel}</span>
                   <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />
                 </button>
                 {!modelsLoading && modelOpen &&
@@ -336,14 +341,14 @@ export function AgentInputBox({
                                       }`}
                                       title={u.model || u.label || ''}
                                     >
-                                      <span className="flex items-center gap-2 flex-wrap">
-                                        <span className="text-white/55 font-medium shrink-0">
-                                          {formatProvider(u.provider)}
-                                        </span>
-                                        <span className="truncate">
+                                      <div className="flex flex-col gap-0.5">
+                                        <span className="text-white/90">
                                           {u.label || u.model || '(未命名模型)'}
                                         </span>
-                                      </span>
+                                        <span className="text-[11px] text-white/45">
+                                          {formatProvider(u.provider)}
+                                        </span>
+                                      </div>
                                     </button>
                                   ))}
                                 </div>
@@ -367,12 +372,12 @@ export function AgentInputBox({
                                       }`}
                                       title={m.description ?? `${formatProvider(m.provider)} ${m.displayName}`}
                                     >
-                                      <span className="flex items-center gap-2 flex-wrap">
-                                        <span className="text-white/55 font-medium shrink-0">
+                                      <div className="flex flex-col gap-0.5">
+                                        <span className="font-medium text-white/90">{m.displayName}</span>
+                                        <span className="text-[11px] text-white/45">
                                           {formatProvider(m.provider)}
                                         </span>
-                                        <span className="font-medium truncate">{m.displayName}</span>
-                                      </span>
+                                      </div>
                                       {m.description && (
                                         <span className="block text-white/50 mt-0.5 truncate">
                                           {m.description}
@@ -412,9 +417,16 @@ export function AgentInputBox({
             </div>
           </div>
         </div>
-        <p className="mt-1.5 text-center text-xs text-white/35">
-          {hintText}
-        </p>
+        <div className="mt-1.5 w-full flex items-center justify-between gap-2">
+          <p className="text-xs text-white/35">
+            {hintText}
+          </p>
+          {bottomRightSlot && (
+            <div className="flex-shrink-0">
+              {bottomRightSlot}
+            </div>
+          )}
+        </div>
       </div>
     </form>
   )

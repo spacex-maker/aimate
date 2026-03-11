@@ -93,6 +93,10 @@ export const agentApi = {
   getMessageVersions: (sessionId: string, messageId: number) =>
     http<AssistantVersionDto[]>(`${BASE}/${sessionId}/messages/${messageId}/versions`),
 
+  /** 系统已开启的模型目录（仅 enabled=true），用于下拉选择 provider / model */
+  getSystemModels: () =>
+    http<SystemModelDto[]>('/api/agent/system-models'),
+
   /** 模型选择所需的完整数据：用户模型 + 系统模型 + 用户首选模型 */
   getAvailableModels: () =>
     http<AvailableModelsDto>('/api/agent/user-default-model'),

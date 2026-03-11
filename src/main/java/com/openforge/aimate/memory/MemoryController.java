@@ -273,8 +273,10 @@ public class MemoryController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         boolean noCompress = Boolean.TRUE.equals(body.noCompress());
-        boolean updated = memoryService.updateNoCompress(id, noCompress, userId);
-        return updated ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+        // 仅更新「禁止压缩」标记，本质上是幂等操作：
+        // 若记录已被删除或不存在，不再向前端暴露 404，而是视为“目标状态已达成”返回 204，避免打扰用户。
+        memoryService.updateNoCompress(id, noCompress, userId);
+        return ResponseEntity.noContent().build();
     }
 
     /** Delete a single memory by its Milvus ID (in current user's collection). */
