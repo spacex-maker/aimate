@@ -12,11 +12,13 @@ import com.openforge.aimate.domain.SystemModel;
 public record SystemModelDto(
         @JsonProperty("id")           long id,
         @JsonProperty("provider")     String provider,
-        @JsonProperty("modelId")     String modelId,
+        @JsonProperty("modelId")      String modelId,
         @JsonProperty("displayName") String displayName,
-        @JsonProperty("baseUrl")     String baseUrl,
-        @JsonProperty("enabled")     boolean enabled,
-        @JsonProperty("description") String description
+        @JsonProperty("baseUrl")      String baseUrl,
+        @JsonProperty("apiKeyConfigKey") String apiKeyConfigKey,
+        @JsonProperty("sortOrder")    int sortOrder,
+        @JsonProperty("enabled")      boolean enabled,
+        @JsonProperty("description")  String description
 ) {
     public static SystemModelDto from(SystemModel m) {
         if (m == null || m.getId() == null) return null;
@@ -26,6 +28,8 @@ public record SystemModelDto(
                 m.getModelId(),
                 m.getDisplayName(),
                 m.getBaseUrl(),
+                m.getApiKeyConfigKey(),
+                m.getSortOrder(),
                 m.isEnabled(),
                 m.getDescription()
         );

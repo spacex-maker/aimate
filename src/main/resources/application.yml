@@ -2,7 +2,7 @@
 # 未指定 profile 时默认 local；产线部署时设置 SPRING_PROFILES_ACTIVE=prod
 spring:
   profiles:
-    active: ${SPRING_PROFILES_ACTIVE:localgz}
+    active: ${SPRING_PROFILES_ACTIVE:local}
   application:
     name: aimate
 

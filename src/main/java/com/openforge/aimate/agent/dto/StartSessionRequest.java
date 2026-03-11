@@ -1,5 +1,6 @@
 package com.openforge.aimate.agent.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
@@ -15,5 +16,14 @@ public record StartSessionRequest(
         @Size(max = 4000, message = "task must not exceed 4000 characters")
         String task,
 
-        String sessionId
+        String sessionId,
+
+        @JsonProperty("modelSource")
+        String modelSource,      // "SYSTEM" | "USER_KEY" | null
+
+        @JsonProperty("systemModelId")
+        Long systemModelId,
+
+        @JsonProperty("userApiKeyId")
+        Long userApiKeyId
 ) {}

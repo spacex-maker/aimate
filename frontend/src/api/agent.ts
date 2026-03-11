@@ -1,4 +1,4 @@
-import type { AssistantVersionDto, ChatMessageDto, DockerInstallInfoDto, ScriptEnvStatusDto, SessionResponse, StartSessionRequest, SystemModelDto, ToolSettingsDto } from '../types/agent'
+import type { AssistantVersionDto, AvailableModelsDto, ChatMessageDto, DockerInstallInfoDto, ScriptEnvStatusDto, SessionResponse, StartSessionRequest, SystemModelDto, ToolSettingsDto } from '../types/agent'
 import { http } from './httpClient'
 
 const BASE = '/api/agent/sessions'
@@ -39,10 +39,13 @@ export const agentApi = {
   resumeSession: (sessionId: string) =>
     http<SessionResponse>(`${BASE}/${sessionId}/resume`, { method: 'POST' }),
 
-  continueSession: (sessionId: string, message: string) =>
+  continueSession: (
+    sessionId: string,
+    body: { message: string; modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null }
+  ) =>
     http<SessionResponse>(`${BASE}/${sessionId}/continue`, {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(body),
     }),
 
   abortSession: (sessionId: string) => {
@@ -76,10 +79,13 @@ export const agentApi = {
     }),
 
   /** 重试某条用户消息：用该条之前的上下文重新生成下一条 assistant，并追加新版本 */
-  retryMessage: (sessionId: string, userMessageId: number) =>
+  retryMessage: (
+    sessionId: string,
+    body: { userMessageId: number; modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null }
+  ) =>
     http<SessionResponse>(`${BASE}/${sessionId}/retry`, {
       method: 'POST',
-      body: JSON.stringify({ userMessageId }),
+      body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
     }),
 
@@ -87,9 +93,17 @@ export const agentApi = {
   getMessageVersions: (sessionId: string, messageId: number) =>
     http<AssistantVersionDto[]>(`${BASE}/${sessionId}/messages/${messageId}/versions`),
 
-  /** 系统模型列表（启用的、按 sort_order），供输入框模型选择 */
-  getSystemModels: () =>
-    http<SystemModelDto[]>('/api/agent/system-models'),
+  /** 模型选择所需的完整数据：用户模型 + 系统模型 + 用户首选模型 */
+  getAvailableModels: () =>
+    http<AvailableModelsDto>('/api/agent/user-default-model'),
+
+  /** 更新当前登录用户的默认模型（聊天输入框最近一次选择） */
+  setUserDefaultModel: (body: { source: 'SYSTEM' | 'USER_KEY'; systemModelId?: number; userApiKeyId?: number }) =>
+    http<void>('/api/agent/user-default-model', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
 
   /** 当前用户系统工具开关（长期记忆、联网搜索、AI 编写工具、脚本执行） */
   getToolSettings: () =>

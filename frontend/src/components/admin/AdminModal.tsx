@@ -407,10 +407,14 @@ function ModelManageContent() {
   })
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
-      adminApi.updateSystemModelEnabled(id, enabled),
-    onSuccess: (_, { enabled }) => {
-      toast.success(enabled ? '已开启该模型' : '已关闭该模型')
+    mutationFn: ({ id, body }: { id: number; body: { enabled?: boolean; sortOrder?: number } }) =>
+      adminApi.updateSystemModel(id, body),
+    onSuccess: (_, { body }) => {
+      if (body.enabled !== undefined) {
+        toast.success(body.enabled ? '已开启该模型' : '已关闭该模型')
+      } else if (body.sortOrder !== undefined) {
+        toast.success('已更新模型优先级')
+      }
       queryClient.invalidateQueries({ queryKey: ['admin-system-models'] })
       queryClient.invalidateQueries({ queryKey: ['system-models'] })
     },
@@ -419,7 +423,23 @@ function ModelManageContent() {
 
   const toggleEnabled = (m: SystemModelDto) => {
     if (m.id == null) return
-    updateMutation.mutate({ id: m.id, enabled: !(m.enabled ?? true) })
+    updateMutation.mutate({ id: m.id, body: { enabled: !(m.enabled ?? true) } })
+  }
+
+  const moveUp = (index: number) => {
+    if (index <= 0) return
+    const current = models[index]
+    const prev = models[index - 1]
+    if (!current || !prev) return
+    updateMutation.mutate({ id: current.id, body: { sortOrder: (prev.sortOrder ?? 0) - 1 } })
+  }
+
+  const moveDown = (index: number) => {
+    if (index >= models.length - 1) return
+    const current = models[index]
+    const next = models[index + 1]
+    if (!current || !next) return
+    updateMutation.mutate({ id: current.id, body: { sortOrder: (next.sortOrder ?? 0) + 1 } })
   }
 
   return (
@@ -437,6 +457,7 @@ function ModelManageContent() {
           <table className="w-full text-xs text-white/80">
             <thead>
               <tr className="border-b border-white/10 text-left bg-white/[0.03]">
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-10">排序</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">服务商</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">展示名</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">模型 ID</th>
@@ -444,8 +465,30 @@ function ModelManageContent() {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/10">
-              {models.map((m: SystemModelDto) => (
+              {models.map((m: SystemModelDto, index: number) => (
                 <tr key={m.id} className="hover:bg-white/[0.03]">
+                  <td className="py-2 px-2">
+                    <div className="flex flex-col items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => moveUp(index)}
+                        disabled={index === 0 || updateMutation.isPending}
+                        className="text-white/40 hover:text-white/80 disabled:opacity-30 cursor-pointer"
+                        title="提高优先级"
+                      >
+                        ▲
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveDown(index)}
+                        disabled={index === models.length - 1 || updateMutation.isPending}
+                        className="text-white/40 hover:text-white/80 disabled:opacity-30 cursor-pointer"
+                        title="降低优先级"
+                      >
+                        ▼
+                      </button>
+                    </div>
+                  </td>
                   <td className="py-2 px-3 text-white/70">{formatProvider(m.provider)}</td>
                   <td className="py-2 px-3">{m.displayName}</td>
                   <td className="py-2 px-3 font-mono text-white/60">{m.modelId}</td>

@@ -1,7 +1,7 @@
 package com.openforge.aimate.agent;
 
 import com.openforge.aimate.agent.dto.SystemModelDto;
-import com.openforge.aimate.agent.dto.UpdateSystemModelEnabledRequest;
+import com.openforge.aimate.agent.dto.UpdateSystemModelRequest;
 import com.openforge.aimate.domain.SystemModel;
 import com.openforge.aimate.repository.SystemModelRepository;
 import lombok.RequiredArgsConstructor;
@@ -34,12 +34,19 @@ public class AdminSystemModelController {
     }
 
     @PatchMapping("/{id}")
-    public ResponseEntity<SystemModelDto> updateEnabled(
+    public ResponseEntity<SystemModelDto> update(
             @PathVariable Long id,
-            @RequestBody UpdateSystemModelEnabledRequest request) {
+            @RequestBody UpdateSystemModelRequest request) {
         SystemModel model = systemModelRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "系统模型不存在: " + id));
-        model.setEnabled(request.enabled());
+
+        if (request.enabled() != null) {
+            model.setEnabled(request.enabled());
+        }
+        if (request.sortOrder() != null) {
+            model.setSortOrder(request.sortOrder());
+        }
+
         model = systemModelRepository.save(model);
         return ResponseEntity.ok(SystemModelDto.from(model));
     }

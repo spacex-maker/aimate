@@ -1,6 +1,7 @@
 package com.openforge.aimate.llm.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Builder;
 
 import java.util.List;
@@ -12,6 +13,11 @@ import java.util.List;
  *   "none"     — model will not call any tool
  *   "auto"     — model decides (default)
  *   "required" — model MUST call at least one tool
+ *
+ * 字段名严格按 OpenAI 官方 snake_case：
+ * - tools        → "tools"
+ * - toolChoice   → "tool_choice"
+ * - maxTokens    → "max_tokens"
  */
 @Builder
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -19,9 +25,9 @@ public record ChatRequest(
         String model,
         List<Message> messages,
         List<Tool> tools,
-        String toolChoice,
+        @JsonProperty("tool_choice") String toolChoice,
         Double temperature,
-        Integer maxTokens
+        @JsonProperty("max_tokens") Integer maxTokens
 ) {
 
     public static ChatRequest simple(String model, List<Message> messages) {

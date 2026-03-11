@@ -8,6 +8,7 @@ import { apikeyApi } from '../api/apikey'
 import { useAuth } from '../hooks/useAuth'
 import { StatusBadge } from '../components/agent/StatusBadge'
 import type { SessionResponse } from '../types/agent'
+import { useModelSelection } from '../state/modelSelection.ts'
 import { DeleteSessionModal } from '../components/agent/DeleteSessionModal'
 import { AgentInputBox } from '../components/agent/AgentInputBox'
 
@@ -37,6 +38,7 @@ export function HomePage() {
   const { user } = useAuth()
   const [task, setTask] = useState('')
   const [selectedSession, setSelectedSession] = useState<SessionResponse | null>(null)
+  const { selection, setSelection } = useModelSelection()
 
   const { data: apiKeys = [] } = useQuery({
     queryKey: ['api-keys', user?.userId],
@@ -54,7 +56,12 @@ export function HomePage() {
   })
 
   const startMutation = useMutation({
-    mutationFn: (t: string) => agentApi.startSession({ task: t }),
+    mutationFn: (payload: {
+      task: string
+      modelSource?: 'SYSTEM' | 'USER_KEY'
+      systemModelId?: number | null
+      userApiKeyId?: number | null
+    }) => agentApi.startSession(payload),
     onSuccess: (session) => {
       queryClient.invalidateQueries({ queryKey: ['recent-sessions'] })
       navigate(`/session/${session.sessionId}`)
@@ -111,14 +118,14 @@ export function HomePage() {
           </div>
         </div>
 
-        {/* Recent sessions：来自接口的详细会话列表（移到中部区域） */}
+        {/* Recent sessions：来自接口的详细会话列表（移到中部区域，支持上下滚动） */}
         {(recentLoading || recentSessions.length > 0) && (
           <div className="space-y-2">
             <p className="text-xs text-white/30 font-medium uppercase tracking-wider">最近会话</p>
             {recentLoading ? (
               <div className="text-center py-8 text-white/25 text-sm">加载中...</div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                 {recentSessions.map(s => (
                   <div
                     key={s.sessionId}
@@ -172,7 +179,23 @@ export function HomePage() {
       <AgentInputBox
         value={task}
         onChange={setTask}
-        onSubmit={() => task.trim() && startMutation.mutate(task.trim())}
+        onSubmit={(opts) => {
+          if (!task.trim()) return
+          if (opts?.modelSource) {
+            setSelection({
+              source: opts.modelSource,
+              systemModelId: opts.systemModelId ?? null,
+              userApiKeyId: opts.userApiKeyId ?? null,
+            })
+          }
+          startMutation.mutate({
+            task: task.trim(),
+            modelSource: opts?.modelSource,
+            systemModelId: opts?.systemModelId ?? null,
+            userApiKeyId: opts?.userApiKeyId ?? null,
+          })
+        }}
+        selectedSystemModelId={selection?.source === 'SYSTEM' ? selection.systemModelId ?? null : null}
         placeholder="描述你想让 Agent 完成的任务，Enter 发送 · Shift+Enter 换行"
         hintText="启动后，你可以在会话页底部继续追加问题，布局与此处保持一致。"
         isPending={startMutation.isPending}

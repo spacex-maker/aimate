@@ -1,8 +1,10 @@
 package com.openforge.aimate.llm;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.openforge.aimate.config.SystemConfigService;
 import com.openforge.aimate.llm.model.ChatRequest;
 import com.openforge.aimate.llm.model.ChatResponse;
+import com.openforge.aimate.repository.SystemModelRepository;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.retry.Retry;
 import lombok.extern.slf4j.Slf4j;
@@ -43,12 +45,14 @@ import java.util.List;
 @EnableConfigurationProperties(LlmProperties.class)
 public class LlmRouter {
 
-    private final LlmClient     primaryClient;
-    private final LlmClient     fallbackClient;
-    private final CircuitBreaker primaryCb;
-    private final CircuitBreaker fallbackCb;
-    private final Retry          primaryRetry;
-    private final Retry          fallbackRetry;
+    private final LlmClient           primaryClient;
+    private final LlmClient           fallbackClient;
+    private final CircuitBreaker      primaryCb;
+    private final CircuitBreaker      fallbackCb;
+    private final Retry               primaryRetry;
+    private final Retry               fallbackRetry;
+    private final SystemModelRepository systemModelRepository;
+    private final SystemConfigService   systemConfigService;
 
     public LlmRouter(HttpClient httpClient,
                      ObjectMapper objectMapper,
@@ -56,9 +60,17 @@ public class LlmRouter {
                      CircuitBreaker primaryLlmCircuitBreaker,
                      CircuitBreaker fallbackLlmCircuitBreaker,
                      Retry primaryLlmRetry,
-                     Retry fallbackLlmRetry) {
-        this.primaryClient  = new LlmClient(httpClient, objectMapper, properties.primary());
-        this.fallbackClient = new LlmClient(httpClient, objectMapper, properties.fallback());
+                     Retry fallbackLlmRetry,
+                     SystemModelRepository systemModelRepository,
+                     SystemConfigService systemConfigService) {
+        this.systemModelRepository = systemModelRepository;
+        this.systemConfigService   = systemConfigService;
+
+        LlmProperties.ProviderConfig primaryCfg  = overrideWithSystemModel(properties.primary());
+        LlmProperties.ProviderConfig fallbackCfg = overrideWithSystemModel(properties.fallback());
+
+        this.primaryClient  = new LlmClient(httpClient, objectMapper, primaryCfg);
+        this.fallbackClient = new LlmClient(httpClient, objectMapper, fallbackCfg);
         this.primaryCb      = primaryLlmCircuitBreaker;
         this.fallbackCb     = fallbackLlmCircuitBreaker;
         this.primaryRetry   = primaryLlmRetry;
@@ -147,6 +159,48 @@ public class LlmRouter {
             throw new LlmClient.LlmException(
                     "[LlmRouter] %s provider ultimately failed: %s".formatted(label, e.getMessage()), e);
         }
+    }
+
+    /**
+     * 根据 system_models + system_config 覆盖系统级 LLM 配置：
+     * - 若存在与 config.model 对应的 system_model，则：
+     *   - baseUrl 优先用 system_model.base_url，否则保留原 config.baseUrl；
+     *   - apiKey 若 system_model.api_key_config_key 在 system_config 中有值，则覆盖为该值；
+     *   - model 使用 system_model.model_id。
+     * - 若未找到匹配的 system_model，则直接返回原 config。
+     */
+    private LlmProperties.ProviderConfig overrideWithSystemModel(LlmProperties.ProviderConfig config) {
+        if (config == null || config.model() == null || config.model().isBlank()) {
+            return config;
+        }
+        return systemModelRepository.findFirstByModelId(config.model())
+                .map(m -> {
+                    String baseUrl = (m.getBaseUrl() != null && !m.getBaseUrl().isBlank())
+                            ? m.getBaseUrl()
+                            : config.baseUrl();
+
+                    String apiKey = config.apiKey();
+                    String keyConfigKey = m.getApiKeyConfigKey();
+                    if (keyConfigKey != null && !keyConfigKey.isBlank()) {
+                        apiKey = systemConfigService.get(keyConfigKey).orElse(apiKey);
+                    }
+
+                    String model = m.getModelId() != null && !m.getModelId().isBlank()
+                            ? m.getModelId()
+                            : config.model();
+
+                    log.info("[LlmRouter] Using SystemModel override for modelId={} -> baseUrl={}, apiKeyKey={}",
+                            m.getModelId(), baseUrl, keyConfigKey);
+
+                    return new LlmProperties.ProviderConfig(
+                            config.name(),
+                            baseUrl,
+                            apiKey,
+                            model,
+                            config.timeoutSeconds()
+                    );
+                })
+                .orElse(config);
     }
 
     /**

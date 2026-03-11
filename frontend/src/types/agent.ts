@@ -20,6 +20,9 @@ export interface SessionResponse {
 export interface StartSessionRequest {
   task: string
   sessionId?: string
+  modelSource?: 'SYSTEM' | 'USER_KEY'
+  systemModelId?: number | null
+  userApiKeyId?: number | null
 }
 
 /** 单次工具调用展示（名称、参数、结果），用于在消息上方与思考一起展示 */
@@ -58,8 +61,35 @@ export interface SystemModelDto {
   modelId: string
   displayName: string
   baseUrl: string | null
+  /** system_config.config_key，用于查找该系统模型使用的系统级 API Key */
+  apiKeyConfigKey?: string | null
+  /** 排序权重，数值越小越靠前 */
+  sortOrder: number
   enabled?: boolean
   description: string | null
+}
+
+/** 当前用户首选模型（用于恢复聊天输入框默认选中项） */
+export interface UserDefaultModelDto {
+  source?: 'SYSTEM' | 'USER_KEY' | null
+  systemModelId?: number | null
+  userApiKeyId?: number | null
+}
+
+/** 用户自有模型（来自 user_api_keys, key_type=LLM），用于聊天输入框「我的模型」区域 */
+export interface UserModelDto {
+  id: number
+  provider: string
+  label?: string | null
+  model?: string | null
+  baseUrl?: string | null
+}
+
+/** 聊天输入框模型选择所需的完整数据 */
+export interface AvailableModelsDto {
+  userModels: UserModelDto[]
+  systemModels: SystemModelDto[]
+  defaultModel: UserDefaultModelDto
 }
 
 /** 用户系统工具开关：长期记忆、联网搜索、AI 自主编写工具、用户系统脚本执行 */

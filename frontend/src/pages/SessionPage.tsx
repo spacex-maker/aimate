@@ -8,6 +8,8 @@ import { useAgentSocket } from '../hooks/useAgentSocket'
 import { ThinkingStream } from '../components/agent/ThinkingStream'
 import { StatusBadge } from '../components/agent/StatusBadge'
 import { AgentInputBox } from '../components/agent/AgentInputBox'
+import { useModelSelection } from '../state/modelSelection.ts'
+import { useChatInput } from '../state/chatInput.ts'
 import type { AgentEvent, ChatMessageDto, PlanState, SessionResponse, StreamBlock, ToolCall } from '../types/agent'
 
 // ── Block reducer ─────────────────────────────────────────────────────────────
@@ -100,6 +102,104 @@ function closeThinking(blocks: StreamBlock[]): StreamBlock[] {
   return blocks
 }
 
+// ── Plan Panel（右下角小面板，仅显示执行计划） ────────────────────────────────
+
+function PlanPanel({ plan }: { plan: PlanState }) {
+  if (!plan.steps || plan.steps.length === 0) return null
+  const currentIndex = (plan.currentStepIndex ?? 1) - 1
+
+  return (
+    <div className="fixed right-4 bottom-28 z-30 w-60 max-h-40 rounded-xl border border-white/10 bg-gray-900/95 backdrop-blur shadow-xl overflow-hidden text-xs">
+      <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between">
+        <span className="text-[11px] font-semibold text-white/70">执行计划</span>
+        <span className="text-[10px] text-white/40">
+          第 {Math.min(Math.max(plan.currentStepIndex || 1, 1), plan.steps.length)} / {plan.steps.length} 步
+        </span>
+      </div>
+      <div className="max-h-28 overflow-y-auto px-2 py-2 space-y-1">
+        {plan.steps.map((title, i) => {
+          const stepNum = i + 1
+          const isCurrent = currentIndex === i
+          const summary = plan.stepSummaries[stepNum]
+          const isDone = !!summary
+          return (
+            <div
+              key={stepNum}
+              className={`rounded-lg px-2 py-1.5 transition-colors ${
+                isCurrent
+                  ? 'bg-blue-500/20 text-white'
+                  : isDone
+                    ? 'bg-green-500/10 text-green-100/90'
+                    : 'bg-white/5 text-white/70'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-0.5">
+                <span className="text-[10px] font-mono opacity-80">Step {stepNum}</span>
+                {isDone && <span className="text-[10px] text-green-300">✓ 已完成</span>}
+                {isCurrent && !isDone && <span className="text-[10px] text-blue-300">进行中</span>}
+              </div>
+              <div className="text-[11px] truncate">{title}</div>
+              {summary && (
+                <div className="text-[10px] text-white/50 mt-0.5 line-clamp-2">
+                  {summary}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── Left panel: session list ──────────────────────────────────────────────────
+
+interface SessionListPanelProps {
+  sessions: SessionResponse[]
+  loading: boolean
+  selectedSessionId?: string
+  onSelect: (id: string) => void
+}
+
+function SessionListPanel({ sessions, loading, selectedSessionId, onSelect }: SessionListPanelProps) {
+  return (
+    <aside className="w-64 border-r border-white/10 bg-black/20 flex-shrink-0 flex flex-col min-h-0">
+      <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+        <span className="text-xs font-semibold text-white/60 uppercase tracking-wider">最近会话</span>
+      </div>
+      {loading ? (
+        <div className="flex-1 flex items-center justify-center text-xs text-white/30">加载中...</div>
+      ) : sessions.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center px-3 text-xs text-white/25 text-center">
+          暂无会话
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto py-2 space-y-1">
+          {sessions.map((s) => {
+            const active = s.sessionId === selectedSessionId
+            return (
+              <button
+                key={s.sessionId}
+                type="button"
+                onClick={() => onSelect(s.sessionId)}
+                className={`w-full px-3 py-2 text-left text-xs flex items-center gap-2 transition-colors ${
+                  active ? 'bg-white/10 text-white' : 'bg-transparent text-white/70 hover:bg-white/5'
+                }`}
+              >
+                <StatusBadge status={s.status} />
+                <div className="flex-1 min-w-0">
+                  <div className="truncate">{s.taskDescription || '会话'}</div>
+                  <div className="text-[10px] text-white/30 truncate">{s.sessionId}</div>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </aside>
+  )
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
@@ -107,12 +207,13 @@ export function SessionPage() {
   const queryClient = useQueryClient()
   const [blocks, dispatch] = useReducer(reducer, [])
   const statusRef = useRef<string>('IDLE')
-  const [followup, setFollowup] = useState('')
+  const { value: followup, setValue: setFollowup } = useChatInput()
   const [plan, setPlan] = useState<PlanState>({ steps: [], currentStepIndex: 0, stepSummaries: {} })
   /** 重试时：被重试的那条用户消息 id，用于在前端把流式内容插到该条下方/下一条 assistant 位置 */
   const [retryTargetUserMessageId, setRetryTargetUserMessageId] = useState<number | null>(null)
   /** Docker 安装说明弹窗 */
   const [dockerInstallModalOpen, setDockerInstallModalOpen] = useState(false)
+  const { selection: globalModelSelection, setSelection: setGlobalModelSelection } = useModelSelection()
 
   // 显式传入 /session/undefined 或 /session/null 才视为真正的非法 ID；
   // 其他情况（正常 UUID）一律放行。
@@ -134,6 +235,11 @@ export function SessionPage() {
     queryKey: ['session-messages', sessionId],
     queryFn: () => agentApi.getSessionMessages(effectiveSessionId!, 10),
     enabled: !!effectiveSessionId && !!session,
+  })
+
+  const { data: recentSessions = [], isLoading: recentLoading } = useQuery({
+    queryKey: ['recent-sessions'],
+    queryFn: () => agentApi.getRecentSessions(20),
   })
 
   // 往上滚动加载更多：已加载的「更早」消息，与接口返回的最近 N 条合并展示
@@ -222,7 +328,18 @@ export function SessionPage() {
     onError: (e: Error) => toast.error(e.message),
   })
   const continueMutation = useMutation({
-    mutationFn: (text: string) => agentApi.continueSession(effectiveSessionId!, text),
+    mutationFn: (payload: {
+      text: string
+      modelSource?: 'SYSTEM' | 'USER_KEY'
+      systemModelId?: number | null
+      userApiKeyId?: number | null
+    }) =>
+      agentApi.continueSession(effectiveSessionId!, {
+        message: payload.text,
+        modelSource: payload.modelSource,
+        systemModelId: payload.systemModelId ?? null,
+        userApiKeyId: payload.userApiKeyId ?? null,
+      }),
     onSuccess: () => {
       dispatch({ type: 'CLEAR' })
       setFollowup('')
@@ -235,8 +352,19 @@ export function SessionPage() {
   })
 
   const retryMutation = useMutation({
-    mutationFn: ({ sessionId, userMessageId }: { sessionId: string; userMessageId: number }) =>
-      agentApi.retryMessage(sessionId, userMessageId),
+    mutationFn: (params: { sessionId: string; userMessageId: number }) =>
+      agentApi.retryMessage(params.sessionId, {
+        userMessageId: params.userMessageId,
+        modelSource: globalModelSelection?.source,
+        systemModelId:
+          globalModelSelection?.source === 'SYSTEM'
+            ? globalModelSelection.systemModelId ?? null
+            : null,
+        userApiKeyId:
+          globalModelSelection?.source === 'USER_KEY'
+            ? globalModelSelection.userApiKeyId ?? null
+            : null,
+      }),
     onSuccess: () => {
       refetch()
       // 立即拉取消息列表，使该条 assistant 显示为「回答中」
@@ -588,39 +716,15 @@ export function SessionPage() {
         </div>
       )}
 
-      {/* Plan 浮窗 + Stream 主区域 */}
-      <div className="flex-1 flex min-h-0 relative">
-        {plan.steps.length > 0 && (
-          <div className="absolute top-4 right-4 z-10 w-72 max-h-[min(60vh,420px)] flex flex-col rounded-xl border border-white/10 bg-gray-900/95 backdrop-blur shadow-xl overflow-hidden">
-            <div className="px-3 py-2.5 border-b border-white/10 flex items-center justify-between shrink-0">
-              <h3 className="text-xs font-semibold text-white/60 uppercase tracking-wider">执行计划</h3>
-            </div>
-            <ul className="p-2.5 space-y-2 overflow-y-auto flex-1 min-h-0">
-              {plan.steps.map((title, i) => {
-                const stepNum = i + 1
-                const isCurrent = plan.currentStepIndex === stepNum
-                const summary = plan.stepSummaries[stepNum]
-                const isDone = !!summary
-                return (
-                  <li key={stepNum} className="flex gap-2">
-                    <span className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
-                      isDone ? 'bg-green-500/20 text-green-400' : isCurrent ? 'bg-blue-500/30 text-blue-300' : 'bg-white/10 text-white/40'
-                    }`}>
-                      {isDone ? '✓' : stepNum}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-sm truncate ${isCurrent && !isDone ? 'text-white font-medium' : 'text-white/70'}`}>
-                        {title}
-                      </p>
-                      {summary && <p className="text-xs text-white/40 mt-0.5 line-clamp-2">{summary}</p>}
-                    </div>
-                  </li>
-                )
-              })}
-            </ul>
-          </div>
-        )}
-        <div className="flex-1 min-w-0 flex flex-col pb-48">
+      {/* 会话列表 + Stream 主区域（执行计划通过右下角 PlanPanel 展示） */}
+      <div className="flex-1 flex min-h-0">
+        <SessionListPanel
+          sessions={recentSessions}
+          loading={recentLoading}
+          selectedSessionId={effectiveSessionId}
+          onSelect={(id) => navigate(`/session/${id}`)}
+        />
+        <div className="flex-1 min-w-0 flex flex-col relative">
           <ThinkingStream
             userMessage={mergedMessages.length ? null : (session?.taskDescription ?? null)}
             historyMessages={mergedMessages.length ? mergedMessages : null}
@@ -642,7 +746,11 @@ export function SessionPage() {
             canRetry
             onRetry={(userMessageId) => {
               setRetryTargetUserMessageId(userMessageId)
-              effectiveSessionId && retryMutation.mutate({ sessionId: effectiveSessionId, userMessageId })
+              if (!effectiveSessionId) return
+              retryMutation.mutate({
+                sessionId: effectiveSessionId,
+                userMessageId,
+              })
             }}
             isRetrying={retryMutation.isPending}
             sessionId={effectiveSessionId ?? undefined}
@@ -656,7 +764,20 @@ export function SessionPage() {
         <AgentInputBox
           value={followup}
           onChange={setFollowup}
-          onSubmit={() => followup.trim() && effectiveSessionId && continueMutation.mutate(followup.trim())}
+          onSubmit={(opts) => {
+            if (!followup.trim() || !effectiveSessionId) return
+            continueMutation.mutate({
+              text: followup.trim(),
+              modelSource: opts?.modelSource,
+              systemModelId: opts?.systemModelId,
+              userApiKeyId: opts?.userApiKeyId,
+            })
+          }}
+          selectedSystemModelId={
+            globalModelSelection?.source === 'SYSTEM' ? globalModelSelection.systemModelId ?? null : null
+          }
+          className="ml-64"
+          onModelChange={(sel) => setGlobalModelSelection(sel)}
           placeholder={
             isRunning || isPaused
               ? '可随时发送，新消息将并行处理…'
@@ -671,6 +792,7 @@ export function SessionPage() {
           disabled={!effectiveSessionId}
         />
       )}
+      <PlanPanel plan={plan} />
     </div>
   )
 }

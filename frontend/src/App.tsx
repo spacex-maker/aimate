@@ -2,6 +2,8 @@ import React from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
+import { ModelSelectionProvider } from './state/modelSelection.ts'
+import { ChatInputProvider } from './state/chatInput.ts'
 import { Navbar } from './components/layout/Navbar'
 import { RequireAuth } from './components/layout/RequireAuth'
 import { LoginPage } from './pages/LoginPage'
@@ -83,7 +85,9 @@ function AppLayout({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter future={{ v7_relativeSplatPath: true }}>
+      <ModelSelectionProvider>
+        <ChatInputProvider>
+        <BrowserRouter future={{ v7_relativeSplatPath: true }}>
         <Routes>
           {/* ── Public routes (no sidebar) ─────────────────────────────── */}
           <Route path="/login"    element={<LoginPage />} />
@@ -181,6 +185,8 @@ export default function App() {
           }}
         />
       </BrowserRouter>
+      </ChatInputProvider>
+      </ModelSelectionProvider>
     </QueryClientProvider>
   )
 }

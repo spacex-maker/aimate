@@ -10,11 +10,11 @@ export const adminApi = {
   listAllSystemModels: () =>
     http<SystemModelDto[]>('/api/admin/system-models'),
 
-  /** 管理员：更新系统模型启用状态 */
-  updateSystemModelEnabled: (id: number, enabled: boolean) =>
+  /** 管理员：更新系统模型属性（启用状态 / 排序权重等） */
+  updateSystemModel: (id: number, body: { enabled?: boolean; sortOrder?: number }) =>
     http<SystemModelDto>(`/api/admin/system-models/${id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
     }),
 

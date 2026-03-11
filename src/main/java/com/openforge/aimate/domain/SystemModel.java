@@ -34,6 +34,13 @@ public class SystemModel extends BaseEntity {
     @Column(name = "base_url", length = 512)
     private String baseUrl;
 
+    /**
+     * system_config.config_key，用于查找该模型使用的系统级 API Key；
+     * 为空则使用该 provider 的默认（如 application.yml 或环境变量中的配置）。
+     */
+    @Column(name = "api_key_config_key", length = 128)
+    private String apiKeyConfigKey;
+
     /** 排序权重，数值越小越靠前 */
     @Column(name = "sort_order", nullable = false)
     private int sortOrder = 100;

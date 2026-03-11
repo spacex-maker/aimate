@@ -8,6 +8,7 @@ import com.openforge.aimate.llm.model.ChatResponse;
 import com.openforge.aimate.llm.model.FunctionCallResult;
 import com.openforge.aimate.llm.model.Message;
 import com.openforge.aimate.llm.model.StreamingChunk;
+import com.openforge.aimate.llm.model.Tool;
 import com.openforge.aimate.llm.model.ToolCall;
 import lombok.extern.slf4j.Slf4j;
 
@@ -69,6 +70,13 @@ public class LlmClient {
         String requestBody = serialize(request);
         log.debug("[LlmClient:{}] → chat POST body-length={}", config.name(), requestBody.length());
 
+        // 便于排查：打印当前调用使用的 URL / model / key（仅显示 key 头尾，避免泄露全部秘钥）
+        log.info("[LlmClient:{}] chat endpoint={} model={} key={}",
+                config.name(),
+                config.baseUrl() + "/chat/completions",
+                request.model() != null ? request.model() : config.model(),
+                maskKey(config.apiKey()));
+
         HttpResponse<String> httpResponse = sendBlocking(
                 buildHttpRequest(requestBody, false));
 
@@ -106,8 +114,7 @@ public class LlmClient {
                     .formatted(config.name()));
         }
 
-        // 如果上游没有显式指定 model，则自动使用当前 ProviderConfig 的默认模型，
-        // 避免出现 model 为空导致像 DeepSeek 返回 “Model Not Exist” 的情况。
+        // 如果上游没有显式指定 model，则自动使用当前 ProviderConfig 的模型。
         String model = request.model();
         if (model == null || model.isBlank()) {
             model = config.model();
@@ -115,13 +122,12 @@ public class LlmClient {
 
         // Send full context including tool results. An assistant message with tool_calls
         // must be followed by tool messages for each tool_call_id (OpenAI/DeepSeek spec).
-        // Do not strip role="tool" messages or the API returns 400.
         var messages = request.messages();
-
+        java.util.List<Tool> tools = request.tools();
         ChatRequest effectiveRequest = ChatRequest.builder()
                 .model(model)
                 .messages(messages)
-                .tools(request.tools())
+                .tools(tools)
                 .toolChoice(request.toolChoice())
                 .temperature(request.temperature())
                 .maxTokens(request.maxTokens())
@@ -129,6 +135,13 @@ public class LlmClient {
 
         String requestBody = serializeWithStream(effectiveRequest);
         log.debug("[LlmClient:{}] → streamChat POST body-length={}", config.name(), requestBody.length());
+
+        // 便于排查：打印当前调用使用的 URL / model / key（仅显示 key 头尾，避免泄露全部秘钥）
+        log.info("[LlmClient:{}] stream endpoint={} model={} key={}",
+                config.name(),
+                config.baseUrl() + "/chat/completions",
+                model,
+                maskKey(config.apiKey()));
 
         // 预估 prompt token 数，供组装 ChatResponse.usage 使用（provider 多数在流式模式下不返回 usage）
         int estimatedPromptTokens = TokenCounter.estimateTokensForMessages(effectiveRequest.messages());
@@ -150,17 +163,16 @@ public class LlmClient {
                     "Rate-limited by provider [%s].".formatted(config.name()));
         }
         if (status < 200 || status >= 300) {
-            // 对于 DeepSeek 等 OpenAI 兼容接口，错误信息通常在 body 里，收集前几行便于排查
-            String bodySnippet = "";
+            // 错误时尽量把对方返回的 body 全量打印出来，便于精准排查。
+            // 对于 xinghuapi 特别只要用户就想看“原生报错”，这里不再做长度截断。
+            String bodyText = "";
             Stream<String> lines = httpResponse.body();
             if (lines != null) {
-                bodySnippet = lines.limit(20).reduce(
+                bodyText = lines.reduce(
                         new StringBuilder(),
                         (sb, line) -> {
                             if (sb.length() > 0) sb.append('\n');
-                            if (sb.length() < 2048) {
-                                sb.append(line);
-                            }
+                            sb.append(line);
                             return sb;
                         },
                         StringBuilder::append
@@ -168,7 +180,7 @@ public class LlmClient {
             }
             throw new LlmException(
                     "Provider [%s] returned HTTP %d on stream open: %s"
-                            .formatted(config.name(), status, bodySnippet));
+                            .formatted(config.name(), status, bodyText));
         }
 
         return assembleStreamingResponse(httpResponse.body(), callbacks, estimatedPromptTokens);
@@ -311,6 +323,15 @@ public class LlmClient {
             throw new LlmException("Network error calling provider [%s]".formatted(config.name()), e);
         }
     }
+
+    /** 日志中安全展示部分秘钥：前 4 + '***' + 后 4，空则标记为 <null>。 */
+    private String maskKey(String key) {
+        if (key == null || key.isBlank()) return "<null>";
+        String trimmed = key.trim();
+        if (trimmed.length() <= 8) return "****" + trimmed.length();
+        return trimmed.substring(0, 4) + "***" + trimmed.substring(trimmed.length() - 4);
+    }
+
 
     private ChatResponse parseFullResponse(HttpResponse<String> response) {
         int    status = response.statusCode();

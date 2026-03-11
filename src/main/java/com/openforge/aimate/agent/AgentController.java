@@ -8,9 +8,13 @@ import com.openforge.aimate.agent.dto.RetryRequest;
 import com.openforge.aimate.agent.dto.SessionResponse;
 import com.openforge.aimate.agent.dto.StartSessionRequest;
 import com.openforge.aimate.domain.AgentSession;
+import com.openforge.aimate.domain.UserDefaultModel;
 import com.openforge.aimate.llm.model.Message;
 import com.openforge.aimate.memory.LongTermMemoryService;
 import com.openforge.aimate.repository.AgentSessionRepository;
+import com.openforge.aimate.repository.SystemModelRepository;
+import com.openforge.aimate.repository.UserApiKeyRepository;
+import com.openforge.aimate.repository.UserDefaultModelRepository;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -56,11 +60,14 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AgentController {
 
-    private final AgentLoopService       agentLoopService;
-    private final SessionMessageService  sessionMessageService;
-    private final AgentSessionRepository sessionRepository;
-    private final LongTermMemoryService  longTermMemoryService;
-    private final ExecutorService        agentVirtualThreadExecutor;
+    private final AgentLoopService          agentLoopService;
+    private final SessionMessageService     sessionMessageService;
+    private final AgentSessionRepository    sessionRepository;
+    private final LongTermMemoryService     longTermMemoryService;
+    private final ExecutorService           agentVirtualThreadExecutor;
+    private final UserDefaultModelRepository userDefaultModelRepository;
+    private final SystemModelRepository      systemModelRepository;
+    private final UserApiKeyRepository       userApiKeyRepository;
 
     // ── Create & Start ───────────────────────────────────────────────────────
 
@@ -87,6 +94,42 @@ public class AgentController {
 
         // Extract userId from JWT principal (set by JwtAuthFilter)
         Long userId = getCurrentUserId();
+
+        // 如果首页在启动会话前已经选择了模型，这里先更新 user_default_models，确保新会话第一轮就用这次选择的模型。
+        if (userId != null && request.modelSource() != null && !request.modelSource().isBlank()) {
+            String src = request.modelSource().toUpperCase();
+            if ("SYSTEM".equals(src) && request.systemModelId() != null) {
+                UserDefaultModel udm = userDefaultModelRepository.findByUserId(userId)
+                        .orElseGet(() -> {
+                            UserDefaultModel x = new UserDefaultModel();
+                            x.setUserId(userId);
+                            return x;
+                        });
+                var model = systemModelRepository.findById(request.systemModelId())
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST,
+                                "系统模型不存在: " + request.systemModelId()));
+                udm.setSource("SYSTEM");
+                udm.setSystemModel(model);
+                udm.setUserApiKey(null);
+                userDefaultModelRepository.save(udm);
+            } else if ("USER_KEY".equals(src) && request.userApiKeyId() != null) {
+                var key = userApiKeyRepository.findByIdAndUserId(request.userApiKeyId(), userId)
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST,
+                                "用户 API Key 不存在或不属于当前用户: " + request.userApiKeyId()));
+                UserDefaultModel udm = userDefaultModelRepository.findByUserId(userId)
+                        .orElseGet(() -> {
+                            UserDefaultModel x = new UserDefaultModel();
+                            x.setUserId(userId);
+                            return x;
+                        });
+                udm.setSource("USER_KEY");
+                udm.setUserApiKey(key);
+                udm.setSystemModel(null);
+                userDefaultModelRepository.save(udm);
+            }
+        }
 
         AgentSession session = AgentSession.builder()
                 .userId(userId)
@@ -291,6 +334,45 @@ public class AgentController {
     ) {
         AgentSession session = findOrThrow(sessionId);
 
+        // 若前端携带了本次使用的模型选择，则先更新 user_default_models，确保本次调用使用最新模型。
+        if (request.modelSource() != null && !request.modelSource().isBlank()) {
+            Long userId = session.getUserId();
+            if (userId != null) {
+                String src = request.modelSource().toUpperCase();
+                if ("SYSTEM".equals(src) && request.systemModelId() != null) {
+                    UserDefaultModel udm = userDefaultModelRepository.findByUserId(userId)
+                            .orElseGet(() -> {
+                                UserDefaultModel x = new UserDefaultModel();
+                                x.setUserId(userId);
+                                return x;
+                            });
+                    var model = systemModelRepository.findById(request.systemModelId())
+                            .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                                    "系统模型不存在: " + request.systemModelId()));
+                    udm.setSource("SYSTEM");
+                    udm.setSystemModel(model);
+                    udm.setUserApiKey(null);
+                    userDefaultModelRepository.save(udm);
+                } else if ("USER_KEY".equals(src) && request.userApiKeyId() != null) {
+                    var key = userApiKeyRepository.findByIdAndUserId(request.userApiKeyId(), userId)
+                            .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                                    "用户 API Key 不存在或不属于当前用户: " + request.userApiKeyId()));
+                    UserDefaultModel udm = userDefaultModelRepository.findByUserId(userId)
+                            .orElseGet(() -> {
+                                UserDefaultModel x = new UserDefaultModel();
+                                x.setUserId(userId);
+                                return x;
+                            });
+                    udm.setSource("USER_KEY");
+                    udm.setUserApiKey(key);
+                    udm.setSystemModel(null);
+                    userDefaultModelRepository.save(udm);
+                }
+            }
+        }
+
         sessionMessageService.append(session, Message.user(request.message()));
         com.openforge.aimate.domain.SessionMessage placeholder = sessionMessageService.createPlaceholderAssistant(session);
         session.setErrorMessage(null);
@@ -349,6 +431,45 @@ public class AgentController {
         if (request.getUserMessageId() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userMessageId required");
         }
+
+        // 若前端在点击「重试」前已经切换了模型，这里也要同步更新 user_default_models，
+        // 保证本次重试调用使用最新选择的模型。
+        Long userId = session.getUserId();
+        if (userId != null && request.getModelSource() != null && !request.getModelSource().isBlank()) {
+            String src = request.getModelSource().toUpperCase();
+            if ("SYSTEM".equals(src) && request.getSystemModelId() != null) {
+                UserDefaultModel udm = userDefaultModelRepository.findByUserId(userId)
+                        .orElseGet(() -> {
+                            UserDefaultModel x = new UserDefaultModel();
+                            x.setUserId(userId);
+                            return x;
+                        });
+                var model = systemModelRepository.findById(request.getSystemModelId())
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST,
+                                "系统模型不存在: " + request.getSystemModelId()));
+                udm.setSource("SYSTEM");
+                udm.setSystemModel(model);
+                udm.setUserApiKey(null);
+                userDefaultModelRepository.save(udm);
+            } else if ("USER_KEY".equals(src) && request.getUserApiKeyId() != null) {
+                var key = userApiKeyRepository.findByIdAndUserId(request.getUserApiKeyId(), userId)
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST,
+                                "用户 API Key 不存在或不属于当前用户: " + request.getUserApiKeyId()));
+                UserDefaultModel udm = userDefaultModelRepository.findByUserId(userId)
+                        .orElseGet(() -> {
+                            UserDefaultModel x = new UserDefaultModel();
+                            x.setUserId(userId);
+                            return x;
+                        });
+                udm.setSource("USER_KEY");
+                udm.setUserApiKey(key);
+                udm.setSystemModel(null);
+                userDefaultModelRepository.save(udm);
+            }
+        }
+
         final long userMessageId = request.getUserMessageId();
         final AgentSession finalSession = sessionRepository.findBySessionId(sessionId).orElseThrow();
         agentVirtualThreadExecutor.submit(() -> {

@@ -11,6 +11,8 @@ import com.openforge.aimate.llm.LlmCallLogService;
 import com.openforge.aimate.domain.AgentSession;
 import com.openforge.aimate.domain.AgentTool;
 import com.openforge.aimate.domain.SessionMessage;
+import com.openforge.aimate.domain.UserApiKey;
+import com.openforge.aimate.domain.UserDefaultModel;
 import com.openforge.aimate.llm.LlmClient;
 import com.openforge.aimate.llm.LlmProperties;
 import com.openforge.aimate.llm.LlmRouter;
@@ -28,6 +30,8 @@ import com.openforge.aimate.memory.MemoryType;
 import com.openforge.aimate.domain.UserToolSettings;
 import com.openforge.aimate.repository.AgentSessionRepository;
 import com.openforge.aimate.repository.AgentToolRepository;
+import com.openforge.aimate.repository.UserApiKeyRepository;
+import com.openforge.aimate.repository.UserDefaultModelRepository;
 import com.openforge.aimate.websocket.AgentEventPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -135,6 +139,8 @@ public class AgentLoopService {
     private final UserApiKeyResolver     keyResolver;
     private final HttpClient             httpClient;
     private final LlmCallLogService      llmCallLogService;
+    private final UserDefaultModelRepository userDefaultModelRepository;
+    private final UserApiKeyRepository       userApiKeyRepository;
 
     // Tracks which exact contents have already been stored via store_memory
     // in this JVM, per sessionId, to avoid spamming duplicate memories.
@@ -176,7 +182,84 @@ public class AgentLoopService {
      */
     private java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse>
     buildCaller(AgentSession session) {
-        var cfgOpt = keyResolver.resolveDefaultLlm(session.getUserId());
+        Long userId = session.getUserId();
+
+        // 1. 若用户在「模型选择」中显式选了某个模型（user_default_models），则优先按该记录决定：
+        if (userId != null) {
+            java.util.Optional<UserDefaultModel> udmOpt = userDefaultModelRepository.findByUserId(userId);
+            if (udmOpt.isPresent()) {
+                UserDefaultModel udm = udmOpt.get();
+
+                // 1.1 用户选择了「自己的模型」（UserApiKey）
+                if ("USER_KEY".equalsIgnoreCase(udm.getSource()) && udm.getUserApiKey() != null) {
+                    UserApiKey key = udm.getUserApiKey();
+                    LlmProperties.ProviderConfig config = buildConfigFromUserKey(key);
+                    LlmClient userClient = new LlmClient(httpClient, objectMapper, config);
+                    log.info("[Agent:{}] Using user default-model key — provider={} model={}",
+                            session.getSessionId(), config.name(), config.model());
+                    return new java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse>() {
+                        @Override
+                        public ChatResponse apply(ChatRequest req, StreamCallbacks callbacks) {
+                            long startNs = System.nanoTime();
+                            ChatResponse response = userClient.streamChat(req, callbacks);
+                            long latencyMs = (System.nanoTime() - startNs) / 1_000_000L;
+                            try {
+                                llmCallLogService.logSuccess(
+                                        config.name(),
+                                        config.model(),
+                                        LlmCallLog.CallType.AGENT_LOOP,
+                                        null,
+                                        "/chat/completions",
+                                        userId,
+                                        session.getSessionId(),
+                                        latencyMs,
+                                        response
+                                );
+                            } catch (Exception e) {
+                                log.warn("[Agent:{}] Failed to log LLM call: {}", session.getSessionId(), e.getMessage());
+                            }
+                            return response;
+                        }
+                    };
+                }
+
+                // 1.2 用户选择了「系统模型」（SystemModel）
+                if ("SYSTEM".equalsIgnoreCase(udm.getSource()) && udm.getSystemModel() != null) {
+                    com.openforge.aimate.domain.SystemModel m = udm.getSystemModel();
+                    LlmProperties.ProviderConfig config = buildConfigFromSystemModel(m);
+                    LlmClient systemClient = new LlmClient(httpClient, objectMapper, config);
+                    log.info("[Agent:{}] Using system default-model — provider={} model={} (systemModelId={})",
+                            session.getSessionId(), config.name(), config.model(), m.getId());
+                    return new java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse>() {
+                        @Override
+                        public ChatResponse apply(ChatRequest req, StreamCallbacks callbacks) {
+                            long startNs = System.nanoTime();
+                            ChatResponse response = systemClient.streamChat(req, callbacks);
+                            long latencyMs = (System.nanoTime() - startNs) / 1_000_000L;
+                            try {
+                                llmCallLogService.logSuccess(
+                                        config.name(),
+                                        config.model(),
+                                        LlmCallLog.CallType.AGENT_LOOP,
+                                        null,
+                                        "/chat/completions",
+                                        userId,
+                                        session.getSessionId(),
+                                        latencyMs,
+                                        response
+                                );
+                            } catch (Exception e) {
+                                log.warn("[Agent:{}] Failed to log LLM call: {}", session.getSessionId(), e.getMessage());
+                            }
+                            return response;
+                        }
+                    };
+                }
+            }
+        }
+
+        // 2. 否则退回到「默认 LLM Key」解析逻辑（按 is_default 或任意活动 Key）。
+        var cfgOpt = keyResolver.resolveDefaultLlm(userId);
         if (cfgOpt.isPresent()) {
             LlmProperties.ProviderConfig config = cfgOpt.get();
             LlmClient userClient = new LlmClient(httpClient, objectMapper, config);
@@ -234,6 +317,86 @@ public class AgentLoopService {
             };
         }
     }
+
+    /**
+     * 将 UserApiKey 转为 ProviderConfig：严格按用户配置，不再使用任何 provider 级默认值。
+     */
+    private LlmProperties.ProviderConfig buildConfigFromUserKey(UserApiKey key) {
+        String provider = key.getProvider() != null ? key.getProvider().toLowerCase().trim() : "custom";
+
+        String baseUrl = key.getBaseUrl();
+        String model   = key.getModel();
+
+        if (baseUrl == null || baseUrl.isBlank()) {
+            throw new IllegalStateException("[Agent] UserApiKey id=%d provider=%s baseUrl 不能为空"
+                    .formatted(key.getId(), provider));
+        }
+        if (model == null || model.isBlank()) {
+            throw new IllegalStateException("[Agent] UserApiKey id=%d provider=%s model 不能为空"
+                    .formatted(key.getId(), provider));
+        }
+
+        if (key.getKeyValue() == null || key.getKeyValue().isBlank()) {
+            throw new IllegalStateException("[Agent] UserApiKey id=%d provider=%s keyValue 不能为空"
+                    .formatted(key.getId(), provider));
+        }
+
+        return new LlmProperties.ProviderConfig(
+                provider,
+                baseUrl,
+                key.getKeyValue(),
+                model,
+                120
+        );
+    }
+
+    /**
+     * 将 SystemModel 转为 ProviderConfig：使用 system_config 中配置的系统级 API Key。
+     * api_key_config_key 支持两种用法：
+     * - 推荐：存 system_config.config_key（如 XINGHU_API_KEY），实际 key 从 system_config 表读取；
+     * - 兼容：直接存明文 key（如 sk-xxx），则直接作为 Authorization 的值使用。
+     */
+    private LlmProperties.ProviderConfig buildConfigFromSystemModel(com.openforge.aimate.domain.SystemModel m) {
+        String provider = m.getProvider() != null ? m.getProvider().toLowerCase().trim() : "openai";
+
+        String baseUrl = m.getBaseUrl();
+        String model   = m.getModelId();
+        String keyCfg  = m.getApiKeyConfigKey();
+
+        if (baseUrl == null || baseUrl.isBlank()) {
+            throw new IllegalStateException("[Agent] SystemModel id=%d provider=%s base_url 不能为空"
+                    .formatted(m.getId(), provider));
+        }
+        if (model == null || model.isBlank()) {
+            throw new IllegalStateException("[Agent] SystemModel id=%d provider=%s model_id 不能为空"
+                    .formatted(m.getId(), provider));
+        }
+
+        String apiKey = null;
+        if (keyCfg != null && !keyCfg.isBlank()) {
+            // 1) 先按 config_key 去 system_config 查；
+            apiKey = systemConfigService.get(keyCfg).orElse(null);
+            // 2) 查不到则视为直接在 system_models 里存了明文 key，本身就是 sk-xxx；
+            if (apiKey == null || apiKey.isBlank()) {
+                apiKey = keyCfg;
+            }
+        }
+
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException("[Agent] SystemModel id=%d provider=%s 未配置有效的 API Key（api_key_config_key=%s）"
+                    .formatted(m.getId(), provider, keyCfg));
+        }
+
+        return new LlmProperties.ProviderConfig(
+                provider,
+                baseUrl,
+                apiKey,
+                model,
+                120
+        );
+    }
+
+    // 已不再提供任何 provider 级默认 baseUrl/model，一切按 DB 显式配置。
 
     private static final List<String> EXECUTION_PLAN = List.of("回忆", "思考与执行", "回答");
 
@@ -1598,13 +1761,15 @@ public class AgentLoopService {
     }
 
     private Tool toTool(AgentTool agentTool) {
-        JsonNode parameters;
-        try {
-            parameters = objectMapper.readTree(agentTool.getInputSchema());
-        } catch (JsonProcessingException e) {
-            log.warn("Failed to parse inputSchema for tool {}: {}", agentTool.getToolName(), e.getMessage());
-            parameters = objectMapper.createObjectNode();
+        // 将 agent_tools.input_schema 以「纯字符串」形式传给大模型：
+        // ToolFunction.parameters 使用 JsonNode 的 text node，序列化后为
+        // "parameters": "<原始 JSON 字符串>"，由大模型自行解析/使用。
+        com.fasterxml.jackson.databind.JsonNode parameters = null;
+        String rawSchema = agentTool.getInputSchema();
+        if (rawSchema != null && !rawSchema.isBlank()) {
+            parameters = objectMapper.getNodeFactory().textNode(rawSchema);
         }
+
         return Tool.ofFunction(new ToolFunction(
                 agentTool.getToolName(),
                 agentTool.getToolDescription(),

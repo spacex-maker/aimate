@@ -8,16 +8,16 @@ function base(userId: number) {
   return `/api/users/${userId}/api-keys`
 }
 
-/** Backend uses SNAKE_CASE for deserialization — convert before sending. */
-function toSnake(body: ApiKeyRequest) {
+/** 后端 ApiKeyRequest 使用 camelCase 字段名，直接按原样序列化即可。 */
+function toJson(body: ApiKeyRequest) {
   return JSON.stringify({
-    provider:   body.provider,
-    key_type:   body.keyType,
-    label:      body.label,
-    key_value:  body.keyValue,
-    base_url:   body.baseUrl,
-    model:      body.model,
-    is_default: body.isDefault,
+    provider:  body.provider,
+    keyType:   body.keyType,
+    label:     body.label,
+    keyValue:  body.keyValue,
+    baseUrl:   body.baseUrl,
+    model:     body.model,
+    isDefault: body.isDefault,
   })
 }
 
@@ -26,10 +26,10 @@ export const apikeyApi = {
     http<ApiKeyResponse[]>(base(userId)),
 
   create: (userId: number, body: ApiKeyRequest) =>
-    http<ApiKeyResponse>(base(userId), { method: 'POST', body: toSnake(body) }),
+    http<ApiKeyResponse>(base(userId), { method: 'POST', body: toJson(body) }),
 
   update: (userId: number, id: number, body: ApiKeyRequest) =>
-    http<ApiKeyResponse>(`${base(userId)}/${id}`, { method: 'PUT', body: toSnake(body) }),
+    http<ApiKeyResponse>(`${base(userId)}/${id}`, { method: 'PUT', body: toJson(body) }),
 
   setDefault: (userId: number, id: number) =>
     http<ApiKeyResponse>(`${base(userId)}/${id}/set-default`, { method: 'POST' }),

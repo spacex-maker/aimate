@@ -1,10 +1,10 @@
 package com.openforge.aimate.agent.dto;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-
 /**
- * 管理员更新系统模型启用状态请求体。
+ * @deprecated 请使用 {@link UpdateSystemModelRequest}。
+ * 仅为兼容旧引用保留，后续可删除。
  */
-public record UpdateSystemModelEnabledRequest(
-        @JsonProperty("enabled") boolean enabled
-) {}
+@Deprecated
+public final class UpdateSystemModelEnabledRequest {
+    private UpdateSystemModelEnabledRequest() {}
+}
