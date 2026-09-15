@@ -89,6 +89,7 @@ public class LlmCallLog extends BaseEntity {
     public enum CallType {
         AGENT_LOOP,
         MEMORY_COMPRESS,
+        DESKTOP_AGENT,
         OTHER
     }
 }

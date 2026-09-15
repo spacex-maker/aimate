@@ -1,16 +1,16 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import type React from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { X, Activity, Box, RefreshCw, Users, SlidersHorizontal } from 'lucide-react'
+import { X, Activity, Box, RefreshCw, Users, SlidersHorizontal, Receipt } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { adminApi } from '../../api/admin'
 import { ComponentStatusCard } from './ComponentStatusCard'
 import type { HostResourceStatusDto, SystemModelDto, ToolSettingsDto } from '../../types/agent'
-import type { AdminUserListItem, SystemConfigItem, UserContainerStatus } from '../../types/admin'
+import type { AdminUserListItem, BillingUsageDetail, SystemConfigItem, UserContainerStatus } from '../../types/admin'
 import { useHostStatusSocket } from '../../hooks/useHostStatusSocket'
 
-type AdminTab = 'containers' | 'models' | 'users' | 'systemConfig'
+type AdminTab = 'containers' | 'models' | 'users' | 'billing' | 'systemConfig'
 
 function formatBytes(v?: number | null): string {
   if (v == null || v <= 0) return '未知'
@@ -134,6 +134,19 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
             </button>
             <button
               type="button"
+              onClick={() => setTab('billing')}
+              className={clsx(
+                'w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors pl-8',
+                tab === 'billing'
+                  ? 'bg-white/10 text-white'
+                  : 'text-white/60 hover:text-white/90 hover:bg-white/5'
+              )}
+            >
+              <Receipt className="w-4 h-4 flex-shrink-0" />
+              计费管理
+            </button>
+            <button
+              type="button"
               onClick={() => setTab('systemConfig')}
               className={clsx(
                 'w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors',
@@ -152,6 +165,7 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
             {tab === 'containers' && <ContainerMonitorContent />}
             {tab === 'models' && <ModelManageContent />}
             {tab === 'users' && <UserManageContent />}
+            {tab === 'billing' && <BillingManageContent />}
             {tab === 'systemConfig' && <SystemConfigContent />}
           </div>
         </div>
@@ -629,6 +643,161 @@ function UserManageContent() {
           onChangeStatus={setStatus}
           onChangeRole={setRole}
         />
+      )}
+    </div>
+  )
+}
+
+function BillingManageContent() {
+  const [rangeDays, setRangeDays] = useState<7 | 30 | 90>(30)
+  const [selectedUserId, setSelectedUserId] = useState<number | null>(null)
+
+  const fromIso = useMemo(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - rangeDays)
+    return d.toISOString()
+  }, [rangeDays])
+
+  const { data, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ['admin-billing-usage', rangeDays],
+    queryFn: () => adminApi.getBillingUsage({ from: fromIso }),
+  })
+
+  const { data: details = [], isLoading: detailsLoading } = useQuery({
+    queryKey: ['admin-billing-detail', selectedUserId, rangeDays],
+    queryFn: () =>
+      selectedUserId == null
+        ? Promise.resolve([] as BillingUsageDetail[])
+        : adminApi.getBillingUsageDetail(selectedUserId, { from: fromIso, limit: 100 }),
+    enabled: selectedUserId != null,
+  })
+
+  return (
+    <div className="h-full flex flex-col">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-medium text-white">计费管理</h3>
+          <p className="text-xs text-white/40 mt-0.5">
+            基于 llm_call_logs 的用量汇总（含桌面端 DESKTOP_AGENT 代理调用）
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {([7, 30, 90] as const).map((d) => (
+            <button
+              key={d}
+              type="button"
+              onClick={() => setRangeDays(d)}
+              className={clsx(
+                'px-2 py-1 rounded text-[11px] border',
+                rangeDays === d
+                  ? 'border-white/30 bg-white/10 text-white'
+                  : 'border-white/10 text-white/50 hover:bg-white/5',
+              )}
+            >
+              {d} 天
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => refetch()}
+            className="p-1.5 rounded border border-white/15 text-white/60 hover:bg-white/5"
+            title="刷新"
+          >
+            <RefreshCw className={clsx('w-3.5 h-3.5', isFetching && 'animate-spin')} />
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-4 grid grid-cols-2 gap-3">
+        <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+          <div className="text-[11px] text-white/40">总 Token</div>
+          <div className="text-lg font-mono text-white/90">{data?.grandTotalTokens?.toLocaleString() ?? '—'}</div>
+        </div>
+        <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+          <div className="text-[11px] text-white/40">估算费用 (USD)</div>
+          <div className="text-lg font-mono text-white/90">
+            {data ? data.grandTotalCostUsd.toFixed(4) : '—'}
+          </div>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
+      ) : !data?.summaries?.length ? (
+        <div className="text-center py-10 text-white/30 text-sm">所选时间范围内暂无用量</div>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-white/10 mb-4">
+          <table className="w-full text-xs text-white/80">
+            <thead>
+              <tr className="border-b border-white/10 text-left bg-white/[0.03]">
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40">用户</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40">调用次数</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40">Prompt</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40">Completion</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40">Total</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40">费用</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/10">
+              {data.summaries.map((row) => (
+                <tr
+                  key={row.userId}
+                  className={clsx(
+                    'hover:bg-white/[0.03] cursor-pointer',
+                    selectedUserId === row.userId && 'bg-white/[0.06]',
+                  )}
+                  onClick={() => setSelectedUserId(row.userId)}
+                >
+                  <td className="py-2 px-3 font-mono">{row.username}</td>
+                  <td className="py-2 px-3">{row.callCount}</td>
+                  <td className="py-2 px-3">{row.promptTokens.toLocaleString()}</td>
+                  <td className="py-2 px-3">{row.completionTokens.toLocaleString()}</td>
+                  <td className="py-2 px-3">{row.totalTokens.toLocaleString()}</td>
+                  <td className="py-2 px-3">${row.estimatedCostUsd.toFixed(4)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {selectedUserId != null && (
+        <div className="flex-1 min-h-0 overflow-auto rounded-lg border border-white/10">
+          <div className="px-3 py-2 border-b border-white/10 text-xs text-white/50 flex justify-between">
+            <span>用户 #{selectedUserId} 明细</span>
+            <button type="button" className="text-white/40 hover:text-white" onClick={() => setSelectedUserId(null)}>
+              关闭
+            </button>
+          </div>
+          {detailsLoading ? (
+            <div className="p-4 text-xs text-white/40">加载明细…</div>
+          ) : (
+            <table className="w-full text-[11px] text-white/70">
+              <thead>
+                <tr className="text-left text-white/35 border-b border-white/10">
+                  <th className="px-3 py-1.5">时间</th>
+                  <th className="px-3 py-1.5">Provider</th>
+                  <th className="px-3 py-1.5">Model</th>
+                  <th className="px-3 py-1.5">类型</th>
+                  <th className="px-3 py-1.5">Tokens</th>
+                  <th className="px-3 py-1.5">状态</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {details.map((d) => (
+                  <tr key={d.id}>
+                    <td className="px-3 py-1.5 whitespace-nowrap">{d.createTime ?? '—'}</td>
+                    <td className="px-3 py-1.5">{d.provider}</td>
+                    <td className="px-3 py-1.5">{d.model}</td>
+                    <td className="px-3 py-1.5">{d.callType ?? '—'}</td>
+                    <td className="px-3 py-1.5">{d.totalTokens ?? 0}</td>
+                    <td className="px-3 py-1.5">{d.success ? 'OK' : 'ERR'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
       )}
     </div>
   )

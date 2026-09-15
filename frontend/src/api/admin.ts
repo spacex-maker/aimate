@@ -1,5 +1,5 @@
 import type { HostResourceStatusDto, SystemModelDto, ToolSettingsDto } from '../types/agent'
-import type { AdminUserListItem, ComponentStatusDto, HostLoadMetric, SystemConfigItem, UserContainerStatus } from '../types/admin'
+import type { AdminUserListItem, BillingUsageDetail, BillingUsageResponse, ComponentStatusDto, HostLoadMetric, SystemConfigItem, UserContainerStatus } from '../types/admin'
 import { http } from './httpClient'
 
 export const adminApi = {
@@ -71,4 +71,24 @@ export const adminApi = {
       body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
     }),
+
+  /** 管理员：用量汇总（基于 llm_call_logs） */
+  getBillingUsage: (params?: { userId?: number; from?: string; to?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.userId != null) qs.append('userId', String(params.userId))
+    if (params?.from) qs.append('from', params.from)
+    if (params?.to) qs.append('to', params.to)
+    const query = qs.toString()
+    return http<BillingUsageResponse>('/api/admin/billing/usage' + (query ? `?${query}` : ''))
+  },
+
+  /** 管理员：某用户用量明细 */
+  getBillingUsageDetail: (userId: number, params?: { from?: string; to?: string; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.from) qs.append('from', params.from)
+    if (params?.to) qs.append('to', params.to)
+    if (params?.limit != null) qs.append('limit', String(params.limit))
+    const query = qs.toString()
+    return http<BillingUsageDetail[]>(`/api/admin/billing/usage/${userId}` + (query ? `?${query}` : ''))
+  },
 }

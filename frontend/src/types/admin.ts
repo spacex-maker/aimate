@@ -50,3 +50,33 @@ export interface ComponentStatusDto {
   embedding: { ok: boolean; model: string; dimensions: number; baseUrl: string }
   docker: { ok: boolean; version: string | null; enabled: boolean; image: string | null; message: string | null }
 }
+
+export interface BillingUsageSummary {
+  userId: number
+  username: string
+  callCount: number
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  estimatedCostUsd: number
+}
+
+export interface BillingUsageResponse {
+  summaries: BillingUsageSummary[]
+  grandTotalTokens: number
+  grandTotalCostUsd: number
+}
+
+export interface BillingUsageDetail {
+  id: number
+  provider: string
+  model: string
+  callType: string | null
+  sessionId: string | null
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+  estimatedCostUsd: number | null
+  success: boolean
+  createTime: string | null
+}
