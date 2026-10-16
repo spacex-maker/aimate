@@ -1,7 +1,7 @@
 package com.openforge.aimate;
 
 import com.openforge.aimate.agent.ScriptToolProperties;
-import com.openforge.aimate.memory.MilvusProperties;
+import com.openforge.aimate.memory.VectorDbProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -9,7 +9,12 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
 @EnableScheduling
-@EnableConfigurationProperties({ MilvusProperties.class, ScriptToolProperties.class, com.openforge.aimate.agent.ScriptDockerProperties.class })
+@EnableConfigurationProperties({
+        VectorDbProperties.class,
+        ScriptToolProperties.class,
+        com.openforge.aimate.agent.ScriptDockerProperties.class,
+        com.openforge.aimate.config.OidcProperties.class
+})
 public class AimateApplication {
 
     public static void main(String[] args) {

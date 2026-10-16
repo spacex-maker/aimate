@@ -16,7 +16,7 @@
     <artifactId>aimate</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <name>aimate</name>
-    <description>OpenForgeX — Autonomous Agent Backend</description>
+    <description>AIMATEX-AGENT — Autonomous Agent Backend</description>
 
     <properties>
         <java.version>25</java.version>
@@ -90,6 +90,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
+        <!-- AIMATEX Account OIDC (JWKS / JWT verify via Nimbus) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
 
         <!-- ── JJWT — JWT generation & verification ─────────────────────── -->
         <dependency>
@@ -116,20 +121,11 @@
             <artifactId>spring-boot-starter-websocket</artifactId>
         </dependency>
 
-        <!-- ── Milvus Vector Database ───────────────────────────────── -->
-        <!--    Provides MilvusClientV2 for long-term memory storage/retrieval. -->
-        <!--    The SDK ships its own gRPC/protobuf; exclude log4j to avoid    -->
-        <!--    conflicts with Spring Boot's logback.                           -->
+        <!-- 腾讯云向量数据库。记忆与工具检索走库内向量模型，不再使用 Milvus。 -->
         <dependency>
-            <groupId>io.milvus</groupId>
-            <artifactId>milvus-sdk-java</artifactId>
-            <version>2.6.14</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.apache.logging.log4j</groupId>
-                    <artifactId>log4j-slf4j-impl</artifactId>
-                </exclusion>
-            </exclusions>
+            <groupId>com.tencent.tcvectordb</groupId>
+            <artifactId>vectordatabase-sdk-java</artifactId>
+            <version>2.6.1</version>
         </dependency>
 
         <!-- ── Actuator (health + metrics endpoint) ──────────────── -->

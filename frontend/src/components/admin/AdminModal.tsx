@@ -74,7 +74,8 @@ function formatProvider(provider: string): string {
 }
 
 export function AdminModal({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<AdminTab>('containers')
+  // 默认进入模型管理；容器监控为遗留能力，产线已关闭每用户 Docker
+  const [tab, setTab] = useState<AdminTab>('models')
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -95,19 +96,6 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
           <div className="w-44 flex-shrink-0 border-r border-white/10 py-2">
             <button
               type="button"
-              onClick={() => setTab('containers')}
-              className={clsx(
-                'w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors',
-                tab === 'containers'
-                  ? 'bg-white/10 text-white'
-                  : 'text-white/60 hover:text-white/90 hover:bg-white/5'
-              )}
-            >
-              <Activity className="w-4 h-4 flex-shrink-0" />
-              容器监控
-            </button>
-            <button
-              type="button"
               onClick={() => setTab('models')}
               className={clsx(
                 'w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors',
@@ -118,6 +106,19 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
             >
               <Box className="w-4 h-4 flex-shrink-0" />
               模型管理
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab('containers')}
+              className={clsx(
+                'w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors',
+                tab === 'containers'
+                  ? 'bg-white/10 text-white'
+                  : 'text-white/60 hover:text-white/90 hover:bg-white/5'
+              )}
+            >
+              <Activity className="w-4 h-4 flex-shrink-0" />
+              主机状态
             </button>
             <button
               type="button"

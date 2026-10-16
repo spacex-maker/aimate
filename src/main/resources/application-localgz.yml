@@ -44,18 +44,21 @@ agent:
       run-container-cmd-idle-timeout-seconds: 90
       script-timeout-seconds: 300
       script-idle-timeout-seconds: 90
-  milvus:
-    enabled: true
-    host: 127.0.0.1
-    port: 19530
-    collection-name: agent_memories_v2
-    vector-dimensions: 1024
-    # 连接超时(ms)。若 DEADLINE_EXCEEDED，说明本机无法访问 host:port，请检查网络/防火墙/FRP(需 type=tcp)
-    connect-timeout-ms: 30000
+  vectordb:
+    enabled: ${TENCENT_VECTORDB_ENABLED:true}
+    url: ${TENCENT_VECTORDB_URL:}
+    username: ${TENCENT_VECTORDB_USERNAME:root}
+    key: ${TENCENT_VECTORDB_KEY:}
+    database: ${TENCENT_VECTORDB_DATABASE:aimate}
+    memory-collection: agent_memories
+    tool-collection: agent_tools
+    embedding-model: ${TENCENT_VECTORDB_MODEL:bge-base-zh}
+    vector-dimensions: ${TENCENT_VECTORDB_DIMENSIONS:768}
+    timeout-seconds: 30
 
 app:
   jwt:
-    secret: ${JWT_SECRET:OpenForgeX-super-secret-key-change-me-in-prod-2026}
+    secret: ${JWT_SECRET:AIMATEX-AGENT-super-secret-key-change-me-in-prod-2026}
 
 logging:
   level:

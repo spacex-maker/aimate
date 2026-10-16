@@ -8,7 +8,8 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: validate
+      # 可被环境变量 SPRING_JPA_HIBERNATE_DDL_AUTO 覆盖（产线首次对齐可用 update）
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:validate}
     show-sql: false
     properties:
       hibernate:

@@ -400,7 +400,7 @@ export function SessionPage() {
       <div className="h-full flex flex-col items-center justify-center gap-4 text-white/70">
         <p>无效的会话 ID，请返回首页重新开始。</p>
         <button
-          onClick={() => navigate('/')}
+          onClick={() => navigate('/app')}
           className="px-4 py-2 text-sm bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
         >
           返回首页
@@ -421,7 +421,7 @@ export function SessionPage() {
         pausePending={pauseMutation.isPending}
         resumePending={resumeMutation.isPending}
         abortPending={abortMutation.isPending}
-        onBack={() => navigate('/')}
+        onBack={() => navigate('/app')}
         onCopyId={() => {
           navigator.clipboard.writeText(effectiveSessionId ?? '')
           toast.success('已复制')

@@ -21,9 +21,11 @@ CREATE TABLE IF NOT EXISTS users (
 
     username        VARCHAR(64)     NOT NULL COMMENT '登录名，唯一',
     email           VARCHAR(128)             COMMENT '邮箱，唯一，可选',
-    password_hash   VARCHAR(255)    NOT NULL COMMENT '密码哈希（BCrypt 等）',
+    aimatex_account_sub VARCHAR(64)          COMMENT 'AIMATEX Account OIDC sub',
+    password_hash   VARCHAR(255)             COMMENT '密码哈希；OIDC 用户可为空',
     display_name    VARCHAR(128)             COMMENT '展示昵称',
     status          VARCHAR(16)     NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE | DISABLED',
+    role            VARCHAR(16)     NOT NULL DEFAULT 'USER' COMMENT 'USER | ADMIN',
     last_login_time DATETIME                 COMMENT '最近登录时间',
 
     version         INT             NOT NULL DEFAULT 0 COMMENT 'JPA @Version 乐观锁计数器',
@@ -32,7 +34,8 @@ CREATE TABLE IF NOT EXISTS users (
 
     PRIMARY KEY (id),
     UNIQUE KEY uk_users_username (username),
-    UNIQUE KEY uk_users_email (email)
+    UNIQUE KEY uk_users_email (email),
+    UNIQUE KEY uk_users_aimatex_account_sub (aimatex_account_sub)
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_unicode_ci
@@ -241,6 +244,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
     result           TEXT                    COMMENT '上一轮最终答案',
     error_message    TEXT                    COMMENT '上一轮错误或中断说明',
     current_assistant_message_id BIGINT NULL COMMENT 'FK → agent_session_messages.id，当前回答中的占位条，可被用户中断',
+    hidden           TINYINT(1)     NOT NULL DEFAULT 0 COMMENT '1=从最近会话列表隐藏（不物理删除）',
 
     -- ── 审计 + 乐观锁凭证 ────────────────────────────────
     version          INT            NOT NULL DEFAULT 0 COMMENT 'JPA @Version 乐观锁计数器',
@@ -276,6 +280,7 @@ CREATE TABLE IF NOT EXISTS agent_session_messages (
     tool_calls_json   TEXT            NULL     COMMENT 'role=assistant 时的 tool_calls 数组 JSON',
     message_status    VARCHAR(20)     NULL     COMMENT '仅 assistant 使用: ANSWERING=回答中 DONE=已完成 INTERRUPTED=已中断',
     thinking_content  LONGTEXT        NULL     COMMENT '仅 assistant：思考过程正文，前端可折叠展示',
+    thinking_blocks_json LONGTEXT     NULL     COMMENT '仅 assistant：思考+工具调用时间线 StreamBlock JSON',
     reply_to_message_id BIGINT        NULL     COMMENT '归属某条 assistant 回复（工具消息等）；NULL=主序消息',
 
     version           INT             NOT NULL DEFAULT 0,

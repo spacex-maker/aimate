@@ -35,6 +35,7 @@ public class SecurityConfig {
                 // Public — login, register, health
                 .requestMatchers(
                     "/api/auth/**",
+                    "/api/auth/oidc/**",
                     "/actuator/health",
                     // WebSocket handshake (SockJS)
                     "/ws/**"
@@ -61,18 +62,18 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        // 允许本地开发、Netlify 站点、自定义域名与产线前端（anakkix.cn）访问后端
+        // 允许本地开发与 AIMATEX 产线前端（chat / agent）
         config.setAllowedOriginPatterns(List.of(
                 "http://localhost:3000",
                 "http://localhost:*",
+                "http://127.0.0.1:*",
                 "https://openforgex.netlify.app",
                 "https://*.netlify.app",
+                "http://chat.aimatex.com",
+                "https://chat.aimatex.com",
                 "http://agent.aimatex.com",
                 "https://agent.aimatex.com",
-                "http://anakkix.cn",
-                "https://anakkix.cn",
-                "http://*.anakkix.cn",
-                "https://*.anakkix.cn"
+                "https://*.aimatex.com"
         ));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));

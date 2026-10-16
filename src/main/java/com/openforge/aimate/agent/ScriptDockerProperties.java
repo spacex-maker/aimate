@@ -22,7 +22,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties(prefix = "agent.script.docker")
 public record ScriptDockerProperties(
-        @DefaultValue("true") boolean enabled,
+        @DefaultValue("false") boolean enabled,
         /** 空闲超过此分钟数后自动回收（暂停）容器；≤0 表示不自动回收（默认 0，共用内核 Linux 容器不回收问题不大） */
         @DefaultValue("0") int idleMinutes,
         @DefaultValue("debian:bookworm-slim") String image,

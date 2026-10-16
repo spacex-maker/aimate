@@ -27,11 +27,16 @@ public class User extends BaseEntity {
     @Column(nullable = true, length = 128, unique = true)
     private String email;
 
-    @Column(name = "password_hash", nullable = false, length = 255)
+    /** OIDC 统一登录用户可为空（无本地密码）。 */
+    @Column(name = "password_hash", nullable = true, length = 255)
     private String passwordHash;
 
     @Column(name = "display_name", length = 128)
     private String displayName;
+
+    /** AIMATEX Account OIDC subject（sub）。 */
+    @Column(name = "aimatex_account_sub", length = 64, unique = true)
+    private String aimatexAccountSub;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 16)

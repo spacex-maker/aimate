@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "AIMate desktop agent client",
-  "author": "OpenForgeX",
+  "author": "AIMATEX-AGENT",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {

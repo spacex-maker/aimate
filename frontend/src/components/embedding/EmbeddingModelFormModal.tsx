@@ -24,7 +24,7 @@ export function EmbeddingModelFormModal({ initial, onClose, onSubmit, isLoading 
   const [showKey,    setShowKey]    = useState(false)
 
   const providerInfo = EMBEDDING_PROVIDERS.find(p => p.value === provider)
-  const isOpenForgeProvider = provider === 'ollama'
+  const isAimatexAgentProvider = provider === 'ollama'
 
   // Auto-fill when provider changes
   useEffect(() => {
@@ -131,7 +131,7 @@ export function EmbeddingModelFormModal({ initial, onClose, onSubmit, isLoading 
                     required
                     placeholder="text-embedding-3-small"
                     className={inputCls}
-                    disabled={isOpenForgeProvider}
+                    disabled={isAimatexAgentProvider}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -144,7 +144,7 @@ export function EmbeddingModelFormModal({ initial, onClose, onSubmit, isLoading 
                       required
                       min={64}
                       className={inputCls}
-                      disabled={isOpenForgeProvider}
+                      disabled={isAimatexAgentProvider}
                     />
                   </div>
                   <div>
@@ -155,7 +155,7 @@ export function EmbeddingModelFormModal({ initial, onClose, onSubmit, isLoading 
                       onChange={e => setMaxTokens(Number(e.target.value))}
                       min={512}
                       className={inputCls}
-                      disabled={isOpenForgeProvider}
+                      disabled={isAimatexAgentProvider}
                     />
                   </div>
                 </div>
@@ -179,7 +179,7 @@ export function EmbeddingModelFormModal({ initial, onClose, onSubmit, isLoading 
                     required
                     placeholder={provider === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.openai.com/v1'}
                     className={inputCls}
-                    disabled={isOpenForgeProvider}
+                    disabled={isAimatexAgentProvider}
                   />
                 </div>
                 <div>
@@ -196,13 +196,13 @@ export function EmbeddingModelFormModal({ initial, onClose, onSubmit, isLoading 
                       autoComplete="new-password"
                       placeholder={provider === 'ollama' ? '留空即可' : 'sk-...'}
                       className={`${inputCls} pr-10`}
-                      disabled={isOpenForgeProvider}
+                      disabled={isAimatexAgentProvider}
                     />
                     <button
                       type="button"
                       onClick={() => setShowKey(v => !v)}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60"
-                      disabled={isOpenForgeProvider}
+                      disabled={isAimatexAgentProvider}
                     >
                       {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>

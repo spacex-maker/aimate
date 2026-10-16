@@ -1,4 +1,4 @@
-# 产线环境。MySQL / Milvus / 向量服务与应用同机时使用 127.0.0.1。
+# 产线环境。MySQL 与应用同机时使用 127.0.0.1。长期记忆走腾讯云向量库。
 # 激活方式：SPRING_PROFILES_ACTIVE=prod（部署时设置）
 spring:
   datasource:
@@ -37,8 +37,8 @@ agent:
     timeout-seconds: 30
   script:
     docker:
-      enabled: true
-      # 空闲 N 分钟后自动回收（暂停）容器；0=不自动回收（共用内核的 Linux 容器不回收问题不大，常驻/定时任务可跑）
+      # 产线不再为用户提供独立 Docker 虚拟机；仅系统允许的工具可在服务端执行
+      enabled: ${AGENT_SCRIPT_DOCKER_ENABLED:false}
       idle-minutes: 0
       image: debian:bookworm-slim
       memory-limit: 4g
@@ -48,12 +48,31 @@ agent:
       run-container-cmd-idle-timeout-seconds: 90
       script-timeout-seconds: 300
       script-idle-timeout-seconds: 90
-  milvus:
-    enabled: true
-    host: ${MILVUS_HOST:127.0.0.1}
-    port: ${MILVUS_PORT:19530}
-    collection-name: agent_memories_v2
-    vector-dimensions: ${MILVUS_VECTOR_DIMENSIONS:1024}
+  vectordb:
+    enabled: ${TENCENT_VECTORDB_ENABLED:true}
+    url: ${TENCENT_VECTORDB_URL:}
+    username: ${TENCENT_VECTORDB_USERNAME:root}
+    key: ${TENCENT_VECTORDB_KEY:}
+    database: ${TENCENT_VECTORDB_DATABASE:aimate}
+    memory-collection: agent_memories
+    tool-collection: agent_tools
+    embedding-model: ${TENCENT_VECTORDB_MODEL:bge-base-zh}
+    vector-dimensions: ${TENCENT_VECTORDB_DIMENSIONS:768}
+    timeout-seconds: 30
+
+# AIMATEX Account OIDC
+aimatex:
+  oidc:
+    enabled: ${AIMATEX_OIDC_ENABLED:true}
+    issuer: ${AIMATEX_OIDC_ISSUER:https://account-api.aimatex.com}
+    client-id: ${AIMATEX_OIDC_CLIENT_ID:aimatex-chat}
+    authorize-url: ${AIMATEX_OIDC_AUTHORIZE_URL:https://account.aimatex.com/oauth/authorize}
+    token-url: ${AIMATEX_OIDC_TOKEN_URL:https://account-api.aimatex.com/oauth/token}
+    userinfo-url: ${AIMATEX_OIDC_USERINFO_URL:https://account-api.aimatex.com/oauth/userinfo}
+    jwks-url: ${AIMATEX_OIDC_JWKS_URL:https://account-api.aimatex.com/oauth/jwks}
+    redirect-uri: ${AIMATEX_OIDC_REDIRECT_URI:https://chat.aimatex.com/oauth/callback}
+    redirect-uris: ${AIMATEX_OIDC_REDIRECT_URIS:https://chat.aimatex.com/oauth/callback,http://127.0.0.1:5173/oauth/callback,http://localhost:5173/oauth/callback}
+    scopes: ${AIMATEX_OIDC_SCOPES:openid profile email membership}
 
 # 产线必须通过环境变量设置 JWT 密钥
 app:

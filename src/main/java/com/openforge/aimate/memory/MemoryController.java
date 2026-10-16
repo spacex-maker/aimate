@@ -206,11 +206,11 @@ public class MemoryController {
         boolean ok = memoryService.recreateCollectionForUser(userId);
         if (!ok) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(Map.of("message", "Milvus 不可用，无法重建集合"));
+                    .body(Map.of("message", "腾讯云向量库未连接，无法清空记忆"));
         }
         String name = memoryService.resolveCollectionName(userId);
         return ResponseEntity.ok(Map.of(
-                "message", "集合已重建",
+                "message", "当前用户的记忆已清空，可重新同步",
                 "collectionName", name
         ));
     }

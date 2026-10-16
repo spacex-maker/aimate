@@ -1,13 +1,14 @@
 import type { AuthResponse, LoginRequest, RegisterRequest } from '../types/auth'
+import type { OidcPublicConfig } from '../lib/oidc'
 import { fullUrl } from './httpClient'
 
 const BASE = '/api/auth'
 
-async function request<T>(url: string, body: unknown): Promise<T> {
+async function request<T>(url: string, body?: unknown, method: 'GET' | 'POST' = 'POST'): Promise<T> {
   const res = await fetch(fullUrl(url), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) {
     const text = await res.text()
@@ -27,4 +28,9 @@ export const authApi = {
 
   login: (body: LoginRequest) =>
     request<AuthResponse>(`${BASE}/login`, body),
+
+  oidcConfig: () => request<OidcPublicConfig>(`${BASE}/oidc/config`, undefined, 'GET'),
+
+  oidcCallback: (body: { code: string; codeVerifier: string; redirectUri: string }) =>
+    request<AuthResponse>(`${BASE}/oidc/callback`, body),
 }

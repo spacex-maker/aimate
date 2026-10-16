@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
  *
  * Checks performed:
  *   - MySQL: attempts to open a real JDBC connection and queries server version
- *   - Milvus: [OK]/[--] reflects actual connection (milvusClient bean non-null = connected)
+ *   - VectorDB: [OK]/[--] 腾讯云向量库是否已连上
  *   - LLM providers: primary + fallback config (API key is masked)
  *   - Embedding: model + dimensions
  *   - Runtime: Java version, virtual-thread status, server port
@@ -49,9 +49,9 @@ public class StartupInfoRunner implements ApplicationRunner {
         b.append("  │  MySQL  ").append(trunc(status(dto.mysql().ok()) + "  " + dto.mysql().message(), VALUE_W + LABEL_W)).append("\n");
 
         var mv = dto.milvus();
-        String milvusVal = status(mv.ok()) + "  " + mv.host() + ":" + mv.port() + "  " + mv.collectionName() + "  dim=" + mv.dimensions() + (mv.message() != null ? "  (" + mv.message() + ")" : "");
+        String milvusVal = status(mv.ok()) + "  " + mv.host() + "  " + mv.collectionName() + "  dim=" + mv.dimensions() + (mv.message() != null ? "  (" + mv.message() + ")" : "");
         b.append("  ├──────────────────────────────────────────────────────────────────────────\n");
-        b.append("  │  Milvus  ").append(trunc(milvusVal, VALUE_W + LABEL_W)).append("\n");
+        b.append("  │  VectorDB  ").append(trunc(milvusVal, VALUE_W + LABEL_W)).append("\n");
 
         var llm = dto.llm();
         String primaryVal = llm.primary().name() + " [" + llm.primary().model() + "]  key " + status(llm.primary().keyOk());

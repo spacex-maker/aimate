@@ -17,6 +17,10 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     Optional<User> findByEmail(String email);
 
+    Optional<User> findByEmailIgnoreCase(String email);
+
+    Optional<User> findByAimatexAccountSub(String aimatexAccountSub);
+
     /**
      * Login helper: allow username or email.
      */

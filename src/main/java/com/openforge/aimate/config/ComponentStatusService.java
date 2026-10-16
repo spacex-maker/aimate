@@ -4,25 +4,18 @@ import com.openforge.aimate.agent.DockerDetector;
 import com.openforge.aimate.agent.ScriptDockerProperties;
 import com.openforge.aimate.agent.dto.ComponentStatusDto;
 import com.openforge.aimate.llm.LlmProperties;
-import com.openforge.aimate.memory.EmbeddingProperties;
-import com.openforge.aimate.memory.MilvusProperties;
-import io.milvus.v2.client.MilvusClientV2;
+import com.openforge.aimate.memory.TencentVectorStore;
+import com.openforge.aimate.memory.VectorDbProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.env.Environment;
-import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import javax.sql.DataSource;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.sql.Connection;
-import java.time.Duration;
 
 /**
- * 采集各组件（MySQL、Milvus、LLM、Embedding、Docker）连接/配置状态，
+ * 采集各组件（MySQL、腾讯云向量库、LLM、向量模型、Docker）连接/配置状态，
  * 供启动摘要日志与管理端 GET /api/admin/component-status 使用。
  */
 @Slf4j
@@ -32,11 +25,9 @@ public class ComponentStatusService {
 
     private final DataSource dataSource;
     private final Environment env;
-    @Nullable
-    private final MilvusClientV2 milvusClient;
-    private final MilvusProperties milvusProperties;
+    private final TencentVectorStore vectorStore;
+    private final VectorDbProperties vectorDbProperties;
     private final LlmProperties llmProperties;
-    private final EmbeddingProperties embeddingProperties;
     private final DockerDetector dockerDetector;
     private final ScriptDockerProperties scriptDockerProperties;
 
@@ -91,44 +82,28 @@ public class ComponentStatusService {
     }
 
     private ComponentStatusDto.MilvusStatus probeMilvus() {
-        boolean ok = (milvusClient != null);
-        String message = ok ? null : "connection failed";
+        boolean ok = vectorStore.available();
+        String message = ok
+                ? vectorDbProperties.embeddingModel()
+                : "未连接。设置 TENCENT_VECTORDB_URL 与 TENCENT_VECTORDB_KEY";
         return new ComponentStatusDto.MilvusStatus(
                 ok,
-                milvusProperties.host(),
-                milvusProperties.port(),
-                milvusProperties.collectionName(),
-                milvusProperties.vectorDimensions(),
+                vectorDbProperties.url() == null ? "" : vectorDbProperties.url(),
+                vectorDbProperties.timeoutSeconds(),
+                vectorDbProperties.memoryCollection(),
+                vectorDbProperties.vectorDimensions(),
                 message
         );
     }
 
     private ComponentStatusDto.EmbeddingStatus probeEmbedding() {
-        boolean ok = probeEmbeddingReachable();
+        boolean ok = vectorStore.available();
         return new ComponentStatusDto.EmbeddingStatus(
                 ok,
-                embeddingProperties.model(),
-                embeddingProperties.dimensions(),
-                embeddingProperties.baseUrl()
+                vectorDbProperties.embeddingModel(),
+                vectorDbProperties.vectorDimensions(),
+                "tencent-vectordb"
         );
-    }
-
-    private boolean probeEmbeddingReachable() {
-        String base = embeddingProperties.baseUrl();
-        if (base == null || base.isBlank()) return false;
-        try {
-            HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(base.endsWith("/") ? base : base + "/"))
-                    .GET()
-                    .timeout(Duration.ofSeconds(3))
-                    .build();
-            client.send(req, HttpResponse.BodyHandlers.discarding());
-            return true;
-        } catch (Exception e) {
-            log.debug("[ComponentStatus] Embedding probe failed: {}", e.getMessage());
-            return false;
-        }
     }
 
     private ComponentStatusDto.DockerStatus probeDocker() {

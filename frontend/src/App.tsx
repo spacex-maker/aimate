@@ -8,6 +8,8 @@ import { Navbar } from './components/layout/Navbar'
 import { RequireAuth } from './components/layout/RequireAuth'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
+import { OAuthCallbackPage } from './pages/OAuthCallbackPage'
+import { LandingPage } from './pages/LandingPage'
 import { HomePage } from './pages/HomePage'
 import { SessionPage } from './pages/SessionPage'
 import { MemoryPage } from './pages/MemoryPage'
@@ -90,12 +92,14 @@ export default function App() {
         <BrowserRouter future={{ v7_relativeSplatPath: true }}>
         <Routes>
           {/* ── Public routes (no sidebar) ─────────────────────────────── */}
-          <Route path="/login"    element={<LoginPage />} />
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
 
           {/* ── Protected routes (require login) ──────────────────────── */}
           <Route
-            path="/"
+            path="/app"
             element={
               <RequireAuth>
                 <AppLayout>

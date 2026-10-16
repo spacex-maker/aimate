@@ -9692,3 +9692,6 @@
 # JDK 25 放在项目 jdk25 目录内，不提交二进制（他人自行放置）
 /jdk25/*
 !/jdk25/README.txt
+
+/secrets/
+

@@ -12,7 +12,7 @@ export function ComponentStatusCard({ status }: { status: ComponentStatusDto }) 
   const { mysql, milvus, llm, embedding, docker } = status
   const items = [
     { label: 'MySQL', ok: mysql.ok, detail: mysql.message },
-    { label: 'Milvus', ok: milvus.ok, detail: `${milvus.host}:${milvus.port} ${milvus.collectionName} dim=${milvus.dimensions}` },
+    { label: '腾讯云向量库', ok: milvus.ok, detail: `${milvus.host || '未配置'} ${milvus.collectionName} dim=${milvus.dimensions}${milvus.message ? ' · ' + milvus.message : ''}` },
     { label: 'LLM 主', ok: llm.primary.keyOk, detail: `${llm.primary.name} [${llm.primary.model}]` },
     { label: 'LLM 备', ok: llm.fallback.keyOk, detail: `${llm.fallback.name} [${llm.fallback.model}]` },
     { label: 'Embedding', ok: embedding.ok, detail: `${embedding.model} dim=${embedding.dimensions} ${embedding.baseUrl ?? ''}` },

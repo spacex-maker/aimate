@@ -12,7 +12,7 @@ import { StatusBadge } from '../agent/StatusBadge'
 import type { SessionResponse } from '../../types/agent'
 
 const baseLinks = [
-  { to: '/', label: '控制台', icon: LayoutDashboard },
+  { to: '/app', label: '控制台', icon: LayoutDashboard },
   { to: '/memory', label: '长期记忆', icon: Brain },
   { to: '/api-keys', label: 'API 密钥', icon: KeyRound },
   { to: '/embedding-models', label: '向量模型', icon: Cpu },
@@ -40,7 +40,7 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
   const handleLogout = () => {
     logout()
     toast.success('已退出登录')
-    navigate('/login', { replace: true })
+    navigate('/', { replace: true })
   }
 
   const linkClass = (isActive: boolean) =>
@@ -53,17 +53,25 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
   return (
     <nav className="h-full flex flex-col min-w-0">
       {/* Logo + 收起按钮 */}
-      <div className={clsx('flex items-center border-b border-white/10 flex-shrink-0', collapsed ? 'justify-center px-0 py-4' : 'gap-2.5 px-5 py-5')}>
+      <NavLink
+        to="/app"
+        end
+        className={clsx(
+          'flex items-center border-b border-white/10 flex-shrink-0 text-inherit no-underline',
+          collapsed ? 'justify-center px-0 py-4' : 'gap-2.5 px-5 py-5'
+        )}
+        title="控制台"
+      >
         <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0">
           <Bot className="w-5 h-5 text-white" />
         </div>
         {!collapsed && (
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-bold text-white leading-none">OpenForgeX</div>
+            <div className="text-sm font-bold text-white leading-none">AIMATEX-AGENT</div>
             <div className="text-[10px] text-white/40 mt-0.5">Autonomous Agent</div>
           </div>
         )}
-      </div>
+      </NavLink>
 
       {/* 收起/展开 */}
       <div className="px-2 pt-2 flex-shrink-0">
@@ -88,7 +96,7 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
             <NavLink
               key={to}
               to={to}
-              end={to === '/'}
+              end={to === '/app'}
               className={({ isActive }) => linkClass(isActive)}
               title={collapsed ? label : undefined}
             >
