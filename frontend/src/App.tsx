@@ -16,6 +16,8 @@ import { MemoryPage } from './pages/MemoryPage'
 import { ApiKeyPage } from './pages/ApiKeyPage'
 import { EmbeddingModelPage } from './pages/EmbeddingModelPage'
 import { ToolsPage } from './pages/ToolsPage'
+import { AgentHirePage } from './pages/AgentHirePage'
+import { MyAgentsPage } from './pages/MyAgentsPage'
 import { ADMIN_SITE_ORIGIN } from './lib/host'
 
 const queryClient = new QueryClient({
@@ -163,6 +165,28 @@ export default function App() {
               <RequireAuth>
                 <AppLayout>
                   <ToolsPage />
+                </AppLayout>
+              </RequireAuth>
+            }
+          />
+
+          <Route
+            path="/agents/hire"
+            element={
+              <RequireAuth>
+                <AppLayout>
+                  <AgentHirePage />
+                </AppLayout>
+              </RequireAuth>
+            }
+          />
+
+          <Route
+            path="/agents/mine"
+            element={
+              <RequireAuth>
+                <AppLayout>
+                  <MyAgentsPage />
                 </AppLayout>
               </RequireAuth>
             }

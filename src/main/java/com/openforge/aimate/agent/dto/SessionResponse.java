@@ -28,6 +28,7 @@ public record SessionResponse(
         @JsonProperty("result")         String        result,
         @JsonProperty("errorMessage")   String        errorMessage,
         @JsonProperty("hidden")         boolean       hidden,
+        @JsonProperty("userAgentId")    Long          userAgentId,
         @JsonProperty("wsSubscribePath")String        wsSubscribePath,   // e.g. /topic/agent/{sessionId}
         @JsonProperty("createTime")     LocalDateTime createTime,
         @JsonProperty("updateTime")     LocalDateTime updateTime
@@ -42,6 +43,7 @@ public record SessionResponse(
                 session.getResult(),
                 session.getErrorMessage(),
                 session.isHidden(),
+                session.getUserAgentId(),
                 "/topic/agent/" + session.getSessionId(),
                 session.getCreateTime(),
                 session.getUpdateTime()

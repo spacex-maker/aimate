@@ -1,6 +1,8 @@
 package com.openforge.aimate.repository;
 
 import com.openforge.aimate.domain.User;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -11,6 +13,15 @@ import java.util.Optional;
 
 @Repository
 public interface UserRepository extends JpaRepository<User, Long> {
+
+    @Query("""
+            SELECT u FROM User u
+            WHERE (:q IS NULL OR :q = ''
+               OR LOWER(u.username) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(COALESCE(u.email, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+               OR LOWER(COALESCE(u.displayName, '')) LIKE LOWER(CONCAT('%', :q, '%')))
+            """)
+    Page<User> search(@Param("q") String q, Pageable pageable);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE User u SET u.pointsBalance = u.pointsBalance - :amount WHERE u.id = :userId AND u.pointsBalance >= :amount")

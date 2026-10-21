@@ -16,7 +16,11 @@ import java.time.LocalDateTime;
 public class PaymentOrder extends BaseEntity {
 
     public static final String PRODUCT_POINT_PACK = "POINT_PACK";
+    /** 管理员系统赠送（自定义积分数，不关联套餐） */
+    public static final String PRODUCT_SYSTEM_GIFT = "SYSTEM_GIFT";
     public static final String METHOD_XUNHU = "wechat_pay_xunhu";
+    /** 系统赠送入账，无需真实支付 */
+    public static final String METHOD_SYSTEM_GIFT = "system_gift";
     public static final String STATUS_PENDING = "PENDING";
     public static final String STATUS_SUCCESS = "SUCCESS";
     public static final String STATUS_CLOSED = "CLOSED";

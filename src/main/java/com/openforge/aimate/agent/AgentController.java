@@ -2,6 +2,7 @@ package com.openforge.aimate.agent;
 
 import com.openforge.aimate.agent.dto.AssistantVersionDto;
 import com.openforge.aimate.agent.dto.ChatMessageDto;
+import com.openforge.aimate.agent.dto.ContextUsageDto;
 import com.openforge.aimate.agent.dto.ContinueSessionRequest;
 import com.openforge.aimate.agent.dto.DeleteSessionRequest;
 import com.openforge.aimate.agent.dto.RetryRequest;
@@ -62,6 +63,7 @@ public class AgentController {
 
     private final AgentLoopService          agentLoopService;
     private final SessionMessageService     sessionMessageService;
+    private final ContextUsageService       contextUsageService;
     private final AgentSessionRepository    sessionRepository;
     private final LongTermMemoryService     longTermMemoryService;
     private final ExecutorService           agentVirtualThreadExecutor;
@@ -70,10 +72,12 @@ public class AgentController {
     private final UserApiKeyRepository       userApiKeyRepository;
     private final ChatCosStorageService      chatCosStorageService;
     private final PointsService              pointsService;
+    private final UserAgentService           userAgentService;
 
     public AgentController(
             AgentLoopService agentLoopService,
             SessionMessageService sessionMessageService,
+            ContextUsageService contextUsageService,
             AgentSessionRepository sessionRepository,
             LongTermMemoryService longTermMemoryService,
             ExecutorService agentVirtualThreadExecutor,
@@ -81,14 +85,17 @@ public class AgentController {
             SystemModelRepository systemModelRepository,
             UserApiKeyRepository userApiKeyRepository,
             ChatCosStorageService chatCosStorageService,
-            PointsService pointsService
+            PointsService pointsService,
+            UserAgentService userAgentService
     ) {
         this.agentLoopService = agentLoopService;
         this.sessionMessageService = sessionMessageService;
+        this.contextUsageService = contextUsageService;
         this.sessionRepository = sessionRepository;
         this.longTermMemoryService = longTermMemoryService;
         this.agentVirtualThreadExecutor = agentVirtualThreadExecutor;
         this.userDefaultModelRepository = userDefaultModelRepository;
+        this.userAgentService = userAgentService;
         this.systemModelRepository = systemModelRepository;
         this.userApiKeyRepository = userApiKeyRepository;
         this.chatCosStorageService = chatCosStorageService;
@@ -121,6 +128,33 @@ public class AgentController {
         // Extract userId from JWT principal (set by JwtAuthFilter)
         Long userId = getCurrentUserId();
         pointsService.assertCanChat(userId);
+
+        Long boundAgentId = null;
+        if (userId != null) {
+            try {
+                var ua = userAgentService.requireSecretaryOrDefault(userId, request.userAgentId());
+                boundAgentId = ua.getId();
+                // 若 Agent 绑定了默认系统模型且请求未显式选模型，则写入默认模型
+                if (ua.getDefaultSystemModelId() != null
+                        && (request.modelSource() == null || request.modelSource().isBlank())
+                        && request.systemModelId() == null) {
+                    UserDefaultModel udm = userDefaultModelRepository.findByUserId(userId)
+                            .orElseGet(() -> {
+                                UserDefaultModel x = new UserDefaultModel();
+                                x.setUserId(userId);
+                                return x;
+                            });
+                    systemModelRepository.findById(ua.getDefaultSystemModelId()).ifPresent(model -> {
+                        udm.setSource("SYSTEM");
+                        udm.setSystemModel(model);
+                        udm.setUserApiKey(null);
+                        userDefaultModelRepository.save(udm);
+                    });
+                }
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+            }
+        }
 
         // 如果首页在启动会话前已经选择了模型，这里先更新 user_default_models，确保新会话第一轮就用这次选择的模型。
         if (userId != null && request.modelSource() != null && !request.modelSource().isBlank()) {
@@ -163,6 +197,7 @@ public class AgentController {
 
         AgentSession session = AgentSession.builder()
                 .userId(userId)
+                .userAgentId(boundAgentId)
                 .sessionId(sessionId)
                 .taskDescription(task)
                 .status(AgentSession.SessionStatus.IDLE)
@@ -237,6 +272,18 @@ public class AgentController {
                 ? sessionMessageService.loadDtosBefore(session, effectiveLimit, beforeSeq)
                 : sessionMessageService.loadDtos(session, effectiveLimit);
         return ResponseEntity.ok(list);
+    }
+
+    /**
+     * 当前会话上下文占用估算（消息 + 工具定义粗估），用于输入框旁圆环。
+     * systemModelId 可选：用于解析该模型的 contextWindowTokens；不传则 128k 默认。
+     */
+    @GetMapping("/{sessionId}/context-usage")
+    public ResponseEntity<ContextUsageDto> getContextUsage(
+            @PathVariable String sessionId,
+            @RequestParam(required = false) Long systemModelId) {
+        AgentSession session = findOrThrow(sessionId);
+        return ResponseEntity.ok(contextUsageService.estimate(session, systemModelId));
     }
 
     // ── Pause ────────────────────────────────────────────────────────────────

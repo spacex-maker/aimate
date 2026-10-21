@@ -29,7 +29,7 @@ import java.util.Set;
 public class UserToolController {
 
     private static final Set<String> RESERVED_TOOL_NAMES = Set.of(
-            "recall_memory", "store_memory", "tavily_search", "create_tool",
+            "recall_memory", "store_memory", "tavily_search", "http_request", "create_tool",
             "install_container_package", "run_container_cmd", "write_container_file"
     );
 

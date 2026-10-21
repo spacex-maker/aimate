@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Bot, Brain, Cog, Cpu, KeyRound, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Wrench, Clock } from 'lucide-react'
+import { Bot, Brain, Briefcase, Cog, Cpu, KeyRound, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Plus, SquarePen, Users, Wrench, Clock } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../hooks/useAuth'
@@ -13,6 +13,8 @@ import type { SessionResponse } from '../../types/agent'
 
 const baseLinks = [
   { to: '/app', label: '控制台', icon: LayoutDashboard },
+  { to: '/agents/hire', label: 'Agent 招聘', icon: Briefcase },
+  { to: '/agents/mine', label: '我的 Agent', icon: Users },
   { to: '/memory', label: '长期记忆', icon: Brain },
   { to: '/api-keys', label: 'API 密钥', icon: KeyRound },
   { to: '/embedding-models', label: '向量模型', icon: Cpu },
@@ -91,6 +93,20 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
 
       {/* Nav links + 最近会话 */}
       <div className="flex-1 py-3 px-2 space-y-2 overflow-y-auto">
+        <button
+          type="button"
+          onClick={() => navigate('/app')}
+          title="新建会话"
+          className={clsx(
+            'flex items-center w-full rounded-lg text-sm font-medium transition-colors',
+            'bg-blue-600/15 text-blue-300 border border-blue-500/25 hover:bg-blue-600/25 hover:text-blue-200',
+            collapsed ? 'justify-center px-2 py-2.5' : 'gap-3 px-3 py-2.5',
+          )}
+        >
+          <SquarePen className="w-4 h-4 flex-shrink-0" />
+          {!collapsed && <span>新建会话</span>}
+        </button>
+
         <div className="space-y-1">
           {baseLinks.map(({ to, label, icon: Icon }) => (
             <NavLink
@@ -107,19 +123,30 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
         </div>
 
         {/* 会话区：显示在「我的工具」下方，仅展开侧栏时展示 */}
-        {!collapsed && (recentLoading || recentSessions.length > 0) && (
+        {!collapsed && (
           <div className="mt-4 space-y-1">
             <div className="px-1 flex items-center justify-between text-[11px] text-white/35 uppercase tracking-wide">
               <span>会话</span>
-              {recentSessions.length > 0 && (
-                <span className="text-white/25">{recentSessions.length}</span>
-              )}
+              <button
+                type="button"
+                onClick={() => navigate('/app')}
+                title="新建会话"
+                className="p-0.5 rounded text-white/35 hover:text-blue-300 hover:bg-white/5 transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
             </div>
             <div className="space-y-1">
               {recentLoading && recentSessions.length === 0 ? (
                 <div className="px-2 py-2 text-[11px] text-white/30">加载中…</div>
               ) : recentSessions.length === 0 ? (
-                <div className="px-2 py-2 text-[11px] text-white/30">暂无会话</div>
+                <button
+                  type="button"
+                  onClick={() => navigate('/app')}
+                  className="w-full px-2 py-2 text-[11px] text-white/40 hover:text-blue-300 text-left transition-colors"
+                >
+                  暂无会话，点击新建
+                </button>
               ) : (
                 recentSessions.map((s) => (
                   <button

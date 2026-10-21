@@ -3,6 +3,8 @@ package com.openforge.aimate.memory;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openforge.aimate.domain.User;
+import com.openforge.aimate.domain.UserAgent;
+import com.openforge.aimate.repository.UserAgentRepository;
 import com.openforge.aimate.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,7 +26,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Chat → Soul 记忆桥：ensure PLATFORM 魂，再 /recall 与 /memories。
+ * Chat → Soul 记忆桥：按 UserAgent 使用独立 USER 魂 token；兼容旧 PLATFORM ensure。
  */
 @Slf4j
 @Service
@@ -33,9 +35,12 @@ public class SoulMemoryBridge {
 
     private final SoulMemoryProperties props;
     private final UserRepository userRepository;
+    private final UserAgentRepository userAgentRepository;
     private final ObjectMapper objectMapper;
 
-    /** userId → accessToken（进程内缓存；重启后会 issueToken 再取） */
+    /** userAgentId → accessToken */
+    private final ConcurrentHashMap<Long, String> tokenByAgent = new ConcurrentHashMap<>();
+    /** 兼容旧路径：userId → PLATFORM token */
     private final ConcurrentHashMap<Long, String> tokenByUser = new ConcurrentHashMap<>();
 
     private RestTemplate http() {
@@ -50,10 +55,14 @@ public class SoulMemoryBridge {
     }
 
     public List<MemoryRecord> recall(String query, int topK, Long userId) {
+        return recall(query, topK, userId, null);
+    }
+
+    public List<MemoryRecord> recall(String query, int topK, Long userId, Long userAgentId) {
         if (!isEnabled() || userId == null) {
             return List.of();
         }
-        String token = ensureToken(userId);
+        String token = resolveToken(userId, userAgentId);
         if (!StringUtils.hasText(token)) {
             return List.of();
         }
@@ -84,16 +93,20 @@ public class SoulMemoryBridge {
             }
             return out;
         } catch (Exception e) {
-            log.warn("[SoulMemory] recall failed user={}: {}", userId, e.toString());
+            log.warn("[SoulMemory] recall failed user={} agent={}: {}", userId, userAgentId, e.toString());
             return List.of();
         }
     }
 
     public void store(String content, String kind, float importance, Long userId) {
+        store(content, kind, importance, userId, null);
+    }
+
+    public void store(String content, String kind, float importance, Long userId, Long userAgentId) {
         if (!isEnabled() || userId == null || !StringUtils.hasText(content)) {
             return;
         }
-        String token = ensureToken(userId);
+        String token = resolveToken(userId, userAgentId);
         if (!StringUtils.hasText(token)) {
             return;
         }
@@ -109,11 +122,25 @@ public class SoulMemoryBridge {
             String url = trimSlash(props.getApiBase()) + "/memories";
             http().exchange(url, HttpMethod.POST, authEntity(token, body), String.class);
         } catch (Exception e) {
-            log.warn("[SoulMemory] store failed user={}: {}", userId, e.toString());
+            log.warn("[SoulMemory] store failed user={} agent={}: {}", userId, userAgentId, e.toString());
         }
     }
 
-    public String ensureToken(Long userId) {
+    private String resolveToken(Long userId, Long userAgentId) {
+        if (userAgentId != null) {
+            String cached = tokenByAgent.get(userAgentId);
+            if (StringUtils.hasText(cached)) return cached;
+            UserAgent ua = userAgentRepository.findById(userAgentId).orElse(null);
+            if (ua != null && StringUtils.hasText(ua.getSoulAccessToken())) {
+                tokenByAgent.put(userAgentId, ua.getSoulAccessToken());
+                return ua.getSoulAccessToken();
+            }
+        }
+        return ensurePlatformToken(userId);
+    }
+
+    /** 旧 PLATFORM 路径；新 Agent 应带 soulAccessToken。 */
+    public String ensurePlatformToken(Long userId) {
         if (userId == null) return null;
         String cached = tokenByUser.get(userId);
         if (StringUtils.hasText(cached)) return cached;
@@ -156,11 +183,20 @@ public class SoulMemoryBridge {
         return null;
     }
 
+    /** @deprecated 使用 ensurePlatformToken 或 UserAgent.soulAccessToken */
+    @Deprecated
+    public String ensureToken(Long userId) {
+        return ensurePlatformToken(userId);
+    }
+
+    public void cacheAgentToken(Long userAgentId, String token) {
+        if (userAgentId != null && StringUtils.hasText(token)) {
+            tokenByAgent.put(userAgentId, token);
+        }
+    }
+
     private HttpEntity<?> authEntity(String token, Object body) {
         HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(token.startsWith("soul_") || token.startsWith("amm_")
-                ? token
-                : token);
         headers.set("Authorization", "Bearer " + token);
         if (body != null) {
             headers.setContentType(MediaType.APPLICATION_JSON);

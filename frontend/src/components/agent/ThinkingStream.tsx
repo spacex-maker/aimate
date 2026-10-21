@@ -303,12 +303,13 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
                       </button>
                       {/* 展开后：优先使用标准化 thinkingBlocks 渲染；无 blocks 时回退到旧逻辑 */}
                       {expandedThinkingIndex === i && (
-                        <div className="mt-2 w-full min-w-0 rounded-xl border border-white/10 bg-white/[0.06] overflow-hidden">
-                          <div className="px-4 py-3 text-sm text-white/70 leading-relaxed max-h-[28rem] overflow-auto space-y-3">
-                            {msg.thinkingBlocks && msg.thinkingBlocks.length > 0 ? (
-                              <BlocksArea blocks={msg.thinkingBlocks} isRunning={false} />
-                            ) : (
-                              <>
+                        <div className="mt-2 w-full min-w-0">
+                          {msg.thinkingBlocks && msg.thinkingBlocks.length > 0 ? (
+                            /* BlocksArea 自带一层外框，勿再包一层 border */
+                            <BlocksArea blocks={msg.thinkingBlocks} isRunning={false} />
+                          ) : (
+                            <div className="rounded-xl border border-white/10 bg-white/[0.06] overflow-hidden">
+                              <div className="px-4 py-3 text-sm text-white/70 leading-relaxed max-h-[28rem] overflow-auto space-y-3">
                                 {msg.thinkingContent && (
                                   <div className="break-words space-y-2">
                                     <p className="text-[11px] text-white/40 uppercase tracking-wider mb-1.5">
@@ -335,7 +336,6 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
                                               </div>
                                             )
                                           }
-                                          // 无匹配工具时退化为普通文本
                                           return (
                                             <MarkdownContent
                                               key={`line-${idxLine}`}
@@ -372,9 +372,9 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
                                       ))}
                                     </div>
                                   )}
-                              </>
-                            )}
-                          </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

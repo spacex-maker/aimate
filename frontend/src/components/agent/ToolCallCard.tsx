@@ -30,10 +30,10 @@ export function ToolCallCard({ call, result, streamingOutput, durationMs }: Prop
   const hasLiveOutput = isPending && (streamingOutput != null && streamingOutput.length > 0)
 
   return (
-    <div className="rounded-xl bg-white/[0.04] border border-white/[0.08] overflow-hidden animate-fade-in">
+    <div className="rounded-lg bg-black/25 overflow-hidden animate-fade-in">
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.04] transition-colors text-left"
+        className="w-full flex items-center gap-3 px-3.5 py-2.5 hover:bg-white/[0.04] transition-colors text-left"
       >
         <Wrench className="w-3.5 h-3.5 text-white/40 flex-shrink-0" />
         <span className="text-sm text-white/70 truncate flex-1 min-w-0">

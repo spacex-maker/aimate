@@ -33,6 +33,7 @@ public class AuthService {
     private final OidcProperties oidcProperties;
     private final AccountOidcService accountOidcService;
     private final PointsService pointsService;
+    private final com.openforge.aimate.agent.SoulBindService soulBindService;
 
     @Transactional
     public AuthResponse register(RegisterRequest req) {
@@ -57,6 +58,7 @@ public class AuthService {
 
         User saved = userRepository.save(user);
         pointsService.grantRegisterGiftIfConfigured(saved.getId());
+        soulBindService.ensureSoulUser(saved);
         log.info("[Auth] New user registered: id={}, username={}", saved.getId(), saved.getUsername());
 
         String token = jwtUtil.generate(saved.getId(), saved.getUsername(), saved.getRole().name());
@@ -124,6 +126,7 @@ public class AuthService {
         }
         user.setLastLoginTime(LocalDateTime.now());
         user = userRepository.save(user);
+        soulBindService.ensureSoulUser(user);
 
         String token = jwtUtil.generate(user.getId(), user.getUsername(), user.getRole().name());
         return new AuthResponse(user.getId(), user.getUsername(), user.getDisplayName(), user.getRole().name(), token);
@@ -143,6 +146,7 @@ public class AuthService {
         user.setRole(User.Role.USER);
         User saved = userRepository.save(user);
         pointsService.grantRegisterGiftIfConfigured(saved.getId());
+        soulBindService.ensureSoulUser(saved);
         return saved;
     }
 

@@ -34,4 +34,7 @@ public interface AgentSessionRepository extends JpaRepository<AgentSession, Long
 
     /** 所有属于某个用户的会话（用于长期记忆迁移）。 */
     List<AgentSession> findByUserId(Long userId);
+
+    List<AgentSession> findByUserIdAndUserAgentIdAndHiddenFalseOrderByUpdateTimeDesc(
+            Long userId, Long userAgentId, Pageable pageable);
 }

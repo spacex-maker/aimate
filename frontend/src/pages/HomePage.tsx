@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { KeyRound, AlertTriangle } from 'lucide-react'
 import toast from 'react-hot-toast'
+import clsx from 'clsx'
 import { agentApi } from '../api/agent'
 import { apikeyApi } from '../api/apikey'
+import { multiAgentApi } from '../api/multiAgent'
 import { useAuth } from '../hooks/useAuth'
 import type { SessionResponse } from '../types/agent'
 import { useModelSelection } from '../state/modelSelection.ts'
@@ -23,6 +25,7 @@ export function HomePage() {
   const { user } = useAuth()
   const [task, setTask] = useState('')
   const [selectedSession, setSelectedSession] = useState<SessionResponse | null>(null)
+  const [userAgentId, setUserAgentId] = useState<number | null>(null)
   const { selection, setSelection } = useModelSelection()
 
   const { data: apiKeys = [] } = useQuery({
@@ -32,12 +35,30 @@ export function HomePage() {
   })
   const hasDefaultLlmKey = apiKeys.some(k => k.keyType === 'LLM' && k.isDefault)
 
+  const { data: myAgents = [] } = useQuery({
+    queryKey: ['my-agents', user?.userId],
+    queryFn: () => multiAgentApi.listMine(),
+    enabled: !!user?.userId,
+  })
+  const { data: profile } = useQuery({
+    queryKey: ['user-profile', user?.userId],
+    queryFn: () => multiAgentApi.getProfile(),
+    enabled: !!user?.userId,
+  })
+
+  useEffect(() => {
+    if (userAgentId != null) return
+    const sec = myAgents.find((a) => a.kind === 'SECRETARY' && a.status === 'ACTIVE')
+    if (sec) setUserAgentId(sec.id)
+  }, [myAgents, userAgentId])
+
   const startMutation = useMutation({
     mutationFn: (payload: {
       task: string
       modelSource?: 'SYSTEM' | 'USER_KEY'
       systemModelId?: number | null
       userApiKeyId?: number | null
+      userAgentId?: number | null
       images?: string[]
     }) => agentApi.startSession(payload),
     onSuccess: (session) => {
@@ -66,6 +87,45 @@ export function HomePage() {
           <h1 className="text-2xl font-bold text-white">新建 Agent 任务</h1>
           <p className="text-white/40 text-sm mt-1">描述你的目标，Agent 将自主规划并执行</p>
         </div>
+
+        {profile && !profile.completed && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-100/90">
+            请先在个人中心完善职业、年龄、性别等画像，以生成默认秘书 Agent。
+            <button
+              type="button"
+              className="ml-2 text-amber-300 underline"
+              onClick={() => navigate('/agents/mine')}
+            >
+              查看我的 Agent
+            </button>
+          </div>
+        )}
+
+        {myAgents.length > 0 && (
+          <div>
+            <p className="mb-2 text-xs text-white/30 font-medium uppercase tracking-wider">对话 Agent</p>
+            <div className="flex flex-wrap gap-2">
+              {myAgents
+                .filter((a) => a.status === 'ACTIVE')
+                .map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => setUserAgentId(a.id)}
+                    className={clsx(
+                      'rounded-lg border px-3 py-1.5 text-xs transition-colors',
+                      userAgentId === a.id
+                        ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-100'
+                        : 'border-white/10 text-white/50 hover:border-white/20'
+                    )}
+                  >
+                    {a.name}
+                    {a.kind === 'SECRETARY' ? ' · 秘书' : ''}
+                  </button>
+                ))}
+            </div>
+          </div>
+        )}
 
         {/* No LLM key warning */}
         {!hasDefaultLlmKey && (
@@ -125,6 +185,7 @@ export function HomePage() {
             modelSource: opts?.modelSource,
             systemModelId: opts?.systemModelId ?? null,
             userApiKeyId: opts?.userApiKeyId ?? null,
+            userAgentId,
             images: opts?.images,
           })
           setTask('')

@@ -65,6 +65,22 @@ public class SystemConfigService {
         return enabled;
     }
 
+    @Transactional
+    public void put(String configKey, String configValue) {
+        SystemConfig row = systemConfigRepository.findByConfigKey(configKey).orElseGet(SystemConfig::new);
+        row.setConfigKey(configKey);
+        row.setConfigValue(configValue);
+        if (row.getDescription() == null || row.getDescription().isBlank()) {
+            row.setDescription(configKey);
+        }
+        systemConfigRepository.save(row);
+    }
+
+    @Transactional
+    public void delete(String configKey) {
+        systemConfigRepository.findByConfigKey(configKey).ifPresent(systemConfigRepository::delete);
+    }
+
     private static boolean truthy(String raw) {
         String v = raw.trim().toLowerCase(Locale.ROOT);
         return !v.equals("false") && !v.equals("0") && !v.equals("off") && !v.equals("no");

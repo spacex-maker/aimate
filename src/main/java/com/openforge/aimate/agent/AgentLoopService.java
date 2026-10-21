@@ -96,22 +96,20 @@ public class AgentLoopService {
             - recall_memory: search long-term memory by query (e.g. user name, preferences, past facts). Use when the user's question might be answered from something you stored before.
             - store_memory: save a fact for future sessions. Use at most once per distinct, important fact; then reply in natural language.
             - tavily_search: search the web for real-time or factual information. Use when the user asks about current events, news, or facts you need to look up.
+            - http_request: call any public http/https API from the server (GET/POST/PUT/PATCH/DELETE). Prefer this for REST/Soul/OAuth/health checks. Do NOT use curl via run_container_cmd for HTTP—http_request works without Docker.
             - create_tool: register a new tool (script-based: PYTHON_SCRIPT, NODE_SCRIPT, SHELL_CMD). Use when the user asks you to create a tool, add a capability, or write a reusable script/function that the agent can call later. Provide tool_name, tool_description, input_schema (JSON string), tool_type, and optionally script_content and entry_point.
-            - install_container_package: install system packages (e.g. python3, nodejs) inside the user's isolated Linux container. Call this BEFORE running script tools that need an interpreter: the container starts as a minimal Linux and does not include python3/node by default. Use when a script tool fails with "command not found" (exit 127) or when you are about to run a Python/Node/shell script and have not installed the runtime yet. Pass "packages" as a space-separated list (e.g. "python3" or "python3 nodejs").
-            - run_container_cmd: run short shell command(s) only (e.g. apt-get, chmod +x, mkdir). Do NOT pass a long heredoc or multi-line script here—it will be truncated. To create a script file, use write_container_file with content piped via stdin.
-            - write_container_file: write content to a file in the user's container. path=container path (one line). content=file body (use \\n for newlines). append=true to append. Content is piped via stdin—no shell escaping. For very large scripts you can split into multiple calls with append=true,但一般情况下可以一次写完。
+            - install_container_package / run_container_cmd / write_container_file: ONLY available when Docker user isolation is enabled. If these tools are not in your tool list, Docker is off—use http_request for HTTP instead of curl.
             
-            Creating script files in the container (MANDATORY—do not suggest user to do it manually):
+            Creating script files in the container (only when container tools are available):
             - NEVER use run_container_cmd with cat/heredoc to write script content—it will be truncated and fail. NEVER suggest the user to "manually paste" or "run in terminal" to create the script; you MUST complete the task yourself.
             - To create any script file: use write_container_file only. For small/medium scripts, a single call with full content is fine. For extremely large scripts, you MAY split into multiple calls: first call with path+initial content, then same path+next content with append=true, until the whole script is written. Then run_container_cmd("chmod +x " + path). You must actually perform these calls until the file is complete—do not give up and ask the user to do it.
             
-            Script execution environment (IMPORTANT):
+            Script execution environment (IMPORTANT — only when Docker tools are listed):
             - 每个用户都有一个独立的 Linux 容器，视为该用户的“专属虚拟机环境”，不同用户的容器彼此完全隔离。
-              默认镜像为精简 Debian（例如 debian:bookworm-slim），系统资源大致为：CPU 2 核、内存 4GB，根文件系统只读，工作目录挂载在 /home 之类的可写路径。
-            - To run ANY command inside the user's container, you MUST use run_container_cmd only. There is no other way to execute commands in the container—do not assume other tools or APIs can run shell commands there; only run_container_cmd does.
-            - When writing scripts that run long-running commands (npm install, apt-get, pip install, etc.): do NOT capture the subprocess stdout/stderr (e.g. in Python do not use capture_output=True or stdout=subprocess.PIPE for the long-running part). Let the subprocess write directly to the script's stdout so the user sees real-time output; otherwise the output is buffered and only appears when the command finishes.
-            - Non-system script tools (those created with create_tool or custom scripts) run inside the same dedicated container of that user—not on the host. That environment is a minimal Linux; it does not pre-install python3, nodejs, etc. You MUST use install_container_package to install required runtimes (e.g. python3 for PYTHON_SCRIPT, nodejs for NODE_SCRIPT) before calling those script tools.
-            - When a script tool returns "[ToolError] Script exited with code 127" (or the tool result contains "退出码 127" or "必须处理"), you MUST NOT report failure to the user yet. You MUST first call install_container_package with the appropriate package (python3 for Python scripts, nodejs for Node scripts, bash is usually present), wait for success, then call the same script tool again. Only if it still fails after installing and retrying may you explain the error to the user. Never skip the install-and-retry step when you see exit 127.
+            - To run ANY command inside the user's container, you MUST use run_container_cmd only.
+            - When writing scripts that run long-running commands (npm install, apt-get, pip install, etc.): do NOT capture the subprocess stdout/stderr; let output stream to stdout.
+            - Non-system script tools run inside the user container. Install runtimes with install_container_package before calling them.
+            - When a script tool returns exit 127 / command not found, install the package then retry before reporting failure.
             
             Memory writing rules (VERY IMPORTANT):
             - When calling store_memory, ALWAYS rewrite the fact into a clear, third-person sentence with an explicit subject.
@@ -135,6 +133,7 @@ public class AgentLoopService {
     private final SessionMessageService  sessionMessageService;
     private final SystemConfigService   systemConfigService;
     private final TavilySearchService   tavilySearchService;
+    private final HttpRequestToolService httpRequestToolService;
     private final ScriptToolExecutor    scriptToolExecutor;
     private final UserContainerManager  userContainerManager;
     private final ScriptDockerProperties scriptDockerProperties;
@@ -146,6 +145,7 @@ public class AgentLoopService {
     private final UserDefaultModelRepository userDefaultModelRepository;
     private final UserApiKeyRepository       userApiKeyRepository;
     private final ChatCosStorageService      chatCosStorageService;
+    private final AgentPromptService         agentPromptService;
 
     // Tracks which exact contents have already been stored via store_memory
     // in this JVM, per sessionId, to avoid spamming duplicate memories.
@@ -598,7 +598,7 @@ public class AgentLoopService {
         session = sessionRepository.findBySessionId(sessionId).orElseThrow(() -> new IllegalStateException("Session vanished: " + sessionId));
         List<Message> existing = sessionMessageService.load(session);
         if (existing.isEmpty()) {
-            String systemPrompt = buildSystemPrompt();
+            String systemPrompt = buildSystemPrompt(session);
             sessionMessageService.replaceAll(session, List.of(
                     Message.system(systemPrompt),
                     Message.user(session.getTaskDescription(), openingImages.remove(sessionId))
@@ -886,13 +886,23 @@ public class AgentLoopService {
                 .orElse(false);
     }
 
-    private String buildSystemPrompt() {
-        if (systemConfigService.isRagMemoryEnabled()) return BASE_SYSTEM_PROMPT;
-        return BASE_SYSTEM_PROMPT
-                .replaceAll("(?m)^[ \\t]*- recall_memory:.*\\R", "")
-                .replaceAll("(?m)^[ \\t]*- store_memory:.*\\R", "")
-                .replaceAll("(?s)\\n[ \\t]*Memory writing rules \\(VERY IMPORTANT\\):.*?\\n[ \\t]*\\n[ \\t]*When you can answer",
-                        "\n            When you can answer");
+    private String buildSystemPrompt(AgentSession session) {
+        String tools = BASE_SYSTEM_PROMPT;
+        if (!systemConfigService.isRagMemoryEnabled()) {
+            tools = BASE_SYSTEM_PROMPT
+                    .replaceAll("(?m)^[ \\t]*- recall_memory:.*\\R", "")
+                    .replaceAll("(?m)^[ \\t]*- store_memory:.*\\R", "")
+                    .replaceAll("(?s)\\n[ \\t]*Memory writing rules \\(VERY IMPORTANT\\):.*?\\n[ \\t]*\\n[ \\t]*When you can answer",
+                            "\n            When you can answer");
+        }
+        String persona = "";
+        if (session != null && session.getUserAgentId() != null) {
+            persona = agentPromptService.activePersonaPrompt(session.getUserAgentId());
+        }
+        if (persona != null && !persona.isBlank()) {
+            return persona.trim() + "\n\n---\n\n" + tools;
+        }
+        return tools;
     }
 
     /**
@@ -977,6 +987,10 @@ public class AgentLoopService {
         if ("tavily_search".equals(toolName)) {
             return executeTavilySearchTool(arguments);
         }
+        // Built-in: http_request — 服务端直连 HTTP，不依赖 Docker
+        if ("http_request".equals(toolName)) {
+            return httpRequestToolService.execute(arguments);
+        }
         // Built-in: create_tool — 编写工具的工具，将新工具注册到 agent_tools 表
         if ("create_tool".equals(toolName)) {
             return executeCreateTool(arguments, userId);
@@ -1017,8 +1031,10 @@ public class AgentLoopService {
                 return "[ToolError] recall_memory requires a non-empty 'query' (e.g. user's name, user preferences, past topic).";
             }
             topK = Math.min(20, Math.max(1, topK));
+            Long userAgentId = sessionRepository.findBySessionId(sessionId)
+                    .map(AgentSession::getUserAgentId).orElse(null);
             List<MemoryRecord> memories = soulMemoryBridge.isEnabled()
-                    ? soulMemoryBridge.recall(query, topK, userId)
+                    ? soulMemoryBridge.recall(query, topK, userId, userAgentId)
                     : memoryService.recall(query, topK, userId);
             // 旧 VectorDB 回退；Soul 模式下不再查腾讯云
             if (memories.isEmpty() && !soulMemoryBridge.isEnabled()) {
@@ -1082,12 +1098,16 @@ public class AgentLoopService {
             catch (Exception e) { memType = MemoryType.SEMANTIC; }
 
             Long currentUserId = null;
+            Long currentAgentId = null;
             try {
-                currentUserId = sessionRepository.findBySessionId(sessionId)
-                        .map(com.openforge.aimate.domain.AgentSession::getUserId).orElse(null);
+                var sess = sessionRepository.findBySessionId(sessionId).orElse(null);
+                if (sess != null) {
+                    currentUserId = sess.getUserId();
+                    currentAgentId = sess.getUserAgentId();
+                }
             } catch (Exception ignored) {}
             if (soulMemoryBridge.isEnabled()) {
-                soulMemoryBridge.store(content, memType.name(), importance, currentUserId);
+                soulMemoryBridge.store(content, memType.name(), importance, currentUserId, currentAgentId);
             } else {
                 memoryService.remember(sessionId, content, memType, importance, currentUserId);
             }
@@ -1135,7 +1155,7 @@ public class AgentLoopService {
 
             if (toolName.isEmpty()) return "[ToolError] create_tool 需要非空的 tool_name（仅字母、数字、下划线，如 get_weather）。";
             if (!toolName.matches("[a-zA-Z][a-zA-Z0-9_]*")) return "[ToolError] tool_name 须以字母开头，仅含字母、数字、下划线。";
-            if (Set.of("recall_memory", "store_memory", "tavily_search", "create_tool", "install_container_package", "run_container_cmd", "write_container_file").contains(toolName)) {
+            if (Set.of("recall_memory", "store_memory", "tavily_search", "http_request", "create_tool", "install_container_package", "run_container_cmd", "write_container_file").contains(toolName)) {
                 return "[ToolError] tool_name 不能与内置工具重名: " + toolName;
             }
             if (toolDescription.isEmpty()) return "[ToolError] create_tool 需要非空的 tool_description。";
@@ -1582,13 +1602,16 @@ public class AgentLoopService {
         return Optional.empty();
     }
 
-    private static final Set<String> SYSTEM_TOOL_NAMES_SET = Set.of("recall_memory", "store_memory", "tavily_search");
+    private static final Set<String> SYSTEM_TOOL_NAMES_SET = Set.of("recall_memory", "store_memory", "tavily_search", "http_request");
     /** 由代码直接构建、不从 DB 重复加载的工具名 */
-    private static final Set<String> CODE_BUILT_TOOL_NAMES = Set.of("recall_memory", "store_memory", "tavily_search", "create_tool", "install_container_package", "run_container_cmd", "write_container_file");
+    private static final Set<String> CODE_BUILT_TOOL_NAMES = Set.of(
+            "recall_memory", "store_memory", "tavily_search", "http_request", "create_tool",
+            "install_container_package", "run_container_cmd", "write_container_file");
 
     /**
-     * 按用户工具开关组装修复：长期记忆、联网搜索、AI 编写工具、脚本执行。
+     * 按用户工具开关组装修复：长期记忆、联网搜索、HTTP、AI 编写工具、脚本执行。
      * 将启用的系统工具置于列表前，再追加 DB 中非内置工具。
+     * Docker 未启用时不暴露容器类工具，避免 Agent 误用 curl。
      */
     private List<Tool> ensureSystemToolsFirst(List<Tool> tools, Long userId) {
         UserToolSettings settings = userToolSettingsService.getOrCreate(userId);
@@ -1597,6 +1620,7 @@ public class AgentLoopService {
         boolean webSearchEnabled = settings == null || Boolean.TRUE.equals(settings.getWebSearchEnabled());
         boolean createToolEnabled = settings == null || Boolean.TRUE.equals(settings.getCreateToolEnabled());
         boolean scriptExecEnabled = settings == null || Boolean.TRUE.equals(settings.getScriptExecEnabled());
+        boolean dockerOn = scriptDockerProperties.enabled();
 
         List<Tool> out = new ArrayList<>();
         if (memoryEnabled) {
@@ -1606,10 +1630,14 @@ public class AgentLoopService {
         if (webSearchEnabled) {
             out.add(buildTavilySearchTool());
         }
+        // HTTP 与联网开关共用：关联网搜索时也关掉外呼，避免绕过
+        if (webSearchEnabled) {
+            out.add(buildHttpRequestTool());
+        }
         for (Tool t : tools) {
             if (!CODE_BUILT_TOOL_NAMES.contains(t.function().name())) out.add(t);
         }
-        if (scriptExecEnabled) {
+        if (scriptExecEnabled && dockerOn) {
             out.add(buildInstallContainerPackageTool());
             out.add(buildRunContainerCmdTool());
             out.add(buildWriteContainerFileTool());
@@ -1618,6 +1646,50 @@ public class AgentLoopService {
             out.add(buildCreateToolTool());
         }
         return out;
+    }
+
+    private Tool buildHttpRequestTool() {
+        String schema = """
+                {
+                  "type":"object",
+                  "properties":{
+                    "method":{
+                      "type":"string",
+                      "enum":["GET","POST","PUT","PATCH","DELETE","HEAD"],
+                      "description":"HTTP method. Default GET."
+                    },
+                    "url":{
+                      "type":"string",
+                      "description":"Absolute http/https URL (public hosts only; localhost/private IPs blocked)."
+                    },
+                    "headers":{
+                      "type":"object",
+                      "description":"Optional request headers, e.g. {\\"Authorization\\":\\"Bearer …\\",\\"Content-Type\\":\\"application/json\\"}."
+                    },
+                    "body":{
+                      "type":"string",
+                      "description":"Optional request body (JSON string or plain text). Ignored for GET/HEAD."
+                    },
+                    "timeout_seconds":{
+                      "type":"integer",
+                      "minimum":5,
+                      "maximum":60,
+                      "description":"Request timeout in seconds (default 30)."
+                    }
+                  },
+                  "required":["url"]
+                }
+                """;
+        try {
+            JsonNode params = objectMapper.readTree(schema);
+            return Tool.ofFunction(new ToolFunction(
+                    "http_request",
+                    "Perform an HTTP request from the server (no Docker required). Use for REST APIs, health checks, Soul memory sync, webhooks. Prefer this over curl/run_container_cmd for any HTTP call. Private/localhost targets are blocked.",
+                    params
+            ));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to build http_request tool schema", e);
+        }
     }
 
     private Tool buildRecallMemoryTool() {

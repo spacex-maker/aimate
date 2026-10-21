@@ -2,16 +2,23 @@ import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react'
 import type React from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { X, Activity, Box, RefreshCw, Users, SlidersHorizontal, Receipt } from 'lucide-react'
+import { X, Activity, Box, Briefcase, RefreshCw, Users, SlidersHorizontal, Receipt } from 'lucide-react'
+import { AdminAgentsPanel } from './AdminAgentsPanel'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { adminApi } from '../../api/admin'
 import { ComponentStatusCard } from './ComponentStatusCard'
 import type { HostResourceStatusDto, SystemModelDto, ToolSettingsDto } from '../../types/agent'
-import type { AdminUserListItem, BillingUsageDetail, SystemConfigItem, UserContainerStatus } from '../../types/admin'
+import type {
+  AdminUserListItem,
+  BillingUsageDetail,
+  BillingUsageSummary,
+  SystemConfigItem,
+  UserContainerStatus,
+} from '../../types/admin'
 import { useHostStatusSocket } from '../../hooks/useHostStatusSocket'
 
-type AdminTab = 'containers' | 'models' | 'users' | 'billing' | 'systemConfig'
+type AdminTab = 'containers' | 'models' | 'users' | 'billing' | 'systemConfig' | 'agents'
 
 function formatBytes(v?: number | null): string {
   if (v == null || v <= 0) return '未知'
@@ -149,6 +156,19 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
             </button>
             <button
               type="button"
+              onClick={() => setTab('agents')}
+              className={clsx(
+                'w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors',
+                tab === 'agents'
+                  ? 'bg-white/10 text-white'
+                  : 'text-white/60 hover:text-white/90 hover:bg-white/5'
+              )}
+            >
+              <Briefcase className="w-4 h-4 flex-shrink-0" />
+              Agent 招聘
+            </button>
+            <button
+              type="button"
               onClick={() => setTab('systemConfig')}
               className={clsx(
                 'w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors',
@@ -168,6 +188,7 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
             {tab === 'models' && <ModelManageContent />}
             {tab === 'users' && <UserManageContent />}
             {tab === 'billing' && <BillingManageContent />}
+            {tab === 'agents' && <AdminAgentsPanel />}
             {tab === 'systemConfig' && <SystemConfigContent />}
           </div>
         </div>
@@ -751,10 +772,20 @@ export function UserManageContent() {
   const queryClient = useQueryClient()
   const [selectedUser, setSelectedUser] = useState<AdminUserListItem | null>(null)
   const [ledgerUser, setLedgerUser] = useState<AdminUserListItem | null>(null)
-  const { data: users = [], isLoading } = useQuery({
-    queryKey: ['admin-users'],
-    queryFn: () => adminApi.listUsers(),
+  const [page, setPage] = useState(0)
+  const [qInput, setQInput] = useState('')
+  const [q, setQ] = useState('')
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [rechargeOpen, setRechargeOpen] = useState(false)
+  const [rechargePoints, setRechargePoints] = useState('1000')
+  const [rechargeRemark, setRechargeRemark] = useState('系统赠送')
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['admin-users', page, q],
+    queryFn: () => adminApi.listUsers({ page, size: 20, q: q || undefined }),
   })
+  const users = data?.items ?? []
+  const totalPages = data?.totalPages ?? 0
 
   const updateMutation = useMutation({
     mutationFn: ({ id, body }: { id: number; body: { status?: string; role?: string } }) =>
@@ -762,6 +793,29 @@ export function UserManageContent() {
     onSuccess: () => {
       toast.success('已更新')
       queryClient.invalidateQueries({ queryKey: ['admin-users'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const batchMutation = useMutation({
+    mutationFn: (body: {
+      userIds: number[]
+      action: 'ENABLE' | 'DISABLE' | 'RECHARGE'
+      points?: number
+      remark?: string
+    }) => adminApi.batchUsers(body),
+    onSuccess: (res, vars) => {
+      const label =
+        vars.action === 'ENABLE' ? '启用' : vars.action === 'DISABLE' ? '禁用' : '充值'
+      if (res.failed > 0) {
+        toast.error(`${label}完成：成功 ${res.succeeded}，失败 ${res.failed}`)
+      } else {
+        toast.success(`${label}成功 ${res.succeeded} 人`)
+      }
+      setSelectedIds(new Set())
+      setRechargeOpen(false)
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] })
+      queryClient.invalidateQueries({ queryKey: ['admin-payment-orders'] })
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -777,85 +831,297 @@ export function UserManageContent() {
   const formatTime = (s: string | null) =>
     s ? new Date(s).toLocaleString('zh-CN', { dateStyle: 'short', timeStyle: 'short' }) : '—'
 
+  const pageIds = users.map((u) => u.id)
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id))
+
+  const toggleAllPage = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (allPageSelected) {
+        pageIds.forEach((id) => next.delete(id))
+      } else {
+        pageIds.forEach((id) => next.add(id))
+      }
+      return next
+    })
+  }
+
+  const toggleOne = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const selectedList = Array.from(selectedIds)
+  const runBatch = (action: 'ENABLE' | 'DISABLE') => {
+    if (selectedList.length === 0) {
+      toast.error('请先选择用户')
+      return
+    }
+    batchMutation.mutate({ userIds: selectedList, action })
+  }
+
+  const submitRecharge = () => {
+    const pts = Number(rechargePoints)
+    if (!Number.isFinite(pts) || pts <= 0 || !Number.isInteger(pts)) {
+      toast.error('请输入正整数积分')
+      return
+    }
+    if (selectedList.length === 0) {
+      toast.error('请先选择用户')
+      return
+    }
+    batchMutation.mutate({
+      userIds: selectedList,
+      action: 'RECHARGE',
+      points: pts,
+      remark: rechargeRemark.trim() || '系统赠送',
+    })
+  }
+
   return (
     <div className="h-full flex flex-col">
-      <div className="mb-4">
-        <h3 className="text-sm font-medium text-white">用户管理</h3>
-        <p className="text-xs text-white/40 mt-0.5">启用/禁用、角色、积分余额与流水</p>
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-medium text-white">用户管理</h3>
+          <p className="text-xs text-white/40 mt-0.5">多选批量启用/禁用/系统赠送充值 · 单条角色与流水</p>
+        </div>
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            setPage(0)
+            setQ(qInput.trim())
+            setSelectedIds(new Set())
+          }}
+        >
+          <input
+            type="search"
+            value={qInput}
+            onChange={(e) => setQInput(e.target.value)}
+            placeholder="搜索用户名 / 邮箱 / 昵称"
+            className="w-52 bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white placeholder:text-white/30"
+          />
+          <button type="submit" className="px-2.5 py-1.5 rounded border border-white/20 text-[11px] text-white/80 hover:bg-white/10">
+            搜索
+          </button>
+        </form>
       </div>
+
+      {selectedList.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+          <span className="text-[11px] text-white/50">已选 {selectedList.length}</span>
+          <button
+            type="button"
+            disabled={batchMutation.isPending}
+            onClick={() => runBatch('ENABLE')}
+            className="px-2.5 py-1 rounded border border-emerald-500/30 text-[11px] text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40"
+          >
+            批量启用
+          </button>
+          <button
+            type="button"
+            disabled={batchMutation.isPending}
+            onClick={() => runBatch('DISABLE')}
+            className="px-2.5 py-1 rounded border border-white/20 text-[11px] text-white/70 hover:bg-white/10 disabled:opacity-40"
+          >
+            批量禁用
+          </button>
+          <button
+            type="button"
+            disabled={batchMutation.isPending}
+            onClick={() => setRechargeOpen(true)}
+            className="px-2.5 py-1 rounded border border-cyan-500/30 text-[11px] text-cyan-300 hover:bg-cyan-500/10 disabled:opacity-40"
+          >
+            批量充值
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedIds(new Set())}
+            className="px-2 py-1 text-[11px] text-white/40 hover:text-white/70"
+          >
+            清空选择
+          </button>
+        </div>
+      )}
+
       {isLoading ? (
         <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
       ) : users.length === 0 ? (
         <div className="text-center py-10 text-white/30 text-sm">暂无用户</div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-white/10">
-          <table className="w-full text-xs text-white/80">
-            <thead>
-              <tr className="border-b border-white/10 text-left bg-white/[0.03]">
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">用户名</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">邮箱</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">昵称</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">积分</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">状态</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">角色</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">注册时间</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">最近登录</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-32 text-right">操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/10">
-              {users.map((u: AdminUserListItem) => (
-                <tr key={u.id} className="hover:bg-white/[0.03]">
-                  <td className="py-2 px-3 font-mono text-white/90">{u.username}</td>
-                  <td className="py-2 px-3 text-white/60">{u.email ?? '—'}</td>
-                  <td className="py-2 px-3 text-white/70">{u.displayName ?? '—'}</td>
-                  <td className="py-2 px-3 font-mono text-white/80">{(u.pointsBalance ?? 0).toLocaleString()}</td>
-                  <td className="py-2 px-3">
-                    <span
-                      className={clsx(
-                        'px-1.5 py-0.5 rounded text-[11px] font-medium',
-                        u.status === 'ACTIVE'
-                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                          : 'bg-white/10 text-white/50 border border-white/10'
-                      )}
-                    >
-                      {u.status === 'ACTIVE' ? '正常' : '已禁用'}
-                    </span>
-                  </td>
-                  <td className="py-2 px-3">
-                    <span
-                      className={clsx(
-                        'px-1.5 py-0.5 rounded text-[11px] font-medium',
-                        u.role === 'ADMIN'
-                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                          : 'bg-white/10 text-white/60 border border-white/10'
-                      )}
-                    >
-                      {u.role === 'ADMIN' ? '管理员' : '用户'}
-                    </span>
-                  </td>
-                  <td className="py-2 px-3 text-white/50">{formatTime(u.createTime)}</td>
-                  <td className="py-2 px-3 text-white/50">{formatTime(u.lastLoginTime)}</td>
-                  <td className="py-2 px-3 text-right space-x-1">
-                    <button
-                      type="button"
-                      onClick={() => setLedgerUser(u)}
-                      className="inline-flex items-center justify-center px-2 py-1.5 rounded border border-white/25 text-[11px] text-white/80 hover:bg-white/10"
-                    >
-                      流水
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedUser(u)}
-                      className="inline-flex items-center justify-center px-2.5 py-1.5 rounded border border-white/25 text-[11px] text-white/80 hover:bg-white/10 transition-colors"
-                    >
-                      操作
-                    </button>
-                  </td>
+        <>
+          <div className="overflow-x-auto rounded-lg border border-white/10 flex-1 min-h-0">
+            <table className="w-full text-xs text-white/80">
+              <thead>
+                <tr className="border-b border-white/10 text-left bg-white/[0.03]">
+                  <th className="pb-2 pt-2 px-3 w-8">
+                    <input
+                      type="checkbox"
+                      checked={allPageSelected}
+                      onChange={toggleAllPage}
+                      className="rounded border-white/30"
+                      aria-label="全选当前页"
+                    />
+                  </th>
+                  <th className="pb-2 pt-2 px-3 font-medium text-white/40">用户名</th>
+                  <th className="pb-2 pt-2 px-3 font-medium text-white/40">邮箱</th>
+                  <th className="pb-2 pt-2 px-3 font-medium text-white/40">昵称</th>
+                  <th className="pb-2 pt-2 px-3 font-medium text-white/40">积分</th>
+                  <th className="pb-2 pt-2 px-3 font-medium text-white/40">状态</th>
+                  <th className="pb-2 pt-2 px-3 font-medium text-white/40">角色</th>
+                  <th className="pb-2 pt-2 px-3 font-medium text-white/40">注册时间</th>
+                  <th className="pb-2 pt-2 px-3 font-medium text-white/40">最近登录</th>
+                  <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-32 text-right">操作</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-white/10">
+                {users.map((u: AdminUserListItem) => (
+                  <tr key={u.id} className="hover:bg-white/[0.03]">
+                    <td className="py-2 px-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(u.id)}
+                        onChange={() => toggleOne(u.id)}
+                        className="rounded border-white/30"
+                        aria-label={`选择 ${u.username}`}
+                      />
+                    </td>
+                    <td className="py-2 px-3 font-mono text-white/90">{u.username}</td>
+                    <td className="py-2 px-3 text-white/60">{u.email ?? '—'}</td>
+                    <td className="py-2 px-3 text-white/70">{u.displayName ?? '—'}</td>
+                    <td className="py-2 px-3 font-mono text-white/80">{(u.pointsBalance ?? 0).toLocaleString()}</td>
+                    <td className="py-2 px-3">
+                      <span
+                        className={clsx(
+                          'px-1.5 py-0.5 rounded text-[11px] font-medium',
+                          u.status === 'ACTIVE'
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-white/10 text-white/50 border border-white/10'
+                        )}
+                      >
+                        {u.status === 'ACTIVE' ? '正常' : '已禁用'}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3">
+                      <span
+                        className={clsx(
+                          'px-1.5 py-0.5 rounded text-[11px] font-medium',
+                          u.role === 'ADMIN'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                            : 'bg-white/10 text-white/60 border border-white/10'
+                        )}
+                      >
+                        {u.role === 'ADMIN' ? '管理员' : '用户'}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 text-white/50">{formatTime(u.createTime)}</td>
+                    <td className="py-2 px-3 text-white/50">{formatTime(u.lastLoginTime)}</td>
+                    <td className="py-2 px-3 text-right space-x-1">
+                      <button
+                        type="button"
+                        onClick={() => setLedgerUser(u)}
+                        className="inline-flex items-center justify-center px-2 py-1.5 rounded border border-white/25 text-[11px] text-white/80 hover:bg-white/10"
+                      >
+                        流水
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedUser(u)}
+                        className="inline-flex items-center justify-center px-2.5 py-1.5 rounded border border-white/25 text-[11px] text-white/80 hover:bg-white/10 transition-colors"
+                      >
+                        操作
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {(totalPages > 1 || (data?.total ?? 0) > 0) && (
+            <div className="mt-3 flex items-center justify-between text-[11px] text-white/40">
+              <span>共 {data?.total ?? 0} 人</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={page <= 0}
+                  onClick={() => { setPage((p) => Math.max(0, p - 1)); setSelectedIds(new Set()) }}
+                  className="text-white/50 disabled:opacity-30"
+                >
+                  上一页
+                </button>
+                <span>{page + 1}/{Math.max(1, totalPages)}</span>
+                <button
+                  type="button"
+                  disabled={page + 1 >= totalPages}
+                  onClick={() => { setPage((p) => p + 1); setSelectedIds(new Set()) }}
+                  className="text-white/50 disabled:opacity-30"
+                >
+                  下一页
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {rechargeOpen && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4" onClick={() => setRechargeOpen(false)}>
+          <div
+            className="w-full max-w-sm rounded-xl border border-white/15 bg-[#12141a] p-4 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm text-white font-medium">批量充值（系统赠送）</h3>
+              <button type="button" onClick={() => setRechargeOpen(false)} className="text-white/40 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-[11px] text-white/40">
+              将为已选 {selectedList.length} 人各创建一笔 ¥0「系统赠送」订单并入账积分
+            </p>
+            <label className="block space-y-1">
+              <span className="text-[11px] text-white/50">积分数量</span>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={rechargePoints}
+                onChange={(e) => setRechargePoints(e.target.value)}
+                className="w-full bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white"
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-[11px] text-white/50">备注</span>
+              <input
+                type="text"
+                value={rechargeRemark}
+                onChange={(e) => setRechargeRemark(e.target.value)}
+                placeholder="系统赠送"
+                className="w-full bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white"
+              />
+            </label>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setRechargeOpen(false)}
+                className="px-3 py-1.5 rounded border border-white/15 text-[11px] text-white/60"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={batchMutation.isPending}
+                onClick={submitRecharge}
+                className="px-3 py-1.5 rounded bg-cyan-600 text-[11px] text-white disabled:opacity-40"
+              >
+                {batchMutation.isPending ? '处理中…' : '确认充值'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -969,11 +1235,105 @@ function UserLedgerModal({ user, onClose }: { user: AdminUserListItem; onClose: 
   )
 }
 
+function BillingUsageDetailModal({
+  user,
+  fromIso,
+  rangeDays,
+  onClose,
+}: {
+  user: BillingUsageSummary
+  fromIso: string
+  rangeDays: number
+  onClose: () => void
+}) {
+  const { data: details = [], isLoading } = useQuery({
+    queryKey: ['admin-billing-detail', user.userId, rangeDays],
+    queryFn: () =>
+      adminApi.getBillingUsageDetail(user.userId, { from: fromIso, limit: 100 }),
+  })
+
+  const formatTime = (s: string | null) =>
+    s ? new Date(s).toLocaleString('zh-CN', { dateStyle: 'short', timeStyle: 'medium' }) : '—'
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-xl border border-white/15 bg-[#12141a] shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-white/10">
+          <div className="min-w-0">
+            <h3 className="text-sm text-white font-medium truncate">{user.username} 消费明细</h3>
+            <p className="text-[11px] text-white/40 mt-0.5">
+              近 {rangeDays} 天 · {user.callCount} 次调用 · {user.totalTokens.toLocaleString()} tokens · ¥
+              {user.estimatedCostUsd.toFixed(4)}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="text-white/40 hover:text-white flex-shrink-0" title="关闭">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="flex-1 min-h-0 overflow-auto">
+          {isLoading ? (
+            <div className="p-8 text-center text-xs text-white/40">加载明细…</div>
+          ) : details.length === 0 ? (
+            <div className="p-8 text-center text-xs text-white/30">暂无消费明细</div>
+          ) : (
+            <table className="w-full text-[11px] text-white/70">
+              <thead className="sticky top-0 bg-[#12141a]">
+                <tr className="text-left text-white/35 border-b border-white/10">
+                  <th className="px-3 py-2 font-medium">时间</th>
+                  <th className="px-3 py-2 font-medium">Model</th>
+                  <th className="px-3 py-2 font-medium">Prompt</th>
+                  <th className="px-3 py-2 font-medium">Completion</th>
+                  <th className="px-3 py-2 font-medium">Tokens</th>
+                  <th className="px-3 py-2 font-medium">成本</th>
+                  <th className="px-3 py-2 font-medium">积分</th>
+                  <th className="px-3 py-2 font-medium">状态</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {details.map((d: BillingUsageDetail) => (
+                  <tr key={d.id} className="hover:bg-white/[0.03]">
+                    <td className="px-3 py-2 whitespace-nowrap">{formatTime(d.createTime)}</td>
+                    <td className="px-3 py-2 font-mono text-white/80">{d.model}</td>
+                    <td className="px-3 py-2">{(d.promptTokens ?? 0).toLocaleString()}</td>
+                    <td className="px-3 py-2">{(d.completionTokens ?? 0).toLocaleString()}</td>
+                    <td className="px-3 py-2">{(d.totalTokens ?? 0).toLocaleString()}</td>
+                    <td className="px-3 py-2">
+                      {d.estimatedCostCny != null ? `¥${d.estimatedCostCny.toFixed(4)}` : '—'}
+                    </td>
+                    <td className="px-3 py-2">{d.pointsCharged ?? '—'}</td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={clsx(
+                          'px-1.5 py-0.5 rounded text-[10px] font-medium',
+                          d.success
+                            ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25'
+                            : 'bg-rose-500/15 text-rose-300 border border-rose-500/25',
+                        )}
+                      >
+                        {d.success ? 'OK' : 'ERR'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function BillingManageContent() {
-  const [subTab, setSubTab] = useState<'usage' | 'packages' | 'orders'>('usage')
+  const [subTab, setSubTab] = useState<'usage' | 'packages' | 'orders' | 'rules'>('usage')
   const [rangeDays, setRangeDays] = useState<7 | 30 | 90>(30)
-  const [selectedUserId, setSelectedUserId] = useState<number | null>(null)
+  const [detailUser, setDetailUser] = useState<BillingUsageSummary | null>(null)
   const queryClient = useQueryClient()
+  const [markupInput, setMarkupInput] = useState('4')
+  const [pointsPerYuanInput, setPointsPerYuanInput] = useState('1000')
 
   const fromIso = useMemo(() => {
     const d = new Date()
@@ -987,19 +1347,35 @@ export function BillingManageContent() {
     enabled: subTab === 'usage',
   })
 
-  const { data: details = [], isLoading: detailsLoading } = useQuery({
-    queryKey: ['admin-billing-detail', selectedUserId, rangeDays],
-    queryFn: () =>
-      selectedUserId == null
-        ? Promise.resolve([] as BillingUsageDetail[])
-        : adminApi.getBillingUsageDetail(selectedUserId, { from: fromIso, limit: 100 }),
-    enabled: subTab === 'usage' && selectedUserId != null,
-  })
-
   const { data: packages = [], isLoading: packagesLoading } = useQuery({
     queryKey: ['admin-point-packages'],
     queryFn: () => adminApi.listPointPackages(),
     enabled: subTab === 'packages',
+  })
+
+  const { data: billingSettings, isLoading: settingsLoading } = useQuery({
+    queryKey: ['admin-billing-settings'],
+    queryFn: () => adminApi.getBillingSettings(),
+    enabled: subTab === 'rules',
+  })
+
+  useEffect(() => {
+    if (!billingSettings) return
+    setMarkupInput(String(billingSettings.markupMultiplier))
+    setPointsPerYuanInput(String(billingSettings.pointsPerYuan))
+  }, [billingSettings])
+
+  const saveSettingsMutation = useMutation({
+    mutationFn: () =>
+      adminApi.updateBillingSettings({
+        markupMultiplier: Number(markupInput),
+        pointsPerYuan: Number(pointsPerYuanInput),
+      }),
+    onSuccess: (res) => {
+      toast.success('计费规则已保存')
+      queryClient.setQueryData(['admin-billing-settings'], res)
+    },
+    onError: (e: Error) => toast.error(e.message),
   })
 
   const [orderPage, setOrderPage] = useState(0)
@@ -1010,7 +1386,7 @@ export function BillingManageContent() {
     enabled: subTab === 'orders',
   })
 
-  const [packForm, setPackForm] = useState({ name: '', priceYuan: '6', points: '600', bonusPoints: '0', description: '' })
+  const [packForm, setPackForm] = useState({ name: '', priceYuan: '6', points: '6000', bonusPoints: '0', description: '' })
   const createPackMutation = useMutation({
     mutationFn: () =>
       adminApi.createPointPackage({
@@ -1024,7 +1400,7 @@ export function BillingManageContent() {
       }),
     onSuccess: () => {
       toast.success('套餐已创建')
-      setPackForm({ name: '', priceYuan: '6', points: '600', bonusPoints: '0', description: '' })
+      setPackForm({ name: '', priceYuan: '6', points: '6000', bonusPoints: '0', description: '' })
       queryClient.invalidateQueries({ queryKey: ['admin-point-packages'] })
     },
     onError: (e: Error) => toast.error(e.message),
@@ -1050,9 +1426,10 @@ export function BillingManageContent() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-3 flex items-center gap-2 flex-wrap">
         {([
           ['usage', '成本核算'],
+          ['rules', '计费规则'],
           ['packages', '充值套餐'],
           ['orders', '支付订单'],
         ] as const).map(([id, label]) => (
@@ -1125,21 +1502,27 @@ export function BillingManageContent() {
                     <th className="pb-2 pt-2 px-3 font-medium text-white/40">Completion</th>
                     <th className="pb-2 pt-2 px-3 font-medium text-white/40">Total</th>
                     <th className="pb-2 pt-2 px-3 font-medium text-white/40">成本 CNY</th>
+                    <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-24 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/10">
                   {data.summaries.map((row) => (
-                    <tr
-                      key={row.userId}
-                      className={clsx('hover:bg-white/[0.03] cursor-pointer', selectedUserId === row.userId && 'bg-white/[0.06]')}
-                      onClick={() => setSelectedUserId(row.userId)}
-                    >
+                    <tr key={row.userId} className="hover:bg-white/[0.03]">
                       <td className="py-2 px-3 font-mono">{row.username}</td>
                       <td className="py-2 px-3">{row.callCount}</td>
                       <td className="py-2 px-3">{row.promptTokens.toLocaleString()}</td>
                       <td className="py-2 px-3">{row.completionTokens.toLocaleString()}</td>
                       <td className="py-2 px-3">{row.totalTokens.toLocaleString()}</td>
                       <td className="py-2 px-3">¥{row.estimatedCostUsd.toFixed(4)}</td>
+                      <td className="py-2 px-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setDetailUser(row)}
+                          className="inline-flex items-center justify-center px-2.5 py-1.5 rounded border border-white/25 text-[11px] text-white/80 hover:bg-white/10 transition-colors"
+                        >
+                          明细
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1147,43 +1530,77 @@ export function BillingManageContent() {
             </div>
           )}
 
-          {selectedUserId != null && (
-            <div className="flex-1 min-h-0 overflow-auto rounded-lg border border-white/10">
-              <div className="px-3 py-2 border-b border-white/10 text-xs text-white/50 flex justify-between">
-                <span>用户 #{selectedUserId} 明细</span>
-                <button type="button" className="text-white/40 hover:text-white" onClick={() => setSelectedUserId(null)}>关闭</button>
-              </div>
-              {detailsLoading ? (
-                <div className="p-4 text-xs text-white/40">加载明细…</div>
-              ) : (
-                <table className="w-full text-[11px] text-white/70">
-                  <thead>
-                    <tr className="text-left text-white/35 border-b border-white/10">
-                      <th className="px-3 py-1.5">时间</th>
-                      <th className="px-3 py-1.5">Model</th>
-                      <th className="px-3 py-1.5">Tokens</th>
-                      <th className="px-3 py-1.5">成本</th>
-                      <th className="px-3 py-1.5">积分</th>
-                      <th className="px-3 py-1.5">状态</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {details.map((d) => (
-                      <tr key={d.id}>
-                        <td className="px-3 py-1.5 whitespace-nowrap">{d.createTime ?? '—'}</td>
-                        <td className="px-3 py-1.5">{d.model}</td>
-                        <td className="px-3 py-1.5">{d.totalTokens ?? 0}</td>
-                        <td className="px-3 py-1.5">{d.estimatedCostCny != null ? `¥${d.estimatedCostCny.toFixed(4)}` : '—'}</td>
-                        <td className="px-3 py-1.5">{d.pointsCharged ?? '—'}</td>
-                        <td className="px-3 py-1.5">{d.success ? 'OK' : 'ERR'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
+          {detailUser && (
+            <BillingUsageDetailModal
+              user={detailUser}
+              fromIso={fromIso}
+              rangeDays={rangeDays}
+              onClose={() => setDetailUser(null)}
+            />
           )}
         </>
+      )}
+
+      {subTab === 'rules' && (
+        <div className="space-y-4 max-w-xl">
+          <div>
+            <h3 className="text-sm font-medium text-white">计费规则</h3>
+            <p className="text-xs text-white/40 mt-0.5">
+              用户扣积分 = ceil(三方 API 成本 CNY × 加成倍率 × 每元积分)。例：成本 1 元、倍率 4、1 元=1000 积分 → 扣 4000 积分。
+            </p>
+          </div>
+          {settingsLoading ? (
+            <div className="text-xs text-white/40 py-6">加载中…</div>
+          ) : (
+            <div className="rounded-lg border border-white/10 p-4 space-y-4">
+              <label className="block space-y-1.5">
+                <span className="text-xs text-white/60">加成倍率</span>
+                <input
+                  type="number"
+                  min={0.01}
+                  step={0.1}
+                  value={markupInput}
+                  onChange={(e) => setMarkupInput(e.target.value)}
+                  className="w-full bg-black/20 border border-white/15 rounded px-3 py-2 text-sm text-white"
+                />
+                <span className="text-[11px] text-white/35">API 成本之上再乘的倍数，默认 4</span>
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-xs text-white/60">积分 / 元（人民币）</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={pointsPerYuanInput}
+                  onChange={(e) => setPointsPerYuanInput(e.target.value)}
+                  className="w-full bg-black/20 border border-white/15 rounded px-3 py-2 text-sm text-white"
+                />
+                <span className="text-[11px] text-white/35">1 元人民币 = N 积分，默认 1000</span>
+              </label>
+              <div className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/55 space-y-1">
+                <div>预览：若 API 成本 ¥1.00</div>
+                <div className="font-mono text-white/85">
+                  扣积分 = ceil(1 × {Number(markupInput) || 0} × {Number(pointsPerYuanInput) || 0}) ={' '}
+                  {Math.ceil(1 * (Number(markupInput) || 0) * (Number(pointsPerYuanInput) || 0)) || 0}
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={
+                  saveSettingsMutation.isPending
+                  || !Number.isFinite(Number(markupInput))
+                  || Number(markupInput) <= 0
+                  || !Number.isFinite(Number(pointsPerYuanInput))
+                  || Number(pointsPerYuanInput) < 1
+                }
+                onClick={() => saveSettingsMutation.mutate()}
+                className="px-3 py-1.5 rounded bg-blue-600 text-xs text-white disabled:opacity-40"
+              >
+                {saveSettingsMutation.isPending ? '保存中…' : '保存规则'}
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       {subTab === 'packages' && (
@@ -1259,6 +1676,7 @@ export function BillingManageContent() {
                     <tr className="border-b border-white/10 text-left bg-white/[0.03]">
                       <th className="px-3 py-2 text-white/40">订单号</th>
                       <th className="px-3 py-2 text-white/40">用户</th>
+                      <th className="px-3 py-2 text-white/40">方式</th>
                       <th className="px-3 py-2 text-white/40">金额</th>
                       <th className="px-3 py-2 text-white/40">状态</th>
                       <th className="px-3 py-2 text-white/40">时间</th>
@@ -1269,6 +1687,9 @@ export function BillingManageContent() {
                       <tr key={o.id}>
                         <td className="px-3 py-2 font-mono">{o.orderNo}</td>
                         <td className="px-3 py-2">{o.userId ?? '—'}</td>
+                        <td className="px-3 py-2 text-white/70">
+                          {o.paymentMethod === 'system_gift' ? '系统赠送' : o.paymentMethod === 'wechat_pay_xunhu' ? '微信' : (o.paymentMethod || '—')}
+                        </td>
                         <td className="px-3 py-2">¥{Number(o.amountYuan).toFixed(2)}</td>
                         <td className="px-3 py-2">{o.status}</td>
                         <td className="px-3 py-2 text-white/50">{o.createTime ? new Date(o.createTime).toLocaleString('zh-CN') : '—'}</td>

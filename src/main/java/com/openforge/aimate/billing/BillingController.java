@@ -86,6 +86,18 @@ public class BillingController {
         return pageOf(result.map(this::orderView), p, s);
     }
 
+    /** 轮询单笔订单状态（扫码支付后用） */
+    @GetMapping("/billing/orders/{orderNo}")
+    public Map<String, Object> getOrder(@PathVariable String orderNo) {
+        Long userId = requireUserId();
+        PaymentOrder order = orderRepository.findByOrderNo(orderNo)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "订单不存在"));
+        if (!order.getUserId().equals(userId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "订单不存在");
+        }
+        return orderView(order);
+    }
+
     @GetMapping("/billing/ledger")
     public Map<String, Object> myLedger(
             @RequestParam(required = false) String reason,
@@ -150,10 +162,26 @@ public class BillingController {
         m.put("delta", l.getDelta());
         m.put("balanceAfter", l.getBalanceAfter());
         m.put("reason", l.getReason());
-        m.put("remark", l.getRemark());
+        // 用户端不暴露成本/倍率等内部计费细节
+        m.put("remark", userFacingRemark(l.getRemark(), l.getReason()));
         m.put("sessionId", l.getSessionId());
         m.put("createTime", l.getCreateTime() != null ? l.getCreateTime().format(ISO) : null);
         return m;
+    }
+
+    /** 剥离历史流水中的「成本¥…×倍率→积分」等内部文案，只保留用户可读标题。 */
+    static String userFacingRemark(String remark, String reason) {
+        if (remark == null || remark.isBlank()) {
+            return PointLedger.CHAT_DEDUCT.equals(reason) ? "对话扣费" : null;
+        }
+        String r = remark.trim();
+        int costIdx = r.indexOf(" · 成本");
+        if (costIdx > 0) {
+            r = r.substring(0, costIdx).trim();
+        } else if (r.contains("成本¥") || r.contains("成本￥")) {
+            r = PointLedger.CHAT_DEDUCT.equals(reason) ? "对话扣费" : "积分变动";
+        }
+        return r.isEmpty() ? "对话扣费" : r;
     }
 
     private static Map<String, Object> pageOf(Page<?> page, int p, int s) {

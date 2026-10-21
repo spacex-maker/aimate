@@ -21,9 +21,11 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
@@ -75,6 +77,54 @@ public class ChatPaymentService {
         return orderRepository.save(order);
     }
 
+    /**
+     * 管理员系统赠送：立刻落 SUCCESS 订单并入账，支付方式展示为「系统赠送」。
+     */
+    @Transactional
+    public PaymentOrder createSystemGiftOrder(Long userId, long points, String remark) {
+        if (userId == null) {
+            throw new IllegalArgumentException("用户不存在");
+        }
+        if (points <= 0) {
+            throw new IllegalArgumentException("积分必须大于 0");
+        }
+        String note = StringUtils.hasText(remark) ? remark.trim() : "系统赠送";
+        if (note.length() > 200) {
+            note = note.substring(0, 200);
+        }
+
+        PaymentOrder order = new PaymentOrder();
+        order.setOrderNo("GIFT" + System.currentTimeMillis()
+                + UUID.randomUUID().toString().substring(0, 6).toUpperCase());
+        order.setUserId(userId);
+        order.setProductType(PaymentOrder.PRODUCT_SYSTEM_GIFT);
+        order.setProductId(0L);
+        order.setAmountYuan(BigDecimal.ZERO);
+        order.setPaymentMethod(PaymentOrder.METHOD_SYSTEM_GIFT);
+        order.setStatus(PaymentOrder.STATUS_SUCCESS);
+        order.setPaidAt(LocalDateTime.now());
+        try {
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("points", points);
+            meta.put("title", "系统赠送");
+            meta.put("remark", note);
+            order.setMetaJson(objectMapper.writeValueAsString(meta));
+        } catch (Exception e) {
+            order.setMetaJson("{\"points\":" + points + ",\"title\":\"系统赠送\"}");
+        }
+        order = orderRepository.save(order);
+
+        pointsService.credit(
+                userId,
+                points,
+                PointLedger.SYSTEM_GIFT,
+                "ORDER",
+                order.getOrderNo(),
+                note
+        );
+        return order;
+    }
+
     @Transactional(readOnly = true)
     public WechatCheckoutView checkout(Long userId, String orderNo) {
         PaymentOrder order = orderRepository.findByOrderNo(orderNo)
@@ -102,13 +152,24 @@ public class ChatPaymentService {
         String nonceStr = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         long time = System.currentTimeMillis() / 1000;
         String totalFee = order.getAmountYuan().stripTrailingZeros().toPlainString();
+        String title = "AIMATEX Chat 积分充值";
+        try {
+            if (StringUtils.hasText(order.getMetaJson())) {
+                JsonNode meta = objectMapper.readTree(order.getMetaJson());
+                if (meta.hasNonNull("packageName") && StringUtils.hasText(meta.get("packageName").asText())) {
+                    title = "AIMATEX · " + meta.get("packageName").asText().trim();
+                    if (title.length() > 120) title = title.substring(0, 120);
+                }
+            }
+        } catch (Exception ignored) {
+        }
 
         Map<String, String> params = new TreeMap<>();
         params.put("version", "1.1");
         params.put("appid", appId);
         params.put("trade_order_id", order.getOrderNo());
         params.put("total_fee", totalFee);
-        params.put("title", "AIMATEX-Chat积分充值");
+        params.put("title", title);
         params.put("time", String.valueOf(time));
         params.put("notify_url", notifyUrl);
         if (StringUtils.hasText(returnUrl)) {

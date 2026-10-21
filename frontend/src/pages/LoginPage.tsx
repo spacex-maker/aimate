@@ -10,7 +10,9 @@ import { beginAimatexLogin, type OidcPublicConfig } from '../lib/oidc'
 export function LoginPage() {
   const { isLoggedIn } = useAuth()
   const location = useLocation()
-  const rawFrom = (location.state as { from?: string })?.from
+  const stateFrom = (location.state as { from?: string })?.from
+  const queryFrom = new URLSearchParams(location.search).get('from') ?? undefined
+  const rawFrom = stateFrom || queryFrom
   // 登录成功默认进控制台；官网 / 不算受保护回跳
   const from = rawFrom && rawFrom !== '/' ? rawFrom : '/app'
   const [config, setConfig] = useState<OidcPublicConfig | null>(null)

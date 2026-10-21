@@ -1,10 +1,12 @@
-import { useState, useEffect, useRef, type ReactNode } from 'react'
+import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Send, ImagePlus, SlidersHorizontal, Mic, ChevronDown, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { ToolSettingsPanel } from './ToolSettingsPanel'
+import { ContextUsageRing } from './ContextUsageRing'
 import { agentApi } from '../../api/agent'
+import { estimateTokens } from '../../lib/estimateTokens'
 import { fileToChatImage } from '../../lib/chatImage'
 import type { AvailableModelsDto, SystemModelDto, UserModelDto } from '../../types/agent'
 
@@ -39,6 +41,8 @@ export interface AgentInputBoxProps {
   onModelChange?: (selection: { source: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null }) => void
   /** 底部提示行右侧的自定义插槽（例如执行计划小面板） */
   bottomRightSlot?: ReactNode
+  /** 有会话时拉取服务端上下文占用；首页无会话则仅估算当前输入 */
+  sessionId?: string | null
 }
 
 /**
@@ -61,6 +65,7 @@ export function AgentInputBox({
   onSystemModelChange,
   onModelChange,
   bottomRightSlot,
+  sessionId = null,
 }: AgentInputBoxProps) {
   const [images, setImages] = useState<string[]>([])
   const imageInputRef = useRef<HTMLInputElement>(null)
@@ -91,6 +96,32 @@ export function AgentInputBox({
       : null
   const visionOn = selectedSource === 'SYSTEM' && !!selectedModel?.supportsVision
   const canSubmit = (value.trim() !== '' || images.length > 0) && !isPending && !disabled
+
+  const modelLimit =
+    selectedSource === 'SYSTEM' && selectedModel?.contextWindowTokens && selectedModel.contextWindowTokens > 0
+      ? selectedModel.contextWindowTokens
+      : 128_000
+
+  const { data: contextUsage } = useQuery({
+    queryKey: ['context-usage', sessionId, selectedSource === 'SYSTEM' ? selectedModelId : null],
+    queryFn: () =>
+      agentApi.getContextUsage(
+        sessionId!,
+        selectedSource === 'SYSTEM' ? selectedModelId ?? null : null
+      ),
+    enabled: !!sessionId,
+    refetchInterval: sessionId ? 15_000 : false,
+    staleTime: 5_000,
+  })
+
+  const contextLimit = contextUsage?.limitTokens && contextUsage.limitTokens > 0
+    ? contextUsage.limitTokens
+    : modelLimit
+  const draftTokens = useMemo(() => estimateTokens(value), [value])
+  const messageTokens = contextUsage?.messageTokens ?? 0
+  const toolsTokens = contextUsage?.toolsTokens ?? 0
+  const usedTokens = messageTokens + toolsTokens + draftTokens
+  const usagePercent = Math.min(100, Math.round((usedTokens * 1000) / contextLimit) / 10)
 
   // 按用户期望：按钮上仅显示模型名称，不再附带 provider，名称过长时允许区域适当变宽
   const displayModelLabel = modelsLoading
@@ -474,6 +505,14 @@ export function AgentInputBox({
                     document.body
                   )}
               </div>
+              <ContextUsageRing
+                percent={usagePercent}
+                usedTokens={usedTokens}
+                limitTokens={contextLimit}
+                messageTokens={messageTokens}
+                toolsTokens={toolsTokens}
+                draftTokens={draftTokens}
+              />
               <button
                 type="button"
                 className="p-2 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"

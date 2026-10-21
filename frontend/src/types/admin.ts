@@ -22,6 +22,20 @@ export interface AdminUserListItem {
   lastLoginTime: string | null
 }
 
+export interface AdminUserPage {
+  items: AdminUserListItem[]
+  page: number
+  size: number
+  total: number
+  totalPages: number
+}
+
+export interface BatchAdminUsersResult {
+  succeeded: number
+  failed: number
+  errors: { userId: number; message: string }[]
+}
+
 /** 系统配置项（供管理员修改） */
 export interface SystemConfigItem {
   id: number

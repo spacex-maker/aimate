@@ -92,6 +92,7 @@ AIMATE_ADMIN_BOOTSTRAP_DISPLAY_NAME={admin_display_name}
 AIMATE_SOUL_MEMORY_ENABLED={soul_memory_enabled}
 AIMATE_SOUL_API_BASE={soul_api_base}
 AIMATE_SOUL_PLATFORM_ENSURE_URL={soul_platform_ensure_url}
+AIMATE_SOUL_PLATFORM_BASE_URL={soul_platform_base_url}
 AIMATE_SOUL_PLATFORM_KEY={soul_platform_key}
 AIMATE_SOUL_PLATFORM_CODE={soul_platform_code}
 """
@@ -195,10 +196,22 @@ def load_env_file(path: Path) -> dict[str, str]:
     return out
 
 
+# NAS secrets are reused for SSH/Tencent only — never inherit NAS OIDC/client ids.
+_NAS_OIDC_KEYS = (
+    "AIMATEX_OIDC_CLIENT_ID",
+    "AIMATEX_CLIENT_ID",
+    "AIMATEX_OIDC_REDIRECT_URI",
+    "AIMATEX_OIDC_REDIRECT_URIS",
+    "AIMATEX_OIDC_NAS_BENEFIT_KEY",
+)
+
+
 def load_merged() -> dict[str, str]:
     data: dict[str, str] = {}
     data.update(load_env_file(NAS_SECRETS / "aimatex-nas.env"))
     data.update(load_env_file(NAS_SECRETS / "ops.env"))
+    for k in _NAS_OIDC_KEYS:
+        data.pop(k, None)
     for path in DEPLOY_ENV_CANDIDATES:
         data.update(load_env_file(path))
     # local.yml-adjacent secrets file if present
@@ -421,6 +434,11 @@ def main() -> int:
             data,
             "AIMATE_SOUL_PLATFORM_ENSURE_URL",
             default="https://soul-api.aimatex.com/api/v1/platform/souls/ensure",
+        ),
+        soul_platform_base_url=env_get(
+            data,
+            "AIMATE_SOUL_PLATFORM_BASE_URL",
+            default="https://soul-api.aimatex.com/api/v1/platform/souls",
         ),
         soul_platform_key=env_get(
             data, "AIMATE_SOUL_PLATFORM_KEY", "SOUL_PLATFORM_API_KEY", default=""

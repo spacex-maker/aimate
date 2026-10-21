@@ -23,6 +23,8 @@ export interface StartSessionRequest {
   modelSource?: 'SYSTEM' | 'USER_KEY'
   systemModelId?: number | null
   userApiKeyId?: number | null
+  /** 绑定的 UserAgent；不传则默认秘书 */
+  userAgentId?: number | null
   images?: string[]
 }
 
@@ -74,12 +76,23 @@ export interface SystemModelDto {
   tip?: string | null
   /** 当前仅 DeepSeek V4.1 Flash 为 true */
   supportsVision?: boolean
+  /** 模型上下文窗口上限（token），用于占用率圆环 */
+  contextWindowTokens?: number
   pointsPer1kPromptTokens?: number
   pointsPer1kCompletionTokens?: number
   costInputCnyPer1mPeak?: number | null
   costInputCnyPer1mOffpeak?: number | null
   costOutputCnyPer1mPeak?: number | null
   costOutputCnyPer1mOffpeak?: number | null
+}
+
+/** 会话上下文占用估算（输入框圆环） */
+export interface ContextUsageDto {
+  usedTokens: number
+  limitTokens: number
+  percent: number
+  messageTokens: number
+  toolsTokens: number
 }
 
 /** 当前用户首选模型（用于恢复聊天输入框默认选中项） */

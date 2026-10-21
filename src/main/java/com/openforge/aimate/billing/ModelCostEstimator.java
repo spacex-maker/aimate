@@ -43,12 +43,27 @@ public final class ModelCostEstimator {
                 + (Math.max(0, completionTokens) / 1_000_000.0) * outPerM;
     }
 
+    /**
+     * @deprecated 已改为按 API 成本 × 全局倍率 × 每元积分计费，见 {@link BillingSettingsService#pointsForApiCostCny}。
+     * 保留供兼容/预估参考。
+     */
+    @Deprecated
     public static long pointsForTokens(SystemModel model, int promptTokens, int completionTokens) {
         int pPrompt = model != null ? Math.max(0, model.getPointsPer1kPromptTokens()) : 1;
         int pComp = model != null ? Math.max(0, model.getPointsPer1kCompletionTokens()) : 3;
         long a = (long) Math.ceil(Math.max(0, promptTokens) / 1000.0 * pPrompt);
         long b = (long) Math.ceil(Math.max(0, completionTokens) / 1000.0 * pComp);
         return a + b;
+    }
+
+    /**
+     * 按 API 成本计积分：ceil(costCny × markup × pointsPerYuan)。
+     */
+    public static long pointsFromCostCny(double costCny, double markupMultiplier, double pointsPerYuan) {
+        if (costCny <= 0 || markupMultiplier <= 0 || pointsPerYuan <= 0) return 0L;
+        double raw = costCny * markupMultiplier * pointsPerYuan;
+        if (raw <= 0 || Double.isNaN(raw) || Double.isInfinite(raw)) return 0L;
+        return Math.max(0L, (long) Math.ceil(raw));
     }
 
     private static double pick(SystemModel model, boolean peak, Double peakVal, Double offVal,

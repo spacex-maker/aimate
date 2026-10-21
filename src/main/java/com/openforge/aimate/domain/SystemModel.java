@@ -53,6 +53,10 @@ public class SystemModel extends BaseEntity {
     @Column(name = "supports_vision", nullable = false)
     private boolean supportsVision = false;
 
+    /** 模型上下文窗口上限（token），用于前端占用率圆环。 */
+    @Column(name = "context_window_tokens", nullable = false)
+    private int contextWindowTokens = 128_000;
+
     /** 简短说明，如能力或适用场景 */
     @Column(length = 256)
     private String description;

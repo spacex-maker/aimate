@@ -203,6 +203,7 @@ export function SessionPage() {
     prevStatusRef.current = session?.status
     if ((prev === 'ACTIVE' || prev === 'RUNNING') && (session?.status === 'IDLE' || session?.status === 'COMPLETED')) {
       queryClient.refetchQueries({ queryKey: ['session-messages', sessionId] })
+      queryClient.invalidateQueries({ queryKey: ['context-usage', sessionId] })
     }
   }, [session?.status, sessionId, queryClient])
 
@@ -247,6 +248,7 @@ export function SessionPage() {
       refetch()
       // 立即拉取消息列表，否则「回答中」占位条可能不显示（后端已写入，前端仅 invalidate 不会马上请求）
       queryClient.refetchQueries({ queryKey: ['session-messages', sessionId] })
+      queryClient.invalidateQueries({ queryKey: ['context-usage', sessionId] })
       // 发消息会触发后端预创建/启动脚本容器，延迟刷新脚本状态以便 UI 显示「容器已就绪」
       setTimeout(() => refetchScriptStatus(), 2000)
       toast.success('已发送后续问题')
@@ -272,6 +274,7 @@ export function SessionPage() {
       refetch()
       // 立即拉取消息列表，使该条 assistant 显示为「回答中」
       queryClient.refetchQueries({ queryKey: ['session-messages', sessionId] })
+      queryClient.invalidateQueries({ queryKey: ['context-usage', sessionId] })
       toast.success('已重试该条消息，将用此前上下文重新生成回复')
     },
     onError: (e: Error) => toast.error(e.message),
@@ -424,6 +427,7 @@ export function SessionPage() {
         resumePending={resumeMutation.isPending}
         abortPending={abortMutation.isPending}
         onBack={() => navigate('/app')}
+        onNewSession={() => navigate('/app')}
         onCopyId={() => {
           navigator.clipboard.writeText(effectiveSessionId ?? '')
           toast.success('已复制')
@@ -488,6 +492,7 @@ export function SessionPage() {
       {/* 与首页完全一致的底部输入框：固定视口底部、安全区、大圆角 */}
       {session && (
         <AgentInputBox
+          sessionId={effectiveSessionId}
           value={followup}
           onChange={setFollowup}
           onSubmit={(opts) => {

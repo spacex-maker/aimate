@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS system_models (
     sort_order      INT             NOT NULL DEFAULT 100 COMMENT '排序权重，数值越小越靠前',
     enabled         TINYINT(1)      NOT NULL DEFAULT 1 COMMENT '是否在「切换模型」列表中展示',
     supports_vision TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '是否接受图片输入',
+    context_window_tokens INT       NOT NULL DEFAULT 128000 COMMENT '模型上下文窗口上限（token）',
     description     VARCHAR(256)             COMMENT '简短说明，如能力或适用场景',
     tip             VARCHAR(128)             COMMENT '选模型时名称旁提示，如非高峰半价时段',
     points_per_1k_prompt_tokens INT NOT NULL DEFAULT 1 COMMENT '每1K prompt token 扣积分',

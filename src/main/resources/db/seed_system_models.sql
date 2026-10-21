@@ -39,3 +39,11 @@ ON DUPLICATE KEY UPDATE
   update_time = NOW();
 
 UPDATE system_models SET supports_vision = 1 WHERE model_id = 'deepseek-flash';
+
+-- 上下文窗口（若列已存在）
+UPDATE system_models SET context_window_tokens = 128000 WHERE model_id IN ('gpt-5.2', 'gpt-5.1');
+UPDATE system_models SET context_window_tokens = 1000000 WHERE provider = 'google';
+UPDATE system_models SET context_window_tokens = 200000 WHERE provider = 'anthropic';
+UPDATE system_models SET context_window_tokens = 131072 WHERE model_id = 'grok-4-0709';
+UPDATE system_models SET context_window_tokens = 2000000 WHERE model_id = 'grok-4-fast-reasoning';
+UPDATE system_models SET context_window_tokens = 1000000 WHERE provider = 'deepseek';

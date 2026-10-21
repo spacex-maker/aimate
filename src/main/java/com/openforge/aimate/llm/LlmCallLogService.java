@@ -1,5 +1,6 @@
 package com.openforge.aimate.llm;
 
+import com.openforge.aimate.billing.BillingSettingsService;
 import com.openforge.aimate.billing.InsufficientPointsException;
 import com.openforge.aimate.billing.ModelCostEstimator;
 import com.openforge.aimate.billing.PointsService;
@@ -24,6 +25,7 @@ public class LlmCallLogService {
     private final LlmCallLogRepository repository;
     private final SystemModelRepository systemModelRepository;
     private final PointsService pointsService;
+    private final BillingSettingsService billingSettingsService;
 
     public void logSuccess(String provider,
                            String model,
@@ -65,7 +67,8 @@ public class LlmCallLogService {
 
             if (userId != null && (prompt > 0 || completion > 0)
                     && callType != LlmCallLog.CallType.MEMORY_COMPRESS) {
-                long points = ModelCostEstimator.pointsForTokens(sm, prompt, completion);
+                // 扣费 = ceil(API成本CNY × 加成倍率 × 每元积分)，默认 成本×4×1000
+                long points = billingSettingsService.pointsForApiCostCny(costCny);
                 if (points > 0) {
                     pointsService.deduct(
                             userId,
@@ -75,7 +78,8 @@ public class LlmCallLogService {
                             String.valueOf(row.getId()),
                             sessionId,
                             row.getId(),
-                            model + " · " + points + " 积分"
+                            // 用户可见备注：仅模型名，不暴露成本/倍率
+                            model != null && !model.isBlank() ? model.trim() : "对话扣费"
                     );
                     row.setPointsCharged(points);
                     repository.save(row);

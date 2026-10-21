@@ -1,4 +1,4 @@
-import { Pause, Play, StopCircle, ArrowLeft, Copy } from 'lucide-react'
+import { Pause, Play, StopCircle, ArrowLeft, Copy, SquarePen } from 'lucide-react'
 import type { SessionResponse } from '../../types/agent'
 
 interface SessionHeaderProps {
@@ -12,6 +12,7 @@ interface SessionHeaderProps {
   resumePending: boolean
   abortPending: boolean
   onBack: () => void
+  onNewSession: () => void
   onCopyId: () => void
   onPause: () => void
   onResume: () => void
@@ -29,6 +30,7 @@ export function SessionHeader({
   resumePending,
   abortPending,
   onBack,
+  onNewSession,
   onCopyId,
   onPause,
   onResume,
@@ -39,6 +41,7 @@ export function SessionHeader({
       <button
         onClick={onBack}
         className="text-white/30 hover:text-white/70 transition-colors"
+        title="返回控制台"
       >
         <ArrowLeft className="w-4 h-4" />
       </button>
@@ -62,6 +65,14 @@ export function SessionHeader({
       </div>
 
       <div className="flex items-center gap-2 flex-shrink-0">
+        <button
+          type="button"
+          onClick={onNewSession}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-blue-300 border border-blue-500/30 hover:bg-blue-500/10 rounded-lg transition-colors"
+          title="新建会话"
+        >
+          <SquarePen className="w-3.5 h-3.5" /> 新建会话
+        </button>
         <button
           onClick={onCopyId}
           disabled={!effectiveSessionId}

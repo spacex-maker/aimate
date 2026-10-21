@@ -61,6 +61,10 @@ public class AgentSession extends BaseEntity {
     @Column(name = "user_id")
     private Long userId;
 
+    /** 绑定的 UserAgent；P1 单聊必填（旧数据可为空，发送时回退秘书）。 */
+    @Column(name = "user_agent_id")
+    private Long userAgentId;
+
     /** External UUID passed in by the caller. */
     @Column(name = "session_id", nullable = false, length = 64)
     private String sessionId;

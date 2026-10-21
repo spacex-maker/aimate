@@ -74,5 +74,6 @@ aimate:
     enabled: ${AIMATE_SOUL_MEMORY_ENABLED:false}
     api-base: ${AIMATE_SOUL_API_BASE:https://soul-api.aimatex.com/api/v1/soul}
     platform-ensure-url: ${AIMATE_SOUL_PLATFORM_ENSURE_URL:https://soul-api.aimatex.com/api/v1/platform/souls/ensure}
+    platform-base-url: ${AIMATE_SOUL_PLATFORM_BASE_URL:https://soul-api.aimatex.com/api/v1/platform/souls}
     platform-key: ${AIMATE_SOUL_PLATFORM_KEY:}
     platform-code: ${AIMATE_SOUL_PLATFORM_CODE:aimatex-chat}

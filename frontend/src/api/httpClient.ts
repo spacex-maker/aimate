@@ -9,11 +9,15 @@
  */
 
 import toast from 'react-hot-toast'
+import { setAuthUser } from '../hooks/useAuth'
 import { isAdminHost } from '../lib/host'
 
 const AUTH_KEY = 'ofx_auth_user'
 const ADMIN_TOKEN_KEY = 'chat_admin_jwt'
 const DEFAULT_LOCAL_BACKEND = 'http://localhost:9299'
+
+/** 并发 401 只弹一次、只跳转一次 */
+let handlingUnauthorized = false
 
 function isLocalHost(): boolean {
   if (typeof window === 'undefined') return false
@@ -56,16 +60,27 @@ function getToken(): string | null {
 }
 
 function handleUnauthorized(): never {
-  if (isAdminHost()) {
-    localStorage.removeItem(ADMIN_TOKEN_KEY)
-    toast.error('后台会话已失效，请重新登录')
-    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-      window.location.href = '/login'
+  const onLoginPage =
+    typeof window !== 'undefined' && window.location.pathname.startsWith('/login')
+
+  if (!handlingUnauthorized) {
+    handlingUnauthorized = true
+    if (isAdminHost()) {
+      localStorage.removeItem(ADMIN_TOKEN_KEY)
+      toast.error('后台会话已失效，请重新登录')
+    } else {
+      setAuthUser(null)
+      toast.error('登录已失效，请重新登录')
     }
-    throw new Error('未授权（401）')
+    if (!onLoginPage && typeof window !== 'undefined') {
+      const from = window.location.pathname + window.location.search
+      const q = from && from !== '/' && from !== '/login' ? `?from=${encodeURIComponent(from)}` : ''
+      window.location.href = `/login${q}`
+    } else {
+      // 已在登录页：允许后续请求再次触发（例如用户重新点登录）
+      handlingUnauthorized = false
+    }
   }
-  // 只提示，不再清理本地登录状态，避免单个接口 401 把整个前端“登出”
-  toast.error('接口未授权（401），请检查登录状态或权限')
   throw new Error('未授权（401）')
 }
 

@@ -1,5 +1,15 @@
 import type { HostResourceStatusDto, SystemModelDto, ToolSettingsDto } from '../types/agent'
-import type { AdminUserListItem, BillingUsageDetail, BillingUsageResponse, ComponentStatusDto, HostLoadMetric, SystemConfigItem, UserContainerStatus } from '../types/admin'
+import type {
+  AdminUserListItem,
+  AdminUserPage,
+  BatchAdminUsersResult,
+  BillingUsageDetail,
+  BillingUsageResponse,
+  ComponentStatusDto,
+  HostLoadMetric,
+  SystemConfigItem,
+  UserContainerStatus,
+} from '../types/admin'
 import { http } from './httpClient'
 
 export const adminApi = {
@@ -29,14 +39,32 @@ export const adminApi = {
       headers: { 'Content-Type': 'application/json' },
     }),
 
-  /** 管理员：获取全部用户列表 */
-  listUsers: () =>
-    http<AdminUserListItem[]>('/api/admin/users'),
+  /** 管理员：分页用户列表 */
+  listUsers: (params?: { page?: number; size?: number; q?: string }) => {
+    const qs = new URLSearchParams()
+    qs.set('page', String(params?.page ?? 0))
+    qs.set('size', String(params?.size ?? 20))
+    if (params?.q) qs.set('q', params.q)
+    return http<AdminUserPage>(`/api/admin/users?${qs}`)
+  },
 
   /** 管理员：更新用户状态或角色 */
   updateUser: (id: number, body: { status?: string; role?: string }) =>
     http<AdminUserListItem>(`/api/admin/users/${id}`, {
       method: 'PATCH',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+
+  /** 管理员：批量启用 / 禁用 / 系统赠送充值 */
+  batchUsers: (body: {
+    userIds: number[]
+    action: 'ENABLE' | 'DISABLE' | 'RECHARGE'
+    points?: number
+    remark?: string
+  }) =>
+    http<BatchAdminUsersResult>('/api/admin/users/batch', {
+      method: 'POST',
       body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
     }),
@@ -188,6 +216,16 @@ export const adminApi = {
   adjustUserPoints: (userId: number, body: { delta: number; remark?: string }) =>
     http<{ pointsBalance: number }>(`/api/admin/billing/users/${userId}/adjust`, {
       method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+
+  getBillingSettings: () =>
+    http<{ markupMultiplier: number; pointsPerYuan: number }>('/api/admin/billing/settings'),
+
+  updateBillingSettings: (body: { markupMultiplier?: number; pointsPerYuan?: number }) =>
+    http<{ markupMultiplier: number; pointsPerYuan: number }>('/api/admin/billing/settings', {
+      method: 'PUT',
       body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
     }),

@@ -3,6 +3,7 @@ package com.openforge.aimate.agent;
 import com.openforge.aimate.agent.dto.BillingUsageDetail;
 import com.openforge.aimate.agent.dto.BillingUsageResponse;
 import com.openforge.aimate.agent.dto.BillingUsageSummary;
+import com.openforge.aimate.billing.BillingSettingsService;
 import com.openforge.aimate.billing.PointsService;
 import com.openforge.aimate.domain.LlmCallLog;
 import com.openforge.aimate.domain.PaymentOrder;
@@ -46,6 +47,17 @@ public class AdminBillingController {
     private final PaymentOrderRepository orderRepository;
     private final PointLedgerRepository ledgerRepository;
     private final PointsService pointsService;
+    private final BillingSettingsService billingSettingsService;
+
+    @GetMapping("/settings")
+    public BillingSettingsService.BillingSettingsView getSettings() {
+        return billingSettingsService.current();
+    }
+
+    @PutMapping("/settings")
+    public BillingSettingsService.BillingSettingsView updateSettings(@RequestBody BillingSettingsBody body) {
+        return billingSettingsService.update(body.markupMultiplier(), body.pointsPerYuan());
+    }
 
     @GetMapping("/usage")
     public ResponseEntity<BillingUsageResponse> usage(
@@ -282,4 +294,6 @@ public class AdminBillingController {
     ) {}
 
     public record AdjustBody(long delta, String remark) {}
+
+    public record BillingSettingsBody(Double markupMultiplier, Double pointsPerYuan) {}
 }

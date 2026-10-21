@@ -62,6 +62,9 @@ export const billingApi = {
       body: JSON.stringify({ orderNo }),
     }),
 
+  getOrder: (orderNo: string) =>
+    http<PaymentOrderView>(`/api/billing/orders/${encodeURIComponent(orderNo)}`),
+
   orders: (page = 0, size = 20) => {
     const qs = new URLSearchParams({ page: String(page), size: String(size) })
     return http<PageResult<PaymentOrderView>>(`/api/billing/orders?${qs}`)

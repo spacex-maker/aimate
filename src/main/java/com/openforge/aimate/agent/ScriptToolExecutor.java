@@ -33,7 +33,9 @@ public class ScriptToolExecutor {
     private static final int MAX_OUTPUT_CHARS = 50_000;
 
     /** 系统级工具仅本机执行，不走 Docker。 */
-    private static final Set<String> SYSTEM_TOOL_NAMES = Set.of("recall_memory", "store_memory", "tavily_search", "create_tool", "install_container_package", "run_container_cmd", "write_container_file");
+    private static final Set<String> SYSTEM_TOOL_NAMES = Set.of(
+            "recall_memory", "store_memory", "tavily_search", "http_request", "create_tool",
+            "install_container_package", "run_container_cmd", "write_container_file");
 
     private final ScriptToolProperties scriptToolProperties;
     private final ScriptDockerProperties scriptDockerProperties;

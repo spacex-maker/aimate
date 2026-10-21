@@ -27,6 +27,10 @@ public record StartSessionRequest(
         @JsonProperty("userApiKeyId")
         Long userApiKeyId,
 
+        /** 对话绑定的 UserAgent；空则默认秘书 */
+        @JsonProperty("userAgentId")
+        Long userAgentId,
+
         @JsonProperty("images")
         List<String> images
 ) {}

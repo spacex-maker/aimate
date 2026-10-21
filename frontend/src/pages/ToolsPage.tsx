@@ -234,7 +234,7 @@ function ToolRow({
 const INPUT_SCHEMA_PLACEHOLDER = `{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"}},"required":["query"]}`
 
 const RESERVED_NAMES = [
-  'recall_memory', 'store_memory', 'tavily_search', 'create_tool',
+  'recall_memory', 'store_memory', 'tavily_search', 'http_request', 'create_tool',
   'install_container_package', 'run_container_cmd', 'write_container_file',
 ]
 

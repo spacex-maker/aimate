@@ -69,6 +69,9 @@ public class AdminSystemModelController {
             String tip = request.tip().trim();
             model.setTip(tip.isEmpty() ? null : tip.substring(0, Math.min(tip.length(), 128)));
         }
+        if (request.contextWindowTokens() != null) {
+            model.setContextWindowTokens(Math.max(1_000, request.contextWindowTokens()));
+        }
         if (request.pointsPer1kPromptTokens() != null) {
             model.setPointsPer1kPromptTokens(Math.max(0, request.pointsPer1kPromptTokens()));
         }

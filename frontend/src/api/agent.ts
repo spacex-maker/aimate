@@ -1,4 +1,4 @@
-import type { AssistantVersionDto, AvailableModelsDto, ChatMessageDto, DockerInstallInfoDto, ScriptEnvStatusDto, SessionResponse, StartSessionRequest, SystemModelDto, ToolSettingsDto } from '../types/agent'
+import type { AssistantVersionDto, AvailableModelsDto, ChatMessageDto, ContextUsageDto, DockerInstallInfoDto, ScriptEnvStatusDto, SessionResponse, StartSessionRequest, SystemModelDto, ToolSettingsDto } from '../types/agent'
 import { http } from './httpClient'
 
 const BASE = '/api/agent/sessions'
@@ -43,6 +43,14 @@ export const agentApi = {
     const params = new URLSearchParams({ limit: String(limit) })
     if (beforeSeq != null) params.set('beforeSeq', String(beforeSeq))
     return http<ChatMessageDto[]>(`${BASE}/${sessionId}/messages?${params}`)
+  },
+
+  /** 会话上下文占用估算，供输入框圆环；systemModelId 用于解析窗口上限 */
+  getContextUsage: (sessionId: string, systemModelId?: number | null) => {
+    const params = new URLSearchParams()
+    if (systemModelId != null) params.set('systemModelId', String(systemModelId))
+    const q = params.toString()
+    return http<ContextUsageDto>(`${BASE}/${sessionId}/context-usage${q ? `?${q}` : ''}`)
   },
 
   pauseSession: (sessionId: string) =>

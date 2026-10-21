@@ -16,6 +16,8 @@ public class SoulMemoryProperties {
 
     private String apiBase = "https://soul-api.aimatex.com/api/v1/soul";
     private String platformEnsureUrl = "https://soul-api.aimatex.com/api/v1/platform/souls/ensure";
+    /** 平台 S2S 根路径，默认 …/api/v1/platform/souls */
+    private String platformBaseUrl = "https://soul-api.aimatex.com/api/v1/platform/souls";
     private String platformKey = "";
     private String platformCode = "aimatex-chat";
 
