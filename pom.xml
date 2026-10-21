@@ -23,6 +23,7 @@
         <resilience4j.version>2.3.0</resilience4j.version>
         <!-- Spring Boot 3.5.x + JDK 25，Lombok 显式版本 -->
         <lombok.version>1.18.42</lombok.version>
+        <qcloud.cos.version>5.6.246.3</qcloud.cos.version>
     </properties>
 
     <dependencyManagement>
@@ -126,6 +127,13 @@
             <groupId>com.tencent.tcvectordb</groupId>
             <artifactId>vectordatabase-sdk-java</artifactId>
             <version>2.6.1</version>
+        </dependency>
+
+        <!-- Chat 对话图片入独立 COS 桶 -->
+        <dependency>
+            <groupId>com.qcloud</groupId>
+            <artifactId>cos_api</artifactId>
+            <version>${qcloud.cos.version}</version>
         </dependency>
 
         <!-- ── Actuator (health + metrics endpoint) ──────────────── -->

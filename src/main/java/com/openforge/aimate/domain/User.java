@@ -52,6 +52,10 @@ public class User extends BaseEntity {
     @Column(name = "last_login_time")
     private LocalDateTime lastLoginTime;
 
+    /** Chat 平台积分余额；用户侧只展示积分。 */
+    @Column(name = "points_balance", nullable = false)
+    private long pointsBalance = 0L;
+
     public enum Status {
         ACTIVE,
         DISABLED

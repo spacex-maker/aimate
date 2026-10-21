@@ -404,17 +404,24 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
                     {msg.role === 'assistant' && msg.messageStatus === 'INTERRUPTED' && (
                       <span className="text-white/45 text-xs block mb-1">已中断</span>
                     )}
+                    {msg.role === 'user' && msg.images && msg.images.length > 0 && (
+                      <div className="mb-2 flex flex-wrap gap-2">
+                        {msg.images.map((src, i) => (
+                          <img key={i} src={src} alt="" className="max-h-48 max-w-full rounded-lg border border-white/10 object-contain" />
+                        ))}
+                      </div>
+                    )}
                     {msg.role === 'assistant' ? (
                       <MarkdownContent content={msg.content || (msg.messageStatus === 'ANSWERING' ? '' : '(无内容)')} className="break-words" />
                     ) : (
                       <span className="block whitespace-pre-wrap break-all">{msg.content || ''}</span>
                   )}
+                  </div>
                   {msg.createTime && (
-                    <div className="mt-1 text-[10px] text-white/30 text-right">
+                    <div className={`px-1 text-[10px] leading-none text-white/30 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
                       {msg.createTime.replace('T', ' ').slice(0, 19)}
                     </div>
                   )}
-                  </div>
                   {msg.role === 'user' && canRetry && onRetry && msg.content && msg.id != null && (
                     <button
                       type="button"

@@ -10,8 +10,19 @@ export const adminApi = {
   listAllSystemModels: () =>
     http<SystemModelDto[]>('/api/admin/system-models'),
 
-  /** 管理员：更新系统模型属性（启用状态 / 排序权重等） */
-  updateSystemModel: (id: number, body: { enabled?: boolean; sortOrder?: number }) =>
+  /** 管理员：更新系统模型属性（启用状态 / 排序权重 / 积分倍率 / 成本价等） */
+  updateSystemModel: (id: number, body: {
+    enabled?: boolean
+    sortOrder?: number
+    apiKeyConfigKey?: string | null
+    tip?: string | null
+    pointsPer1kPromptTokens?: number
+    pointsPer1kCompletionTokens?: number
+    costInputCnyPer1mPeak?: number | null
+    costInputCnyPer1mOffpeak?: number | null
+    costOutputCnyPer1mPeak?: number | null
+    costOutputCnyPer1mOffpeak?: number | null
+  }) =>
     http<SystemModelDto>(`/api/admin/system-models/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(body),
@@ -72,6 +83,23 @@ export const adminApi = {
       headers: { 'Content-Type': 'application/json' },
     }),
 
+  createDeepseekKey: (body: { configValue: string; description?: string }) =>
+    http<SystemConfigItem>('/api/admin/system-configs', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+
+  deleteSystemConfig: (id: number) =>
+    http<void>(`/api/admin/system-configs/${id}`, { method: 'DELETE' }),
+
+  setRagMemoryEnabled: (enabled: boolean) =>
+    http<{ ragMemoryEnabled: boolean }>('/api/admin/features/rag-memory', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+
   /** 管理员：用量汇总（基于 llm_call_logs） */
   getBillingUsage: (params?: { userId?: number; from?: string; to?: string }) => {
     const qs = new URLSearchParams()
@@ -91,4 +119,76 @@ export const adminApi = {
     const query = qs.toString()
     return http<BillingUsageDetail[]>(`/api/admin/billing/usage/${userId}` + (query ? `?${query}` : ''))
   },
+
+  listPointPackages: () =>
+    http<import('./billing').PointPackageView[]>('/api/admin/billing/packages'),
+
+  createPointPackage: (body: {
+    name: string
+    priceYuan: number
+    points: number
+    bonusPoints?: number
+    enabled?: boolean
+    sortOrder?: number
+    description?: string
+  }) =>
+    http<import('./billing').PointPackageView>('/api/admin/billing/packages', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+
+  updatePointPackage: (id: number, body: {
+    name: string
+    priceYuan: number
+    points: number
+    bonusPoints?: number
+    enabled?: boolean
+    sortOrder?: number
+    description?: string
+  }) =>
+    http<import('./billing').PointPackageView>(`/api/admin/billing/packages/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+
+  deletePointPackage: (id: number) =>
+    http<void>(`/api/admin/billing/packages/${id}`, { method: 'DELETE' }),
+
+  listPaymentOrders: (params?: { page?: number; size?: number; status?: string }) => {
+    const qs = new URLSearchParams()
+    qs.set('page', String(params?.page ?? 0))
+    qs.set('size', String(params?.size ?? 20))
+    if (params?.status) qs.set('status', params.status)
+    return http<{
+      items: import('./billing').PaymentOrderView[]
+      page: number
+      size: number
+      total: number
+      totalPages: number
+    }>(`/api/admin/billing/orders?${qs}`)
+  },
+
+  getUserLedger: (userId: number, params?: { reason?: string; page?: number; size?: number }) => {
+    const qs = new URLSearchParams()
+    qs.set('page', String(params?.page ?? 0))
+    qs.set('size', String(params?.size ?? 20))
+    if (params?.reason) qs.set('reason', params.reason)
+    return http<{
+      items: import('./billing').PointLedgerView[]
+      page: number
+      size: number
+      total: number
+      totalPages: number
+      pointsBalance: number
+    }>(`/api/admin/billing/users/${userId}/ledger?${qs}`)
+  },
+
+  adjustUserPoints: (userId: number, body: { delta: number; remark?: string }) =>
+    http<{ pointsBalance: number }>(`/api/admin/billing/users/${userId}/adjust`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
 }

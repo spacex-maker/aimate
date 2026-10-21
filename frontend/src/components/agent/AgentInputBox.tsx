@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Send, Plus, SlidersHorizontal, Mic, ChevronDown } from 'lucide-react'
+import { Send, ImagePlus, SlidersHorizontal, Mic, ChevronDown, X } from 'lucide-react'
+import toast from 'react-hot-toast'
 import { ToolSettingsPanel } from './ToolSettingsPanel'
 import { agentApi } from '../../api/agent'
+import { fileToChatImage } from '../../lib/chatImage'
 import type { AvailableModelsDto, SystemModelDto, UserModelDto } from '../../types/agent'
 
 /** provider 转展示用公司名（如 openai → OpenAI，xai → xAI） */
@@ -20,7 +22,7 @@ export interface AgentInputBoxProps {
    * 提交时回调，携带当前模型选择信息（若有）。
    * HomePage 不关心模型时可以忽略参数。
    */
-  onSubmit: (options?: { modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null }) => void
+  onSubmit: (options?: { modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null; images?: string[] }) => void
   placeholder: string
   hintText: string
   isPending: boolean
@@ -60,7 +62,8 @@ export function AgentInputBox({
   onModelChange,
   bottomRightSlot,
 }: AgentInputBoxProps) {
-  const canSubmit = value.trim() !== '' && !isPending && !disabled
+  const [images, setImages] = useState<string[]>([])
+  const imageInputRef = useRef<HTMLInputElement>(null)
   const [glow, setGlow] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
   const [toolsAnchor, setToolsAnchor] = useState<{ left: number; bottom: number } | null>(null)
@@ -86,6 +89,8 @@ export function AgentInputBox({
     selectedSource === 'SYSTEM' && selectedModelId != null
       ? systemModels.find((m) => m.id === selectedModelId) ?? null
       : null
+  const visionOn = selectedSource === 'SYSTEM' && !!selectedModel?.supportsVision
+  const canSubmit = (value.trim() !== '' || images.length > 0) && !isPending && !disabled
 
   // 按用户期望：按钮上仅显示模型名称，不再附带 provider，名称过长时允许区域适当变宽
   const displayModelLabel = modelsLoading
@@ -195,16 +200,41 @@ export function AgentInputBox({
     return () => clearTimeout(t)
   }, [glow])
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!canSubmit) return
-    setGlow(true)
+  const addImageFiles = async (files: FileList | File[]) => {
+    const list = Array.from(files).filter((f) => f.type.startsWith('image/'))
+    if (list.length === 0) return
+    const room = 4 - images.length
+    if (room <= 0) {
+      toast.error('最多 4 张图片')
+      return
+    }
+    const next: string[] = []
+    for (const file of list.slice(0, room)) {
+      try {
+        next.push(await fileToChatImage(file))
+      } catch {
+        toast.error('图片处理失败')
+      }
+    }
+    if (next.length) setImages((prev) => [...prev, ...next].slice(0, 4))
+  }
+
+  const submitPayload = () => {
     const payload = {
       modelSource: selectedSource,
       systemModelId: selectedSource === 'SYSTEM' ? selectedModelId ?? null : null,
       userApiKeyId: selectedSource === 'USER_KEY' && selectedUserModel ? selectedUserModel.id ?? null : null,
+      images: images.length ? images : undefined,
     }
+    setImages([])
     onSubmit(payload)
+  }
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!canSubmit) return
+    setGlow(true)
+    submitPayload()
   }
 
   return (
@@ -216,6 +246,23 @@ export function AgentInputBox({
         <div
           className={`rounded-3xl bg-white/[0.06] backdrop-blur-xl border border-white/10 shadow-xl focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10 transition-all overflow-hidden flex flex-col min-h-[120px] w-full ${glow ? 'animate-input-glow border-white/20' : ''}`}
         >
+          {images.length > 0 && (
+            <div className="flex gap-2 px-4 pt-3">
+              {images.map((src, i) => (
+                <div key={i} className="relative">
+                  <img src={src} alt="" className="h-16 w-16 rounded-lg object-cover border border-white/10" />
+                  <button
+                    type="button"
+                    onClick={() => setImages((prev) => prev.filter((_, idx) => idx !== i))}
+                    className="absolute -right-1 -top-1 rounded-full bg-black/80 p-0.5 text-white/80"
+                    aria-label="移除图片"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             value={value}
             onChange={e => onChange(e.target.value)}
@@ -224,12 +271,7 @@ export function AgentInputBox({
                 e.preventDefault()
                 if (canSubmit) {
                   setGlow(true)
-                  const payload = {
-                    modelSource: selectedSource,
-                    systemModelId: selectedSource === 'SYSTEM' ? selectedModelId ?? null : null,
-                    userApiKeyId: selectedSource === 'USER_KEY' && selectedUserModel ? selectedUserModel.id ?? null : null,
-                  }
-                  onSubmit(payload)
+                  submitPayload()
                 }
               }
             }}
@@ -239,12 +281,25 @@ export function AgentInputBox({
           />
           <div className="flex-shrink-0 flex items-center justify-between px-3 py-2 border-t border-white/[0.06]">
             <div className="flex items-center gap-1 relative">
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files) void addImageFiles(e.target.files)
+                  e.target.value = ''
+                }}
+              />
               <button
                 type="button"
-                className="p-2 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
-                title="附加文件（敬请期待）"
+                disabled={!visionOn}
+                onClick={() => imageInputRef.current?.click()}
+                className="p-2 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                title={visionOn ? '上传图片，DeepSeek Flash 会看图回答' : '当前模型不支持图片，请选择 DeepSeek V4.1 Flash'}
               >
-                <Plus className="w-4 h-4" />
+                <ImagePlus className="w-4 h-4" />
               </button>
               <button
                 ref={toolsButtonRef}
@@ -293,9 +348,18 @@ export function AgentInputBox({
                         ? 'text-white/90 bg-white/10'
                         : 'text-white/50 hover:text-white/80 hover:bg-white/10'
                   }`}
-                  title={modelsLoading ? '模型列表加载中…' : displayModelLabel}
+                  title={
+                    modelsLoading
+                      ? '模型列表加载中…'
+                      : [displayModelLabel, selectedModel?.tip].filter(Boolean).join(' · ')
+                  }
                 >
-                  <span>{displayModelLabel}</span>
+                  <span className="truncate max-w-[7rem] sm:max-w-[10rem]">{displayModelLabel}</span>
+                  {selectedModel?.tip ? (
+                    <span className="hidden sm:inline-block max-w-[9rem] truncate rounded px-1 py-0.5 text-[10px] leading-none bg-emerald-500/15 text-emerald-300/90 border border-emerald-500/20">
+                      {selectedModel.tip}
+                    </span>
+                  ) : null}
                   <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />
                 </button>
                 {!modelsLoading && modelOpen &&
@@ -309,7 +373,7 @@ export function AgentInputBox({
                         aria-hidden
                       />
                       <div
-                        className="fixed z-50 w-64 max-h-72 overflow-y-auto rounded-xl bg-[#1a1a1a] border border-white/10 shadow-xl"
+                        className="fixed z-50 w-80 max-h-72 overflow-y-auto rounded-xl bg-[#1a1a1a] border border-white/10 shadow-xl"
                         style={{
                           left: modelAnchor.left,
                           bottom: modelAnchor.bottom + 8,
@@ -370,10 +434,25 @@ export function AgentInputBox({
                                           ? 'bg-white/15 text-white/95'
                                           : 'text-white/80 hover:bg-white/10'
                                       }`}
-                                      title={m.description ?? `${formatProvider(m.provider)} ${m.displayName}`}
+                                      title={
+                                        [m.tip, m.description].filter(Boolean).join(' · ')
+                                        || `${formatProvider(m.provider)} ${m.displayName}`
+                                      }
                                     >
                                       <div className="flex flex-col gap-0.5">
-                                        <span className="font-medium text-white/90">{m.displayName}</span>
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          <span className="font-medium text-white/90 truncate">{m.displayName}</span>
+                                          {m.supportsVision ? (
+                                            <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none bg-sky-500/15 text-sky-300/90 border border-sky-500/25">
+                                              视觉
+                                            </span>
+                                          ) : null}
+                                          {m.tip ? (
+                                            <span className="shrink-0 max-w-[10rem] truncate rounded px-1.5 py-0.5 text-[10px] leading-none bg-emerald-500/15 text-emerald-300/90 border border-emerald-500/25">
+                                              {m.tip}
+                                            </span>
+                                          ) : null}
+                                        </div>
                                         <span className="text-[11px] text-white/45">
                                           {formatProvider(m.provider)}
                                         </span>

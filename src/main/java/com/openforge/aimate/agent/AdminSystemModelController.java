@@ -2,9 +2,9 @@ package com.openforge.aimate.agent;
 
 import com.openforge.aimate.agent.dto.SystemModelDto;
 import com.openforge.aimate.agent.dto.UpdateSystemModelRequest;
+import com.openforge.aimate.config.SystemConfigService;
 import com.openforge.aimate.domain.SystemModel;
 import com.openforge.aimate.repository.SystemModelRepository;
-import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -19,10 +19,18 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
  */
 @RestController
 @RequestMapping("/api/admin/system-models")
-@RequiredArgsConstructor
 public class AdminSystemModelController {
 
     private final SystemModelRepository systemModelRepository;
+    private final SystemConfigService systemConfigService;
+
+    public AdminSystemModelController(
+            SystemModelRepository systemModelRepository,
+            SystemConfigService systemConfigService
+    ) {
+        this.systemModelRepository = systemModelRepository;
+        this.systemConfigService = systemConfigService;
+    }
 
     @GetMapping
     public ResponseEntity<List<SystemModelDto>> listAll() {
@@ -45,6 +53,39 @@ public class AdminSystemModelController {
         }
         if (request.sortOrder() != null) {
             model.setSortOrder(request.sortOrder());
+        }
+        if (request.apiKeyConfigKey() != null) {
+            String key = request.apiKeyConfigKey().trim();
+            if (key.isEmpty()) {
+                model.setApiKeyConfigKey(null);
+            } else {
+                if (!systemConfigService.exists(key)) {
+                    throw new ResponseStatusException(NOT_FOUND, "API Key 配置不存在: " + key);
+                }
+                model.setApiKeyConfigKey(key);
+            }
+        }
+        if (request.tip() != null) {
+            String tip = request.tip().trim();
+            model.setTip(tip.isEmpty() ? null : tip.substring(0, Math.min(tip.length(), 128)));
+        }
+        if (request.pointsPer1kPromptTokens() != null) {
+            model.setPointsPer1kPromptTokens(Math.max(0, request.pointsPer1kPromptTokens()));
+        }
+        if (request.pointsPer1kCompletionTokens() != null) {
+            model.setPointsPer1kCompletionTokens(Math.max(0, request.pointsPer1kCompletionTokens()));
+        }
+        if (request.costInputCnyPer1mPeak() != null) {
+            model.setCostInputCnyPer1mPeak(request.costInputCnyPer1mPeak());
+        }
+        if (request.costInputCnyPer1mOffpeak() != null) {
+            model.setCostInputCnyPer1mOffpeak(request.costInputCnyPer1mOffpeak());
+        }
+        if (request.costOutputCnyPer1mPeak() != null) {
+            model.setCostOutputCnyPer1mPeak(request.costOutputCnyPer1mPeak());
+        }
+        if (request.costOutputCnyPer1mOffpeak() != null) {
+            model.setCostOutputCnyPer1mOffpeak(request.costOutputCnyPer1mOffpeak());
         }
 
         model = systemModelRepository.save(model);

@@ -89,12 +89,51 @@ def upsert_env(path: Path, updates: dict[str, str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def patch_admin_login(token: str) -> None:
+    """只补后台登录地址，保留图标等已有字段。"""
+    admin_url = "https://chat-admin.aimatex.com"
+    # 不用 q=：Account 侧 description 等字段为 CLOB 时 lower(q) 会 500
+    _, page = http_json("GET", "/api/admin/platforms?size=100", token=token)
+    items = page.get("items") or []
+    target = next(
+        (p for p in items if p.get("clientId") == CLIENT_ID or p.get("code") == "chat"),
+        None,
+    )
+    if not target:
+        raise SystemExit("chat platform not found")
+    body = {
+        "code": target.get("code"),
+        "name": target.get("name"),
+        "description": target.get("description"),
+        "homeUrl": target.get("homeUrl"),
+        "iconUrl": target.get("iconUrl"),
+        "backgroundUrl": target.get("backgroundUrl"),
+        "adminLoginUrl": admin_url,
+        "healthUrl": target.get("healthUrl"),
+        "clientId": target.get("clientId"),
+        "companyId": target.get("companyId"),
+        "enabled": target.get("enabled"),
+        "sortOrder": target.get("sortOrder"),
+    }
+    _, updated = http_json("PUT", f"/api/admin/platforms/{target['id']}", body, token=token)
+    print(
+        "patched",
+        updated.get("code"),
+        updated.get("clientId"),
+        "adminLoginUrl=",
+        updated.get("adminLoginUrl"),
+    )
+
+
 def main() -> int:
     ops = {}
     ops.update(load_env(NAS_SECRETS / "aimatex-nas.env"))
     ops.update(load_env(NAS_SECRETS / "ops.env"))
     token = admin_login(ops)
     print("admin login ok")
+    if "--patch-admin-url" in sys.argv:
+        patch_admin_login(token)
+        return 0
 
     _, resp = http_json(
         "POST",
@@ -108,6 +147,8 @@ def main() -> int:
                 "http://localhost:5173/oauth/callback"
             ),
             "homeUrl": "https://chat.aimatex.com",
+            "adminLoginUrl": "https://chat-admin.aimatex.com",
+            "healthUrl": "https://chat-api.aimatex.com/actuator/health",
             "description": "OpenForgeX / AIMATEX Chat — Autonomous Agent",
             "platformCode": "chat",
             "platformName": "AIMATEX Chat",

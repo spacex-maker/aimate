@@ -4,6 +4,7 @@ import com.openforge.aimate.auth.dto.AuthResponse;
 import com.openforge.aimate.auth.dto.LoginRequest;
 import com.openforge.aimate.auth.dto.RegisterRequest;
 import com.openforge.aimate.auth.oidc.AccountOidcService;
+import com.openforge.aimate.billing.PointsService;
 import com.openforge.aimate.config.OidcProperties;
 import com.openforge.aimate.domain.User;
 import com.openforge.aimate.repository.UserRepository;
@@ -31,6 +32,7 @@ public class AuthService {
     private final JwtUtil jwtUtil;
     private final OidcProperties oidcProperties;
     private final AccountOidcService accountOidcService;
+    private final PointsService pointsService;
 
     @Transactional
     public AuthResponse register(RegisterRequest req) {
@@ -54,6 +56,7 @@ public class AuthService {
         user.setStatus(User.Status.ACTIVE);
 
         User saved = userRepository.save(user);
+        pointsService.grantRegisterGiftIfConfigured(saved.getId());
         log.info("[Auth] New user registered: id={}, username={}", saved.getId(), saved.getUsername());
 
         String token = jwtUtil.generate(saved.getId(), saved.getUsername(), saved.getRole().name());
@@ -138,7 +141,9 @@ public class AuthService {
                 : email);
         user.setStatus(User.Status.ACTIVE);
         user.setRole(User.Role.USER);
-        return userRepository.save(user);
+        User saved = userRepository.save(user);
+        pointsService.grantRegisterGiftIfConfigured(saved.getId());
+        return saved;
     }
 
     private String uniqueUsernameFromEmail(String email) {

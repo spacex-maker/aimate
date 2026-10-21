@@ -2,7 +2,6 @@ package com.openforge.aimate.agent;
 
 import com.openforge.aimate.agent.dto.SystemModelDto;
 import com.openforge.aimate.repository.SystemModelRepository;
-import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -15,10 +14,13 @@ import java.util.List;
  */
 @RestController
 @RequestMapping("/api/agent/system-models")
-@RequiredArgsConstructor
 public class SystemModelController {
 
     private final SystemModelRepository systemModelRepository;
+
+    public SystemModelController(SystemModelRepository systemModelRepository) {
+        this.systemModelRepository = systemModelRepository;
+    }
 
     @GetMapping
     public ResponseEntity<List<SystemModelDto>> list() {

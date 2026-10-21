@@ -9,8 +9,10 @@
  */
 
 import toast from 'react-hot-toast'
+import { isAdminHost } from '../lib/host'
 
 const AUTH_KEY = 'ofx_auth_user'
+const ADMIN_TOKEN_KEY = 'chat_admin_jwt'
 const DEFAULT_LOCAL_BACKEND = 'http://localhost:9299'
 
 function isLocalHost(): boolean {
@@ -41,6 +43,9 @@ export function fullUrl(path: string): string {
 }
 
 function getToken(): string | null {
+  if (isAdminHost()) {
+    return localStorage.getItem(ADMIN_TOKEN_KEY)
+  }
   try {
     const raw = localStorage.getItem(AUTH_KEY)
     if (!raw) return null
@@ -51,6 +56,14 @@ function getToken(): string | null {
 }
 
 function handleUnauthorized(): never {
+  if (isAdminHost()) {
+    localStorage.removeItem(ADMIN_TOKEN_KEY)
+    toast.error('后台会话已失效，请重新登录')
+    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+      window.location.href = '/login'
+    }
+    throw new Error('未授权（401）')
+  }
   // 只提示，不再清理本地登录状态，避免单个接口 401 把整个前端“登出”
   toast.error('接口未授权（401），请检查登录状态或权限')
   throw new Error('未授权（401）')

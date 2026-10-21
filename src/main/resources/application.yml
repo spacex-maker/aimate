@@ -26,6 +26,21 @@ spring:
 
 server:
   port: 9299
+  tomcat:
+    max-http-form-post-size: 20MB
+    max-swallow-size: 20MB
+
+# Chat 专用 COS（与 NAS / Account 分桶）；密钥优先 AIMATEX_CHAT_COS_*，否则用 TENCENTCLOUD_*
+aimatex:
+  chat:
+    cos:
+      enabled: ${AIMATEX_CHAT_COS_ENABLED:true}
+      secret-id: ${AIMATEX_CHAT_COS_SECRET_ID:${TENCENTCLOUD_SECRET_ID:}}
+      secret-key: ${AIMATEX_CHAT_COS_SECRET_KEY:${TENCENTCLOUD_SECRET_KEY:}}
+      # 上两行：优先 Chat 专用密钥，否则回落到腾讯云主账号密钥
+      bucket: ${AIMATEX_CHAT_COS_BUCKET:aimatex-chat-1258150206}
+      region: ${AIMATEX_CHAT_COS_REGION:ap-nanjing}
+      path-prefix: ${AIMATEX_CHAT_COS_PREFIX:chat/}
 
 resilience4j:
   circuitbreaker:
@@ -47,3 +62,17 @@ management:
 app:
   jwt:
     expiration-ms: 86400000
+
+# 运营后台 bootstrap（仅 admin_users 为空时创建）；产线用环境变量覆盖
+aimate:
+  admin:
+    bootstrap-email: ${AIMATE_ADMIN_BOOTSTRAP_EMAIL:}
+    bootstrap-password: ${AIMATE_ADMIN_BOOTSTRAP_PASSWORD:}
+    bootstrap-display-name: ${AIMATE_ADMIN_BOOTSTRAP_DISPLAY_NAME:超级管理员}
+  # Chat → Soul 统一记忆（默认关；打开后走 PLATFORM soul，并停 dump 写入）
+  soul-memory:
+    enabled: ${AIMATE_SOUL_MEMORY_ENABLED:false}
+    api-base: ${AIMATE_SOUL_API_BASE:https://soul-api.aimatex.com/api/v1/soul}
+    platform-ensure-url: ${AIMATE_SOUL_PLATFORM_ENSURE_URL:https://soul-api.aimatex.com/api/v1/platform/souls/ensure}
+    platform-key: ${AIMATE_SOUL_PLATFORM_KEY:}
+    platform-code: ${AIMATE_SOUL_PLATFORM_CODE:aimatex-chat}

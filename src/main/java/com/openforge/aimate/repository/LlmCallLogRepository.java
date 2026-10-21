@@ -19,7 +19,7 @@ public interface LlmCallLogRepository extends JpaRepository<LlmCallLog, Long> {
                    coalesce(sum(l.promptTokens), 0),
                    coalesce(sum(l.completionTokens), 0),
                    coalesce(sum(l.totalTokens), 0),
-                   coalesce(sum(l.estimatedCostUsd), 0.0),
+                   coalesce(sum(coalesce(l.estimatedCostCny, l.estimatedCostUsd)), 0.0),
                    count(l)
             from LlmCallLog l
             where (:userId is null or l.userId = :userId)

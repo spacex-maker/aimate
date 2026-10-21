@@ -18,7 +18,15 @@ public record SystemModelDto(
         @JsonProperty("apiKeyConfigKey") String apiKeyConfigKey,
         @JsonProperty("sortOrder")    int sortOrder,
         @JsonProperty("enabled")      boolean enabled,
-        @JsonProperty("description")  String description
+        @JsonProperty("description")  String description,
+        @JsonProperty("tip")          String tip,
+        @JsonProperty("supportsVision") boolean supportsVision,
+        @JsonProperty("pointsPer1kPromptTokens") int pointsPer1kPromptTokens,
+        @JsonProperty("pointsPer1kCompletionTokens") int pointsPer1kCompletionTokens,
+        @JsonProperty("costInputCnyPer1mPeak") Double costInputCnyPer1mPeak,
+        @JsonProperty("costInputCnyPer1mOffpeak") Double costInputCnyPer1mOffpeak,
+        @JsonProperty("costOutputCnyPer1mPeak") Double costOutputCnyPer1mPeak,
+        @JsonProperty("costOutputCnyPer1mOffpeak") Double costOutputCnyPer1mOffpeak
 ) {
     public static SystemModelDto from(SystemModel m) {
         if (m == null || m.getId() == null) return null;
@@ -31,7 +39,15 @@ public record SystemModelDto(
                 m.getApiKeyConfigKey(),
                 m.getSortOrder(),
                 m.isEnabled(),
-                m.getDescription()
+                m.getDescription(),
+                m.getTip(),
+                m.isSupportsVision(),
+                m.getPointsPer1kPromptTokens(),
+                m.getPointsPer1kCompletionTokens(),
+                m.getCostInputCnyPer1mPeak(),
+                m.getCostInputCnyPer1mOffpeak(),
+                m.getCostOutputCnyPer1mPeak(),
+                m.getCostOutputCnyPer1mOffpeak()
         );
     }
 }

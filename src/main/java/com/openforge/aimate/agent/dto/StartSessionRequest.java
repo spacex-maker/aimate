@@ -1,7 +1,8 @@
 package com.openforge.aimate.agent.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import jakarta.validation.constraints.NotBlank;
+
+import java.util.List;
 import jakarta.validation.constraints.Size;
 
 /**
@@ -12,7 +13,6 @@ import jakarta.validation.constraints.Size;
  */
 public record StartSessionRequest(
 
-        @NotBlank(message = "task must not be blank")
         @Size(max = 4000, message = "task must not exceed 4000 characters")
         String task,
 
@@ -25,5 +25,8 @@ public record StartSessionRequest(
         Long systemModelId,
 
         @JsonProperty("userApiKeyId")
-        Long userApiKeyId
+        Long userApiKeyId,
+
+        @JsonProperty("images")
+        List<String> images
 ) {}

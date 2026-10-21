@@ -32,15 +32,20 @@ public class SecurityConfig {
             // No session — JWT is the only state
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                // Public — login, register, health
+                // Public — login, register, health, admin captcha/login/SSO
                 .requestMatchers(
                     "/api/auth/**",
                     "/api/auth/oidc/**",
+                    "/api/admin/auth/captcha",
+                    "/api/admin/auth/login",
+                    "/api/admin/auth/staff-handoff",
+                    "/api/health",
                     "/actuator/health",
+                    "/api/pay/**",
                     // WebSocket handshake (SockJS)
                     "/ws/**"
                 ).permitAll()
-                // Admin-only APIs
+                // Admin-only APIs（含 /api/admin/auth/me）
                 .requestMatchers("/api/admin/**").hasAuthority("ADMIN")
                 // Everything else requires a valid JWT
                 .anyRequest().authenticated()
@@ -71,6 +76,8 @@ public class SecurityConfig {
                 "https://*.netlify.app",
                 "http://chat.aimatex.com",
                 "https://chat.aimatex.com",
+                "http://chat-admin.aimatex.com",
+                "https://chat-admin.aimatex.com",
                 "http://agent.aimatex.com",
                 "https://agent.aimatex.com",
                 "https://*.aimatex.com"

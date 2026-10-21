@@ -53,7 +53,7 @@ export const agentApi = {
 
   continueSession: (
     sessionId: string,
-    body: { message: string; modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null }
+    body: { message: string; modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null; images?: string[] }
   ) =>
     http<SessionResponse>(`${BASE}/${sessionId}/continue`, {
       method: 'POST',

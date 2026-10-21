@@ -38,6 +38,7 @@ export function HomePage() {
       modelSource?: 'SYSTEM' | 'USER_KEY'
       systemModelId?: number | null
       userApiKeyId?: number | null
+      images?: string[]
     }) => agentApi.startSession(payload),
     onSuccess: (session) => {
       queryClient.invalidateQueries({ queryKey: ['recent-sessions'] })
@@ -110,7 +111,8 @@ export function HomePage() {
         value={task}
         onChange={setTask}
         onSubmit={(opts) => {
-          if (!task.trim()) return
+          const text = task.trim()
+          if (!text && !(opts?.images && opts.images.length > 0)) return
           if (opts?.modelSource) {
             setSelection({
               source: opts.modelSource,
@@ -119,11 +121,13 @@ export function HomePage() {
             })
           }
           startMutation.mutate({
-            task: task.trim(),
+            task: text,
             modelSource: opts?.modelSource,
             systemModelId: opts?.systemModelId ?? null,
             userApiKeyId: opts?.userApiKeyId ?? null,
+            images: opts?.images,
           })
+          setTask('')
         }}
         selectedSystemModelId={selection?.source === 'SYSTEM' ? selection.systemModelId ?? null : null}
         placeholder="描述你想让 Agent 完成的任务，Enter 发送 · Shift+Enter 换行"

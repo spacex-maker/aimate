@@ -1,5 +1,5 @@
 import React from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
 import { ModelSelectionProvider } from './state/modelSelection.ts'
@@ -16,7 +16,7 @@ import { MemoryPage } from './pages/MemoryPage'
 import { ApiKeyPage } from './pages/ApiKeyPage'
 import { EmbeddingModelPage } from './pages/EmbeddingModelPage'
 import { ToolsPage } from './pages/ToolsPage'
-import { AdminContainerPage } from './pages/AdminContainerPage'
+import { ADMIN_SITE_ORIGIN } from './lib/host'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -89,13 +89,19 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ModelSelectionProvider>
         <ChatInputProvider>
-        <BrowserRouter future={{ v7_relativeSplatPath: true }}>
         <Routes>
           {/* ── Public routes (no sidebar) ─────────────────────────────── */}
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
+          {/* 旧后台入口 → 独立子域 */}
+          <Route
+            path="/admin/*"
+            element={
+              <NavigateToAdmin />
+            }
+          />
 
           {/* ── Protected routes (require login) ──────────────────────── */}
           <Route
@@ -162,17 +168,6 @@ export default function App() {
             }
           />
 
-          <Route
-            path="/admin/containers"
-            element={
-              <RequireAuth>
-                <AppLayout>
-                  <AdminContainerPage />
-                </AppLayout>
-              </RequireAuth>
-            }
-          />
-
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -188,9 +183,19 @@ export default function App() {
             },
           }}
         />
-      </BrowserRouter>
       </ChatInputProvider>
       </ModelSelectionProvider>
     </QueryClientProvider>
+  )
+}
+
+function NavigateToAdmin() {
+  React.useEffect(() => {
+    window.location.replace(ADMIN_SITE_ORIGIN)
+  }, [])
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-[#0d0d0d] text-white/60 text-sm">
+      正在前往运营后台…
+    </div>
   )
 }

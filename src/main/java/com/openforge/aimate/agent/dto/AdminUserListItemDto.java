@@ -18,6 +18,7 @@ public record AdminUserListItemDto(
         @JsonProperty("displayName") String displayName,
         @JsonProperty("status")     String status,
         @JsonProperty("role")        String role,
+        @JsonProperty("pointsBalance") long pointsBalance,
         @JsonProperty("createTime")  LocalDateTime createTime,
         @JsonProperty("lastLoginTime") LocalDateTime lastLoginTime
 ) {
@@ -30,6 +31,7 @@ public record AdminUserListItemDto(
                 u.getDisplayName(),
                 u.getStatus() != null ? u.getStatus().name() : null,
                 u.getRole() != null ? u.getRole().name() : null,
+                u.getPointsBalance(),
                 u.getCreateTime(),
                 u.getLastLoginTime()
         );

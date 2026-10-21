@@ -16,6 +16,10 @@ import java.util.Date;
 @Component
 public class JwtUtil {
 
+    public static final String TYP_USER = "user";
+    public static final String TYP_ADMIN = "admin";
+    public static final String AUD_ADMIN = "chat-admin";
+
     private final SecretKey key;
     private final long      expirationMs;
 
@@ -31,8 +35,24 @@ public class JwtUtil {
         long now = System.currentTimeMillis();
         return Jwts.builder()
                 .subject(String.valueOf(userId))
+                .claim("typ", TYP_USER)
                 .claim("username", username)
                 .claim("role", role)
+                .issuedAt(new Date(now))
+                .expiration(new Date(now + expirationMs))
+                .signWith(key)
+                .compact();
+    }
+
+    /** 运营后台 JWT（admin_users），与用户会话隔离。 */
+    public String generateAdmin(Long adminId, String email) {
+        long now = System.currentTimeMillis();
+        return Jwts.builder()
+                .subject(String.valueOf(adminId))
+                .claim("typ", TYP_ADMIN)
+                .claim("aud", AUD_ADMIN)
+                .claim("email", email)
+                .claim("role", "ADMIN")
                 .issuedAt(new Date(now))
                 .expiration(new Date(now + expirationMs))
                 .signWith(key)
@@ -74,5 +94,26 @@ public class JwtUtil {
         } catch (JwtException | IllegalArgumentException e) {
             return null;
         }
+    }
+
+    public String extractTyp(String token) {
+        try {
+            String typ = parse(token).get("typ", String.class);
+            return typ != null ? typ : TYP_USER;
+        } catch (JwtException | IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    public String extractEmail(String token) {
+        try {
+            return parse(token).get("email", String.class);
+        } catch (JwtException | IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    public boolean isAdminToken(String token) {
+        return TYP_ADMIN.equals(extractTyp(token));
     }
 }

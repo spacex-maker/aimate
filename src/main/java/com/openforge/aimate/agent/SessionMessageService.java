@@ -142,7 +142,8 @@ public class SessionMessageService {
                             "assistant".equals(r.getRole()) ? r.getThinkingContent() : null,
                             toolCalls,
                             thinkingBlocks,
-                            createTimeStr
+                            createTimeStr,
+                            readImageDataUrls(r)
                     );
                 })
                 .collect(Collectors.toList());
@@ -183,7 +184,8 @@ public class SessionMessageService {
                             "assistant".equals(r.getRole()) ? r.getThinkingContent() : null,
                             toolCalls,
                             thinkingBlocks,
-                            createTimeStr
+                            createTimeStr,
+                            readImageDataUrls(r)
                     );
                 })
                 .collect(Collectors.toList());
@@ -482,11 +484,20 @@ public class SessionMessageService {
                 log.warn("[SessionMessage] Failed to serialize tool_calls for seq {}: {}", seq, e.getMessage());
             }
         }
+        String attachmentsJson = null;
+        if ("user".equals(m.role()) && m.imageDataUrls() != null && !m.imageDataUrls().isEmpty()) {
+            try {
+                attachmentsJson = objectMapper.writeValueAsString(m.imageDataUrls());
+            } catch (JsonProcessingException e) {
+                log.warn("[SessionMessage] Failed to serialize images for seq {}: {}", seq, e.getMessage());
+            }
+        }
         SessionMessage e = SessionMessage.builder()
                 .agentSession(session)
                 .seq(seq)
                 .role(m.role())
                 .content(m.content())
+                .attachmentsJson(attachmentsJson)
                 .toolCallId(m.toolCallId())
                 .toolCallsJson(toolCallsJson)
                 .build();
@@ -518,6 +529,19 @@ public class SessionMessageService {
                 .toolCalls(toolCalls)
                 .toolCallId(row.getToolCallId())
                 .reasoningContent(reasoningContent)
+                .imageDataUrls(readImageDataUrls(row))
                 .build();
+    }
+
+    private List<String> readImageDataUrls(SessionMessage row) {
+        if (!"user".equals(row.getRole()) || row.getAttachmentsJson() == null || row.getAttachmentsJson().isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(row.getAttachmentsJson(), new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
+        } catch (JsonProcessingException e) {
+            log.warn("[SessionMessage] Failed to deserialize images for id {}: {}", row.getId(), e.getMessage());
+            return null;
+        }
     }
 }

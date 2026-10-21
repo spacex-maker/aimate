@@ -23,10 +23,13 @@ import com.openforge.aimate.llm.model.Message;
 import com.openforge.aimate.llm.model.Tool;
 import com.openforge.aimate.llm.model.ToolCall;
 import com.openforge.aimate.llm.model.ToolFunction;
+import com.openforge.aimate.billing.InsufficientPointsException;
 import com.openforge.aimate.config.SystemConfigService;
+import com.openforge.aimate.storage.ChatCosStorageService;
 import com.openforge.aimate.memory.LongTermMemoryService;
 import com.openforge.aimate.memory.MemoryRecord;
 import com.openforge.aimate.memory.MemoryType;
+import com.openforge.aimate.memory.SoulMemoryBridge;
 import com.openforge.aimate.domain.UserToolSettings;
 import com.openforge.aimate.repository.AgentSessionRepository;
 import com.openforge.aimate.repository.AgentToolRepository;
@@ -126,6 +129,7 @@ public class AgentLoopService {
     private final AgentSessionRepository sessionRepository;
     private final AgentToolRepository    toolRepository;
     private final LongTermMemoryService  memoryService;
+    private final SoulMemoryBridge       soulMemoryBridge;
     private final ToolIndexService       toolIndexService;
     private final UserToolSettingsService userToolSettingsService;
     private final SessionMessageService  sessionMessageService;
@@ -141,11 +145,13 @@ public class AgentLoopService {
     private final LlmCallLogService      llmCallLogService;
     private final UserDefaultModelRepository userDefaultModelRepository;
     private final UserApiKeyRepository       userApiKeyRepository;
+    private final ChatCosStorageService      chatCosStorageService;
 
     // Tracks which exact contents have already been stored via store_memory
     // in this JVM, per sessionId, to avoid spamming duplicate memories.
     private final Map<String, Set<String>> sessionStoredMemories =
             new ConcurrentHashMap<>();
+    private final Map<String, java.util.List<String>> openingImages = new ConcurrentHashMap<>();
 
     // ── Entry point ──────────────────────────────────────────────────────────
 
@@ -159,6 +165,14 @@ public class AgentLoopService {
     public void run(AgentSession session) {
         ScopedValue.where(SESSION_SCOPE, session.getSessionId())
                 .run(() -> executeLoop(session));
+    }
+
+    /** 新建会话首条用户消息可带图片，只在首轮写入消息表时消费一次。 */
+    public void run(AgentSession session, java.util.List<String> openingImageDataUrls) {
+        if (openingImageDataUrls != null && !openingImageDataUrls.isEmpty()) {
+            openingImages.put(session.getSessionId(), java.util.List.copyOf(openingImageDataUrls));
+        }
+        run(session);
     }
 
     /**
@@ -215,6 +229,8 @@ public class AgentLoopService {
                                         latencyMs,
                                         response
                                 );
+                            } catch (InsufficientPointsException e) {
+                                throw e;
                             } catch (Exception e) {
                                 log.warn("[Agent:{}] Failed to log LLM call: {}", session.getSessionId(), e.getMessage());
                             }
@@ -248,6 +264,8 @@ public class AgentLoopService {
                                         latencyMs,
                                         response
                                 );
+                            } catch (InsufficientPointsException e) {
+                                throw e;
                             } catch (Exception e) {
                                 log.warn("[Agent:{}] Failed to log LLM call: {}", session.getSessionId(), e.getMessage());
                             }
@@ -283,6 +301,8 @@ public class AgentLoopService {
                                 latencyMs,
                                 response
                         );
+                    } catch (InsufficientPointsException e) {
+                        throw e;
                     } catch (Exception e) {
                         log.warn("[Agent:{}] Failed to log LLM call: {}", session.getSessionId(), e.getMessage());
                     }
@@ -309,6 +329,8 @@ public class AgentLoopService {
                                 latencyMs,
                                 response
                         );
+                    } catch (InsufficientPointsException e) {
+                        throw e;
                     } catch (Exception e) {
                         log.warn("[Agent:{}] Failed to log LLM call: {}", session.getSessionId(), e.getMessage());
                     }
@@ -383,6 +405,10 @@ public class AgentLoopService {
         }
 
         if (apiKey == null || apiKey.isBlank()) {
+            apiKey = systemConfigService.defaultApiKeyForProvider(provider).orElse(null);
+        }
+
+        if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("[Agent] SystemModel id=%d provider=%s 未配置有效的 API Key（api_key_config_key=%s）"
                     .formatted(m.getId(), provider, keyCfg));
         }
@@ -448,6 +474,7 @@ public class AgentLoopService {
                 String displayAnswer = (result.finalAnswer() != null && !result.finalAnswer().isBlank())
                         ? result.finalAnswer()
                         : (result.thinkingContent() != null && !result.thinkingContent().isEmpty() ? FALLBACK_EMPTY_ANSWER : "");
+                displayAnswer = persistReplyImages(displayAnswer);
                 sessionMessageService.saveNewVersion(placeholderId, displayAnswer, result.thinkingContent(), result.thinkingBlocks());
                 session = sessionRepository.findBySessionId(sessionId).orElseThrow();
                 session.setResult(displayAnswer);
@@ -469,7 +496,8 @@ public class AgentLoopService {
             }
         } catch (Exception e) {
             log.error("[Agent:{}] Exception in placeholder run {}: {}", sessionId, placeholderId, e.getMessage(), e);
-            sessionMessageService.updateAssistantMessage(placeholderId, null, SessionMessage.STATUS_INTERRUPTED);
+            String reason = e.getMessage() != null && !e.getMessage().isBlank() ? e.getMessage() : "回答失败";
+            sessionMessageService.updateAssistantMessage(placeholderId, reason, SessionMessage.STATUS_INTERRUPTED);
             session = sessionRepository.findBySessionId(sessionId).orElse(session);
             if (!sessionMessageService.hasAnyAnswering(session.getId())) {
                 failSession(session, e.getMessage());
@@ -532,6 +560,7 @@ public class AgentLoopService {
                 String displayAnswer = (result.finalAnswer() != null && !result.finalAnswer().isBlank())
                         ? result.finalAnswer()
                         : (result.thinkingContent() != null && !result.thinkingContent().isEmpty() ? FALLBACK_EMPTY_ANSWER : "");
+                displayAnswer = persistReplyImages(displayAnswer);
                 sessionMessageService.saveNewVersion(assistantId, displayAnswer, result.thinkingContent(), result.thinkingBlocks());
                 session = sessionRepository.findBySessionId(sessionId).orElseThrow();
                 session.setResult(displayAnswer);
@@ -572,7 +601,7 @@ public class AgentLoopService {
             String systemPrompt = buildSystemPrompt();
             sessionMessageService.replaceAll(session, List.of(
                     Message.system(systemPrompt),
-                    Message.user(session.getTaskDescription())
+                    Message.user(session.getTaskDescription(), openingImages.remove(sessionId))
             ));
         }
         SessionMessage placeholder = sessionMessageService.createPlaceholderAssistant(session);
@@ -604,6 +633,9 @@ public class AgentLoopService {
             publisher.publish(AgentEvent.iterationStart(sessionId, iteration));
 
             List<Message> context = contextService.load(session);
+            if (!sessionSupportsVision(session)) {
+                context = context.stream().map(Message::withoutImages).toList();
+            }
             String        queryForTools = lastUserMessageFrom(context, session.getTaskDescription());
             List<Tool>    tools   = loadRelevantTools(queryForTools, TOP_K_TOOLS, userId);
             ChatRequest   request = ChatRequest.withTools("", context, tools.isEmpty() ? null : tools);
@@ -697,6 +729,9 @@ public class AgentLoopService {
                     null
             ));
 
+            if (!sessionSupportsVision(session)) {
+                context = context.stream().map(Message::withoutImages).toList();
+            }
             String queryForTools = lastUserMessageFrom(context, session.getTaskDescription());
             List<Tool> tools = loadRelevantTools(queryForTools, TOP_K_TOOLS, userId);
             java.util.Set<String> haveNames = new java.util.HashSet<>();
@@ -831,8 +866,33 @@ public class AgentLoopService {
      * Build the system prompt. Memory is not pre-injected; the agent uses
      * recall_memory when it needs past/user information (intent → recall → answer).
      */
+    private String persistReplyImages(String answer) {
+        if (answer == null || answer.isBlank() || FALLBACK_EMPTY_ANSWER.equals(answer)) return answer;
+        try {
+            return chatCosStorageService.persistImagesInText(answer);
+        } catch (Exception e) {
+            log.warn("[Agent] persist reply images failed: {}", e.getMessage());
+            return answer;
+        }
+    }
+
+    private boolean sessionSupportsVision(AgentSession session) {
+        Long userId = session.getUserId();
+        if (userId == null) return false;
+        return userDefaultModelRepository.findByUserId(userId)
+                .filter(udm -> "SYSTEM".equalsIgnoreCase(udm.getSource()))
+                .map(com.openforge.aimate.domain.UserDefaultModel::getSystemModel)
+                .map(com.openforge.aimate.domain.SystemModel::isSupportsVision)
+                .orElse(false);
+    }
+
     private String buildSystemPrompt() {
-        return BASE_SYSTEM_PROMPT;
+        if (systemConfigService.isRagMemoryEnabled()) return BASE_SYSTEM_PROMPT;
+        return BASE_SYSTEM_PROMPT
+                .replaceAll("(?m)^[ \\t]*- recall_memory:.*\\R", "")
+                .replaceAll("(?m)^[ \\t]*- store_memory:.*\\R", "")
+                .replaceAll("(?s)\\n[ \\t]*Memory writing rules \\(VERY IMPORTANT\\):.*?\\n[ \\t]*\\n[ \\t]*When you can answer",
+                        "\n            When you can answer");
     }
 
     /**
@@ -840,6 +900,9 @@ public class AgentLoopService {
      * This is the primary mechanism by which the Agent "learns" across sessions.
      */
     private void storeCompletionMemory(String sessionId, String task, String answer, Long userId) {
+        if (!systemConfigService.isRagMemoryEnabled()) return;
+        // Soul 模式下禁止 transcript dump；只保留显式 store_memory
+        if (soulMemoryBridge.isEnabled()) return;
         String memoryContent = "Task: %s\nAnswer: %s".formatted(
                 task.substring(0, Math.min(200, task.length())),
                 answer.substring(0, Math.min(500, answer.length())));
@@ -876,6 +939,8 @@ public class AgentLoopService {
      * Avoids storing stub results or short error messages.
      */
     private void maybeRememberToolResult(String sessionId, String toolName, String result, Long userId) {
+        if (!systemConfigService.isRagMemoryEnabled()) return;
+        if (soulMemoryBridge.isEnabled()) return; // Soul：禁止工具结果 dump
         if (result == null || result.startsWith("[STUB]") || result.startsWith("[ToolError]")) return;
 
         // 内置的 store_memory 已经在 executeStoreMemoryTool 中把真正重要的内容
@@ -898,6 +963,9 @@ public class AgentLoopService {
         log.info("[Agent:{}] Executing tool: {} args={}", sessionId, toolName, arguments);
 
         // Built-in: recall_memory — retrieve relevant long-term memories (intent → recall → then answer)
+        if ("recall_memory".equals(toolName) || "store_memory".equals(toolName)) {
+            if (!systemConfigService.isRagMemoryEnabled()) return "记忆系统已关闭";
+        }
         if ("recall_memory".equals(toolName)) {
             return executeRecallMemoryTool(sessionId, arguments, userId);
         }
@@ -949,10 +1017,11 @@ public class AgentLoopService {
                 return "[ToolError] recall_memory requires a non-empty 'query' (e.g. user's name, user preferences, past topic).";
             }
             topK = Math.min(20, Math.max(1, topK));
-            List<MemoryRecord> memories = memoryService.recall(query, topK, userId);
-            // 如果主召回路径没有命中（例如索引或阈值问题），退回到与前端相同的 searchMemories 逻辑，
-            // 确保压缩后的记忆、历史记忆都能被 AI 找到。
-            if (memories.isEmpty()) {
+            List<MemoryRecord> memories = soulMemoryBridge.isEnabled()
+                    ? soulMemoryBridge.recall(query, topK, userId)
+                    : memoryService.recall(query, topK, userId);
+            // 旧 VectorDB 回退；Soul 模式下不再查腾讯云
+            if (memories.isEmpty() && !soulMemoryBridge.isEnabled()) {
                 List<com.openforge.aimate.memory.MemoryItem> items =
                         memoryService.searchMemories(query, topK, userId);
                 memories = new java.util.ArrayList<>();
@@ -1017,7 +1086,11 @@ public class AgentLoopService {
                 currentUserId = sessionRepository.findBySessionId(sessionId)
                         .map(com.openforge.aimate.domain.AgentSession::getUserId).orElse(null);
             } catch (Exception ignored) {}
-            memoryService.remember(sessionId, content, memType, importance, currentUserId);
+            if (soulMemoryBridge.isEnabled()) {
+                soulMemoryBridge.store(content, memType.name(), importance, currentUserId);
+            } else {
+                memoryService.remember(sessionId, content, memType, importance, currentUserId);
+            }
             return "Memory stored successfully.";
         } catch (Exception e) {
             return "[ToolError] store_memory failed: " + e.getMessage();
@@ -1519,7 +1592,8 @@ public class AgentLoopService {
      */
     private List<Tool> ensureSystemToolsFirst(List<Tool> tools, Long userId) {
         UserToolSettings settings = userToolSettingsService.getOrCreate(userId);
-        boolean memoryEnabled = settings == null || Boolean.TRUE.equals(settings.getMemoryEnabled());
+        boolean memoryEnabled = systemConfigService.isRagMemoryEnabled()
+                && (settings == null || Boolean.TRUE.equals(settings.getMemoryEnabled()));
         boolean webSearchEnabled = settings == null || Boolean.TRUE.equals(settings.getWebSearchEnabled());
         boolean createToolEnabled = settings == null || Boolean.TRUE.equals(settings.getCreateToolEnabled());
         boolean scriptExecEnabled = settings == null || Boolean.TRUE.equals(settings.getScriptExecEnabled());

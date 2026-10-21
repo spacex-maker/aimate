@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react'
 import type React from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { X, Activity, Box, RefreshCw, Users, SlidersHorizontal, Receipt } from 'lucide-react'
 import clsx from 'clsx'
@@ -175,7 +176,7 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
   )
 }
 
-function ContainerMonitorContent() {
+export function ContainerMonitorContent() {
   const { data = [], isLoading, isFetching, refetch } = useQuery({
     queryKey: ['admin-containers'],
     queryFn: () => adminApi.listContainers(),
@@ -414,22 +415,138 @@ function ContainerMonitorContent() {
   )
 }
 
-function ModelManageContent() {
+function KeyPicker({
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  value?: string | null
+  options: { value: string; label: string }[]
+  disabled?: boolean
+  onChange: (next: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    if (!open || !buttonRef.current) {
+      setMenuPos(null)
+      return
+    }
+    const rect = buttonRef.current.getBoundingClientRect()
+    const width = Math.max(rect.width, 160)
+    const menuHeight = 208
+    const spaceBelow = window.innerHeight - rect.bottom - 8
+    const openUp = spaceBelow < Math.min(menuHeight, 120) && rect.top > spaceBelow
+    const top = openUp
+      ? Math.max(8, rect.top - Math.min(menuHeight, rect.top - 8) - 4)
+      : rect.bottom + 4
+    let left = rect.left
+    if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8)
+    setMenuPos({ top, left, width })
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    const onScroll = () => setOpen(false)
+    document.addEventListener('mousedown', onDoc)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [open])
+
+  const current = options.find((option) => option.value === value)
+  const label = current?.label ?? (value ? value : '未指定')
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+        className="w-full text-left bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white/80 hover:border-white/30 disabled:opacity-40"
+      >
+        {label}
+      </button>
+      {open &&
+        menuPos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className="fixed z-[80] max-h-52 overflow-auto rounded border border-white/15 bg-[#161616] shadow-xl"
+            style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                onChange(null)
+                setOpen(false)
+              }}
+              className="block w-full text-left px-2 py-1.5 text-xs text-white/50 hover:bg-white/10"
+            >
+              未指定
+            </button>
+            {options.length === 0 ? (
+              <div className="px-2 py-1.5 text-[11px] text-white/35">请先在系统配置添加 DeepSeek Key</div>
+            ) : (
+              options.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    onChange(option.value)
+                    setOpen(false)
+                  }}
+                  className={clsx(
+                    'block w-full text-left px-2 py-1.5 text-xs hover:bg-white/10',
+                    option.value === value ? 'text-blue-300' : 'text-white/80'
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))
+            )}
+          </div>,
+          document.body
+        )}
+    </>
+  )
+}
+
+export function ModelManageContent() {
   const queryClient = useQueryClient()
   const { data: models = [], isLoading } = useQuery({
     queryKey: ['admin-system-models'],
     queryFn: () => adminApi.listAllSystemModels(),
   })
+  const { data: configs = [] } = useQuery({
+    queryKey: ['admin-system-configs'],
+    queryFn: () => adminApi.listSystemConfigs(),
+  })
+  const keyOptions = configs
+    .filter((c) => c.configKey.startsWith('DEEPSEEK_API_KEY'))
+    .map((c) => ({
+      value: c.configKey,
+      label: c.description?.trim() || c.configKey,
+    }))
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, body }: { id: number; body: { enabled?: boolean; sortOrder?: number } }) =>
+    mutationFn: ({ id, body }: { id: number; body: Parameters<typeof adminApi.updateSystemModel>[1] }) =>
       adminApi.updateSystemModel(id, body),
-    onSuccess: (_, { body }) => {
-      if (body.enabled !== undefined) {
-        toast.success(body.enabled ? '已开启该模型' : '已关闭该模型')
-      } else if (body.sortOrder !== undefined) {
-        toast.success('已更新模型优先级')
-      }
+    onSuccess: () => {
+      toast.success('已更新模型')
       queryClient.invalidateQueries({ queryKey: ['admin-system-models'] })
       queryClient.invalidateQueries({ queryKey: ['system-models'] })
     },
@@ -461,7 +578,7 @@ function ModelManageContent() {
     <div className="h-full flex flex-col">
       <div className="mb-4">
         <h3 className="text-sm font-medium text-white">模型管理</h3>
-        <p className="text-xs text-white/40 mt-0.5">开启或关闭模型后，将影响所有用户在「模型选择」与「API 密钥」中可见的选项</p>
+        <p className="text-xs text-white/40 mt-0.5">开启/关闭、API Key、提示，以及用户扣费积分倍率与系统成本单价（CNY/百万 token）。</p>
       </div>
       {isLoading ? (
         <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
@@ -476,6 +593,10 @@ function ModelManageContent() {
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">服务商</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">展示名</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">模型 ID</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40 min-w-[8rem]">提示</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-28">积分/1K</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-36">成本 CNY/1M</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-44">API Key</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-24">启用</th>
               </tr>
             </thead>
@@ -508,6 +629,97 @@ function ModelManageContent() {
                   <td className="py-2 px-3">{m.displayName}</td>
                   <td className="py-2 px-3 font-mono text-white/60">{m.modelId}</td>
                   <td className="py-2 px-3">
+                    <input
+                      type="text"
+                      defaultValue={m.tip ?? ''}
+                      key={`tip-${m.id}-${m.tip ?? ''}`}
+                      disabled={updateMutation.isPending}
+                      placeholder="如：非高峰半价"
+                      onBlur={(e) => {
+                        if (m.id == null) return
+                        const next = e.target.value.trim()
+                        if (next === (m.tip ?? '').trim()) return
+                        updateMutation.mutate({ id: m.id, body: { tip: next } })
+                      }}
+                      className="w-full min-w-[8rem] bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white placeholder:text-white/25 focus:outline-none focus:ring-1 focus:ring-blue-500/70"
+                    />
+                  </td>
+                  <td className="py-2 px-2">
+                    <div className="flex gap-1 items-center">
+                      <input
+                        type="number"
+                        min={0}
+                        defaultValue={m.pointsPer1kPromptTokens ?? 1}
+                        key={`pp-${m.id}-${m.pointsPer1kPromptTokens}`}
+                        title="prompt"
+                        disabled={updateMutation.isPending}
+                        onBlur={(e) => {
+                          const v = Number(e.target.value)
+                          if (!Number.isFinite(v) || v === (m.pointsPer1kPromptTokens ?? 1)) return
+                          updateMutation.mutate({ id: m.id, body: { pointsPer1kPromptTokens: v } })
+                        }}
+                        className="w-12 bg-black/20 border border-white/15 rounded px-1 py-1 text-[11px] text-white"
+                      />
+                      <span className="text-white/25">/</span>
+                      <input
+                        type="number"
+                        min={0}
+                        defaultValue={m.pointsPer1kCompletionTokens ?? 3}
+                        key={`pc-${m.id}-${m.pointsPer1kCompletionTokens}`}
+                        title="completion"
+                        disabled={updateMutation.isPending}
+                        onBlur={(e) => {
+                          const v = Number(e.target.value)
+                          if (!Number.isFinite(v) || v === (m.pointsPer1kCompletionTokens ?? 3)) return
+                          updateMutation.mutate({ id: m.id, body: { pointsPer1kCompletionTokens: v } })
+                        }}
+                        className="w-12 bg-black/20 border border-white/15 rounded px-1 py-1 text-[11px] text-white"
+                      />
+                    </div>
+                  </td>
+                  <td className="py-2 px-2">
+                    <div className="grid grid-cols-2 gap-1">
+                      {(
+                        [
+                          ['costInputCnyPer1mPeak', m.costInputCnyPer1mPeak, 'in高峰'],
+                          ['costInputCnyPer1mOffpeak', m.costInputCnyPer1mOffpeak, 'in闲'],
+                          ['costOutputCnyPer1mPeak', m.costOutputCnyPer1mPeak, 'out高峰'],
+                          ['costOutputCnyPer1mOffpeak', m.costOutputCnyPer1mOffpeak, 'out闲'],
+                        ] as const
+                      ).map(([key, val, label]) => (
+                        <input
+                          key={`${key}-${m.id}-${val ?? ''}`}
+                          type="number"
+                          step="0.1"
+                          min={0}
+                          defaultValue={val ?? ''}
+                          title={label}
+                          placeholder={label}
+                          disabled={updateMutation.isPending}
+                          onBlur={(e) => {
+                            const raw = e.target.value.trim()
+                            const v = raw === '' ? null : Number(raw)
+                            if (raw !== '' && !Number.isFinite(v as number)) return
+                            if (v === (val ?? null)) return
+                            updateMutation.mutate({ id: m.id, body: { [key]: v } })
+                          }}
+                          className="w-full bg-black/20 border border-white/15 rounded px-1 py-0.5 text-[10px] text-white placeholder:text-white/25"
+                        />
+                      ))}
+                    </div>
+                  </td>
+                  <td className="py-2 px-3">
+                    <KeyPicker
+                      value={m.apiKeyConfigKey}
+                      options={keyOptions}
+                      disabled={updateMutation.isPending}
+                      onChange={(next) => {
+                        if (m.id == null) return
+                        updateMutation.mutate({ id: m.id, body: { apiKeyConfigKey: next ?? '' } })
+                      }}
+                    />
+                  </td>
+                  <td className="py-2 px-3">
                     <button
                       type="button"
                       onClick={() => toggleEnabled(m)}
@@ -535,9 +747,10 @@ function ModelManageContent() {
   )
 }
 
-function UserManageContent() {
+export function UserManageContent() {
   const queryClient = useQueryClient()
   const [selectedUser, setSelectedUser] = useState<AdminUserListItem | null>(null)
+  const [ledgerUser, setLedgerUser] = useState<AdminUserListItem | null>(null)
   const { data: users = [], isLoading } = useQuery({
     queryKey: ['admin-users'],
     queryFn: () => adminApi.listUsers(),
@@ -568,7 +781,7 @@ function UserManageContent() {
     <div className="h-full flex flex-col">
       <div className="mb-4">
         <h3 className="text-sm font-medium text-white">用户管理</h3>
-        <p className="text-xs text-white/40 mt-0.5">启用/禁用账号、调整用户角色（USER / ADMIN），配置用户可用的系统工具</p>
+        <p className="text-xs text-white/40 mt-0.5">启用/禁用、角色、积分余额与流水</p>
       </div>
       {isLoading ? (
         <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
@@ -582,11 +795,12 @@ function UserManageContent() {
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">用户名</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">邮箱</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">昵称</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40">积分</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">状态</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">角色</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">注册时间</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">最近登录</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-24 text-right">操作</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-32 text-right">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/10">
@@ -595,6 +809,7 @@ function UserManageContent() {
                   <td className="py-2 px-3 font-mono text-white/90">{u.username}</td>
                   <td className="py-2 px-3 text-white/60">{u.email ?? '—'}</td>
                   <td className="py-2 px-3 text-white/70">{u.displayName ?? '—'}</td>
+                  <td className="py-2 px-3 font-mono text-white/80">{(u.pointsBalance ?? 0).toLocaleString()}</td>
                   <td className="py-2 px-3">
                     <span
                       className={clsx(
@@ -621,7 +836,14 @@ function UserManageContent() {
                   </td>
                   <td className="py-2 px-3 text-white/50">{formatTime(u.createTime)}</td>
                   <td className="py-2 px-3 text-white/50">{formatTime(u.lastLoginTime)}</td>
-                  <td className="py-2 px-3 text-right">
+                  <td className="py-2 px-3 text-right space-x-1">
+                    <button
+                      type="button"
+                      onClick={() => setLedgerUser(u)}
+                      className="inline-flex items-center justify-center px-2 py-1.5 rounded border border-white/25 text-[11px] text-white/80 hover:bg-white/10"
+                    >
+                      流水
+                    </button>
                     <button
                       type="button"
                       onClick={() => setSelectedUser(u)}
@@ -645,13 +867,113 @@ function UserManageContent() {
           onChangeRole={setRole}
         />
       )}
+      {ledgerUser && (
+        <UserLedgerModal
+          user={ledgerUser}
+          onClose={() => {
+            setLedgerUser(null)
+            queryClient.invalidateQueries({ queryKey: ['admin-users'] })
+          }}
+        />
+      )}
     </div>
   )
 }
 
-function BillingManageContent() {
+function UserLedgerModal({ user, onClose }: { user: AdminUserListItem; onClose: () => void }) {
+  const queryClient = useQueryClient()
+  const [page, setPage] = useState(0)
+  const [delta, setDelta] = useState('')
+  const [remark, setRemark] = useState('')
+  const { data, isLoading } = useQuery({
+    queryKey: ['admin-user-ledger', user.id, page],
+    queryFn: () => adminApi.getUserLedger(user.id, { page, size: 20 }),
+  })
+  const adjustMutation = useMutation({
+    mutationFn: () => adminApi.adjustUserPoints(user.id, { delta: Number(delta), remark: remark || undefined }),
+    onSuccess: () => {
+      toast.success('已调整积分')
+      setDelta('')
+      setRemark('')
+      queryClient.invalidateQueries({ queryKey: ['admin-user-ledger', user.id] })
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div className="w-full max-w-md max-h-[80vh] flex flex-col rounded-xl border border-white/15 bg-[#12141a]" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+          <div>
+            <h3 className="text-sm text-white font-medium">{user.username} 积分流水</h3>
+            <p className="text-[11px] text-white/40">余额 {(data?.pointsBalance ?? user.pointsBalance ?? 0).toLocaleString()}</p>
+          </div>
+          <button type="button" onClick={onClose} className="text-white/40 hover:text-white"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="px-4 py-3 border-b border-white/10 flex gap-2 items-center">
+          <input
+            type="number"
+            value={delta}
+            onChange={(e) => setDelta(e.target.value)}
+            placeholder="调整量（可负）"
+            className="flex-1 bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white"
+          />
+          <input
+            type="text"
+            value={remark}
+            onChange={(e) => setRemark(e.target.value)}
+            placeholder="备注"
+            className="flex-1 bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white"
+          />
+          <button
+            type="button"
+            disabled={adjustMutation.isPending || !delta || Number(delta) === 0}
+            onClick={() => adjustMutation.mutate()}
+            className="px-2.5 py-1.5 rounded bg-blue-600 text-xs text-white disabled:opacity-40"
+          >
+            调整
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {isLoading ? (
+            <div className="text-xs text-white/40 text-center py-6">加载中…</div>
+          ) : !(data?.items?.length) ? (
+            <div className="text-xs text-white/30 text-center py-6">暂无流水</div>
+          ) : (
+            data!.items.map((row) => (
+              <div key={row.id} className="rounded border border-white/10 px-2.5 py-2 text-[11px]">
+                <div className="flex justify-between text-white/80">
+                  <span>{row.remark || row.reason}</span>
+                  <span className={clsx('font-mono', row.delta >= 0 ? 'text-emerald-300' : 'text-rose-300')}>
+                    {row.delta > 0 ? '+' : ''}{row.delta}
+                  </span>
+                </div>
+                <div className="mt-1 text-white/35 flex justify-between">
+                  <span>{row.createTime ? new Date(row.createTime).toLocaleString('zh-CN') : '—'}</span>
+                  <span>余额 {row.balanceAfter.toLocaleString()}</span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+        {(data?.totalPages ?? 0) > 1 && (
+          <div className="px-3 py-2 border-t border-white/10 flex justify-center gap-2">
+            <button type="button" disabled={page <= 0} onClick={() => setPage(page - 1)} className="text-[11px] text-white/50 disabled:opacity-30">上一页</button>
+            <span className="text-[11px] text-white/35">{page + 1}/{data?.totalPages}</span>
+            <button type="button" disabled={(page + 1) >= (data?.totalPages ?? 0)} onClick={() => setPage(page + 1)} className="text-[11px] text-white/50 disabled:opacity-30">下一页</button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function BillingManageContent() {
+  const [subTab, setSubTab] = useState<'usage' | 'packages' | 'orders'>('usage')
   const [rangeDays, setRangeDays] = useState<7 | 30 | 90>(30)
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null)
+  const queryClient = useQueryClient()
 
   const fromIso = useMemo(() => {
     const d = new Date()
@@ -662,6 +984,7 @@ function BillingManageContent() {
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['admin-billing-usage', rangeDays],
     queryFn: () => adminApi.getBillingUsage({ from: fromIso }),
+    enabled: subTab === 'usage',
   })
 
   const { data: details = [], isLoading: detailsLoading } = useQuery({
@@ -670,133 +993,298 @@ function BillingManageContent() {
       selectedUserId == null
         ? Promise.resolve([] as BillingUsageDetail[])
         : adminApi.getBillingUsageDetail(selectedUserId, { from: fromIso, limit: 100 }),
-    enabled: selectedUserId != null,
+    enabled: subTab === 'usage' && selectedUserId != null,
+  })
+
+  const { data: packages = [], isLoading: packagesLoading } = useQuery({
+    queryKey: ['admin-point-packages'],
+    queryFn: () => adminApi.listPointPackages(),
+    enabled: subTab === 'packages',
+  })
+
+  const [orderPage, setOrderPage] = useState(0)
+  const [orderStatus, setOrderStatus] = useState('')
+  const { data: orderPageData, isLoading: ordersLoading } = useQuery({
+    queryKey: ['admin-payment-orders', orderPage, orderStatus],
+    queryFn: () => adminApi.listPaymentOrders({ page: orderPage, size: 20, status: orderStatus || undefined }),
+    enabled: subTab === 'orders',
+  })
+
+  const [packForm, setPackForm] = useState({ name: '', priceYuan: '6', points: '600', bonusPoints: '0', description: '' })
+  const createPackMutation = useMutation({
+    mutationFn: () =>
+      adminApi.createPointPackage({
+        name: packForm.name.trim(),
+        priceYuan: Number(packForm.priceYuan),
+        points: Number(packForm.points),
+        bonusPoints: Number(packForm.bonusPoints) || 0,
+        description: packForm.description || undefined,
+        enabled: true,
+        sortOrder: 100,
+      }),
+    onSuccess: () => {
+      toast.success('套餐已创建')
+      setPackForm({ name: '', priceYuan: '6', points: '600', bonusPoints: '0', description: '' })
+      queryClient.invalidateQueries({ queryKey: ['admin-point-packages'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const togglePackMutation = useMutation({
+    mutationFn: (p: { id: number; name: string; priceYuan: number; points: number; bonusPoints: number; enabled: boolean; sortOrder?: number; description?: string | null }) =>
+      adminApi.updatePointPackage(p.id, {
+        name: p.name,
+        priceYuan: Number(p.priceYuan),
+        points: p.points,
+        bonusPoints: p.bonusPoints,
+        enabled: !p.enabled,
+        sortOrder: p.sortOrder ?? 100,
+        description: p.description ?? undefined,
+      }),
+    onSuccess: () => {
+      toast.success('已更新套餐')
+      queryClient.invalidateQueries({ queryKey: ['admin-point-packages'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
   })
 
   return (
     <div className="h-full flex flex-col">
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-medium text-white">计费管理</h3>
-          <p className="text-xs text-white/40 mt-0.5">
-            基于 llm_call_logs 的用量汇总（含桌面端 DESKTOP_AGENT 代理调用）
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {([7, 30, 90] as const).map((d) => (
-            <button
-              key={d}
-              type="button"
-              onClick={() => setRangeDays(d)}
-              className={clsx(
-                'px-2 py-1 rounded text-[11px] border',
-                rangeDays === d
-                  ? 'border-white/30 bg-white/10 text-white'
-                  : 'border-white/10 text-white/50 hover:bg-white/5',
-              )}
-            >
-              {d} 天
-            </button>
-          ))}
+      <div className="mb-3 flex items-center gap-2">
+        {([
+          ['usage', '成本核算'],
+          ['packages', '充值套餐'],
+          ['orders', '支付订单'],
+        ] as const).map(([id, label]) => (
           <button
+            key={id}
             type="button"
-            onClick={() => refetch()}
-            className="p-1.5 rounded border border-white/15 text-white/60 hover:bg-white/5"
-            title="刷新"
+            onClick={() => setSubTab(id)}
+            className={clsx(
+              'px-2.5 py-1 rounded text-[11px] border',
+              subTab === id ? 'border-white/30 bg-white/10 text-white' : 'border-white/10 text-white/50',
+            )}
           >
-            <RefreshCw className={clsx('w-3.5 h-3.5', isFetching && 'animate-spin')} />
+            {label}
           </button>
-        </div>
+        ))}
       </div>
 
-      <div className="mb-4 grid grid-cols-2 gap-3">
-        <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-          <div className="text-[11px] text-white/40">总 Token</div>
-          <div className="text-lg font-mono text-white/90">{data?.grandTotalTokens?.toLocaleString() ?? '—'}</div>
-        </div>
-        <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-          <div className="text-[11px] text-white/40">估算费用 (USD)</div>
-          <div className="text-lg font-mono text-white/90">
-            {data ? data.grandTotalCostUsd.toFixed(4) : '—'}
-          </div>
-        </div>
-      </div>
-
-      {isLoading ? (
-        <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
-      ) : !data?.summaries?.length ? (
-        <div className="text-center py-10 text-white/30 text-sm">所选时间范围内暂无用量</div>
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-white/10 mb-4">
-          <table className="w-full text-xs text-white/80">
-            <thead>
-              <tr className="border-b border-white/10 text-left bg-white/[0.03]">
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">用户</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">调用次数</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">Prompt</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">Completion</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">Total</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40">费用</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/10">
-              {data.summaries.map((row) => (
-                <tr
-                  key={row.userId}
+      {subTab === 'usage' && (
+        <>
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-medium text-white">成本核算</h3>
+              <p className="text-xs text-white/40 mt-0.5">Token 合计 + 估算系统成本 CNY（含桌面代理）</p>
+            </div>
+            <div className="flex items-center gap-2">
+              {([7, 30, 90] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setRangeDays(d)}
                   className={clsx(
-                    'hover:bg-white/[0.03] cursor-pointer',
-                    selectedUserId === row.userId && 'bg-white/[0.06]',
+                    'px-2 py-1 rounded text-[11px] border',
+                    rangeDays === d ? 'border-white/30 bg-white/10 text-white' : 'border-white/10 text-white/50',
                   )}
-                  onClick={() => setSelectedUserId(row.userId)}
                 >
-                  <td className="py-2 px-3 font-mono">{row.username}</td>
-                  <td className="py-2 px-3">{row.callCount}</td>
-                  <td className="py-2 px-3">{row.promptTokens.toLocaleString()}</td>
-                  <td className="py-2 px-3">{row.completionTokens.toLocaleString()}</td>
-                  <td className="py-2 px-3">{row.totalTokens.toLocaleString()}</td>
-                  <td className="py-2 px-3">${row.estimatedCostUsd.toFixed(4)}</td>
-                </tr>
+                  {d} 天
+                </button>
               ))}
-            </tbody>
-          </table>
+              <button type="button" onClick={() => refetch()} className="p-1.5 rounded border border-white/15 text-white/60" title="刷新">
+                <RefreshCw className={clsx('w-3.5 h-3.5', isFetching && 'animate-spin')} />
+              </button>
+            </div>
+          </div>
+
+          <div className="mb-4 grid grid-cols-2 gap-3">
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+              <div className="text-[11px] text-white/40">总 Token</div>
+              <div className="text-lg font-mono text-white/90">{data?.grandTotalTokens?.toLocaleString() ?? '—'}</div>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+              <div className="text-[11px] text-white/40">估算成本 (CNY)</div>
+              <div className="text-lg font-mono text-white/90">
+                {data ? `¥${data.grandTotalCostUsd.toFixed(4)}` : '—'}
+              </div>
+            </div>
+          </div>
+
+          {isLoading ? (
+            <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
+          ) : !data?.summaries?.length ? (
+            <div className="text-center py-10 text-white/30 text-sm">所选时间范围内暂无用量</div>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-white/10 mb-4">
+              <table className="w-full text-xs text-white/80">
+                <thead>
+                  <tr className="border-b border-white/10 text-left bg-white/[0.03]">
+                    <th className="pb-2 pt-2 px-3 font-medium text-white/40">用户</th>
+                    <th className="pb-2 pt-2 px-3 font-medium text-white/40">调用次数</th>
+                    <th className="pb-2 pt-2 px-3 font-medium text-white/40">Prompt</th>
+                    <th className="pb-2 pt-2 px-3 font-medium text-white/40">Completion</th>
+                    <th className="pb-2 pt-2 px-3 font-medium text-white/40">Total</th>
+                    <th className="pb-2 pt-2 px-3 font-medium text-white/40">成本 CNY</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {data.summaries.map((row) => (
+                    <tr
+                      key={row.userId}
+                      className={clsx('hover:bg-white/[0.03] cursor-pointer', selectedUserId === row.userId && 'bg-white/[0.06]')}
+                      onClick={() => setSelectedUserId(row.userId)}
+                    >
+                      <td className="py-2 px-3 font-mono">{row.username}</td>
+                      <td className="py-2 px-3">{row.callCount}</td>
+                      <td className="py-2 px-3">{row.promptTokens.toLocaleString()}</td>
+                      <td className="py-2 px-3">{row.completionTokens.toLocaleString()}</td>
+                      <td className="py-2 px-3">{row.totalTokens.toLocaleString()}</td>
+                      <td className="py-2 px-3">¥{row.estimatedCostUsd.toFixed(4)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {selectedUserId != null && (
+            <div className="flex-1 min-h-0 overflow-auto rounded-lg border border-white/10">
+              <div className="px-3 py-2 border-b border-white/10 text-xs text-white/50 flex justify-between">
+                <span>用户 #{selectedUserId} 明细</span>
+                <button type="button" className="text-white/40 hover:text-white" onClick={() => setSelectedUserId(null)}>关闭</button>
+              </div>
+              {detailsLoading ? (
+                <div className="p-4 text-xs text-white/40">加载明细…</div>
+              ) : (
+                <table className="w-full text-[11px] text-white/70">
+                  <thead>
+                    <tr className="text-left text-white/35 border-b border-white/10">
+                      <th className="px-3 py-1.5">时间</th>
+                      <th className="px-3 py-1.5">Model</th>
+                      <th className="px-3 py-1.5">Tokens</th>
+                      <th className="px-3 py-1.5">成本</th>
+                      <th className="px-3 py-1.5">积分</th>
+                      <th className="px-3 py-1.5">状态</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {details.map((d) => (
+                      <tr key={d.id}>
+                        <td className="px-3 py-1.5 whitespace-nowrap">{d.createTime ?? '—'}</td>
+                        <td className="px-3 py-1.5">{d.model}</td>
+                        <td className="px-3 py-1.5">{d.totalTokens ?? 0}</td>
+                        <td className="px-3 py-1.5">{d.estimatedCostCny != null ? `¥${d.estimatedCostCny.toFixed(4)}` : '—'}</td>
+                        <td className="px-3 py-1.5">{d.pointsCharged ?? '—'}</td>
+                        <td className="px-3 py-1.5">{d.success ? 'OK' : 'ERR'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {subTab === 'packages' && (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-white/10 p-3 space-y-2">
+            <div className="text-xs text-white/50">新建套餐</div>
+            <div className="grid grid-cols-2 gap-2">
+              <input className="bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white" placeholder="名称" value={packForm.name} onChange={(e) => setPackForm({ ...packForm, name: e.target.value })} />
+              <input className="bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white" placeholder="价格元" value={packForm.priceYuan} onChange={(e) => setPackForm({ ...packForm, priceYuan: e.target.value })} />
+              <input className="bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white" placeholder="积分" value={packForm.points} onChange={(e) => setPackForm({ ...packForm, points: e.target.value })} />
+              <input className="bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white" placeholder="赠送" value={packForm.bonusPoints} onChange={(e) => setPackForm({ ...packForm, bonusPoints: e.target.value })} />
+            </div>
+            <button type="button" disabled={createPackMutation.isPending || !packForm.name.trim()} onClick={() => createPackMutation.mutate()} className="px-3 py-1.5 rounded bg-blue-600 text-xs text-white disabled:opacity-40">创建套餐</button>
+          </div>
+          {packagesLoading ? (
+            <div className="text-center py-8 text-xs text-white/40">加载中…</div>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-white/10">
+              <table className="w-full text-xs text-white/80">
+                <thead>
+                  <tr className="border-b border-white/10 text-left bg-white/[0.03]">
+                    <th className="px-3 py-2 text-white/40">名称</th>
+                    <th className="px-3 py-2 text-white/40">价格</th>
+                    <th className="px-3 py-2 text-white/40">积分</th>
+                    <th className="px-3 py-2 text-white/40">赠送</th>
+                    <th className="px-3 py-2 text-white/40">启用</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {packages.map((p) => (
+                    <tr key={p.id}>
+                      <td className="px-3 py-2">{p.name}</td>
+                      <td className="px-3 py-2">¥{Number(p.priceYuan).toFixed(2)}</td>
+                      <td className="px-3 py-2">{p.points}</td>
+                      <td className="px-3 py-2">{p.bonusPoints}</td>
+                      <td className="px-3 py-2">
+                        <button type="button" onClick={() => togglePackMutation.mutate(p as typeof p & { enabled: boolean })} className="text-[11px] text-blue-300">
+                          {p.enabled === false ? '已下架' : '已上架'}（点此切换）
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
-      {selectedUserId != null && (
-        <div className="flex-1 min-h-0 overflow-auto rounded-lg border border-white/10">
-          <div className="px-3 py-2 border-b border-white/10 text-xs text-white/50 flex justify-between">
-            <span>用户 #{selectedUserId} 明细</span>
-            <button type="button" className="text-white/40 hover:text-white" onClick={() => setSelectedUserId(null)}>
-              关闭
-            </button>
+      {subTab === 'orders' && (
+        <div className="space-y-3">
+          <div className="flex gap-2">
+            {['', 'PENDING', 'SUCCESS', 'CLOSED'].map((s) => (
+              <button
+                key={s || 'all'}
+                type="button"
+                onClick={() => { setOrderStatus(s); setOrderPage(0) }}
+                className={clsx('px-2 py-1 rounded text-[11px] border', orderStatus === s ? 'border-white/30 bg-white/10 text-white' : 'border-white/10 text-white/50')}
+              >
+                {s || '全部'}
+              </button>
+            ))}
           </div>
-          {detailsLoading ? (
-            <div className="p-4 text-xs text-white/40">加载明细…</div>
+          {ordersLoading ? (
+            <div className="text-center py-8 text-xs text-white/40">加载中…</div>
+          ) : !(orderPageData?.items?.length) ? (
+            <div className="text-center py-8 text-xs text-white/30">暂无订单</div>
           ) : (
-            <table className="w-full text-[11px] text-white/70">
-              <thead>
-                <tr className="text-left text-white/35 border-b border-white/10">
-                  <th className="px-3 py-1.5">时间</th>
-                  <th className="px-3 py-1.5">Provider</th>
-                  <th className="px-3 py-1.5">Model</th>
-                  <th className="px-3 py-1.5">类型</th>
-                  <th className="px-3 py-1.5">Tokens</th>
-                  <th className="px-3 py-1.5">状态</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {details.map((d) => (
-                  <tr key={d.id}>
-                    <td className="px-3 py-1.5 whitespace-nowrap">{d.createTime ?? '—'}</td>
-                    <td className="px-3 py-1.5">{d.provider}</td>
-                    <td className="px-3 py-1.5">{d.model}</td>
-                    <td className="px-3 py-1.5">{d.callType ?? '—'}</td>
-                    <td className="px-3 py-1.5">{d.totalTokens ?? 0}</td>
-                    <td className="px-3 py-1.5">{d.success ? 'OK' : 'ERR'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <div className="overflow-x-auto rounded-lg border border-white/10">
+                <table className="w-full text-xs text-white/80">
+                  <thead>
+                    <tr className="border-b border-white/10 text-left bg-white/[0.03]">
+                      <th className="px-3 py-2 text-white/40">订单号</th>
+                      <th className="px-3 py-2 text-white/40">用户</th>
+                      <th className="px-3 py-2 text-white/40">金额</th>
+                      <th className="px-3 py-2 text-white/40">状态</th>
+                      <th className="px-3 py-2 text-white/40">时间</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/10">
+                    {orderPageData.items.map((o) => (
+                      <tr key={o.id}>
+                        <td className="px-3 py-2 font-mono">{o.orderNo}</td>
+                        <td className="px-3 py-2">{o.userId ?? '—'}</td>
+                        <td className="px-3 py-2">¥{Number(o.amountYuan).toFixed(2)}</td>
+                        <td className="px-3 py-2">{o.status}</td>
+                        <td className="px-3 py-2 text-white/50">{o.createTime ? new Date(o.createTime).toLocaleString('zh-CN') : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {(orderPageData.totalPages ?? 0) > 1 && (
+                <div className="flex justify-center gap-2">
+                  <button type="button" disabled={orderPage <= 0} onClick={() => setOrderPage(orderPage - 1)} className="text-[11px] text-white/50 disabled:opacity-30">上一页</button>
+                  <span className="text-[11px] text-white/35">{orderPage + 1}/{orderPageData.totalPages}</span>
+                  <button type="button" disabled={orderPage + 1 >= orderPageData.totalPages} onClick={() => setOrderPage(orderPage + 1)} className="text-[11px] text-white/50 disabled:opacity-30">下一页</button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -990,18 +1478,44 @@ function UserOperationModal({
   )
 }
 
-function SystemConfigContent() {
+const DEEPSEEK_KEY = /^DEEPSEEK_API_KEY(_[A-Za-z0-9]+)?$/
+
+export function SystemConfigContent() {
   const queryClient = useQueryClient()
+  const [keyLabel, setKeyLabel] = useState('')
+  const [keyValue, setKeyValue] = useState('')
   const { data: configs = [], isLoading } = useQuery({
     queryKey: ['admin-system-configs'],
     queryFn: () => adminApi.listSystemConfigs(),
   })
+  const deepseekKeys = configs.filter((c) => DEEPSEEK_KEY.test(c.configKey))
+  const otherConfigs = configs.filter((c) => !DEEPSEEK_KEY.test(c.configKey) && c.configKey !== 'RAG_MEMORY_ENABLED')
 
   const updateMutation = useMutation({
     mutationFn: ({ id, body }: { id: number; body: { configValue?: string | null; description?: string | null } }) =>
       adminApi.updateSystemConfig(id, body),
     onSuccess: () => {
       toast.success('配置已保存')
+      queryClient.invalidateQueries({ queryKey: ['admin-system-configs'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const createMutation = useMutation({
+    mutationFn: () => adminApi.createDeepseekKey({ configValue: keyValue.trim(), description: keyLabel.trim() || undefined }),
+    onSuccess: () => {
+      toast.success('已添加 DeepSeek API Key')
+      setKeyLabel('')
+      setKeyValue('')
+      queryClient.invalidateQueries({ queryKey: ['admin-system-configs'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => adminApi.deleteSystemConfig(id),
+    onSuccess: () => {
+      toast.success('已删除')
       queryClient.invalidateQueries({ queryKey: ['admin-system-configs'] })
     },
     onError: (e: Error) => toast.error(e.message),
@@ -1032,15 +1546,75 @@ function SystemConfigContent() {
       <div className="mb-4">
         <h3 className="text-sm font-medium text-white">系统配置</h3>
         <p className="text-xs text-white/40 mt-0.5">
-          管理全局配置项，例如第三方 API Key 等。请谨慎修改。
+          可添加多条 DeepSeek API Key。模型管理里为每个模型选择其中一条后，对话就会用对应的模型。
         </p>
+      </div>
+
+      <div className="mb-4 rounded-lg border border-white/10 p-3 space-y-3">
+        <div className="text-xs text-white/70">DeepSeek API Key</div>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            type="text"
+            value={keyLabel}
+            onChange={(e) => setKeyLabel(e.target.value)}
+            placeholder="名称，如主 Key"
+            className="sm:w-40 bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white placeholder:text-white/25 focus:outline-none focus:ring-1 focus:ring-blue-500/70"
+          />
+          <input
+            type="password"
+            value={keyValue}
+            onChange={(e) => setKeyValue(e.target.value)}
+            placeholder="sk-..."
+            autoComplete="off"
+            className="flex-1 bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white placeholder:text-white/25 focus:outline-none focus:ring-1 focus:ring-blue-500/70"
+          />
+          <button
+            type="button"
+            disabled={!keyValue.trim() || createMutation.isPending}
+            onClick={() => createMutation.mutate()}
+            className="px-3 py-1.5 rounded bg-blue-600 text-xs text-white disabled:opacity-40"
+          >
+            添加
+          </button>
+        </div>
+        {deepseekKeys.length === 0 ? (
+          <div className="text-[11px] text-white/35">还没有 DeepSeek Key。</div>
+        ) : (
+          <div className="space-y-2">
+            {deepseekKeys.map((c) => (
+              <div key={c.id} className="grid grid-cols-1 sm:grid-cols-[8rem_1fr_auto] gap-2 items-center">
+                <input
+                  type="text"
+                  value={c.description ?? ''}
+                  onChange={handleChange(c, 'description')}
+                  onBlur={() => handleBlur(c)}
+                  placeholder="名称"
+                  className="bg-black/10 border border-white/10 rounded px-2 py-1.5 text-xs text-white"
+                />
+                <input
+                  type="password"
+                  value={c.configValue ?? ''}
+                  onChange={handleChange(c, 'configValue')}
+                  onBlur={() => handleBlur(c)}
+                  autoComplete="off"
+                  className="bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white"
+                />
+                <button
+                  type="button"
+                  onClick={() => deleteMutation.mutate(c.id)}
+                  className="text-[11px] text-white/45 hover:text-red-300"
+                >
+                  删除
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {isLoading ? (
         <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
-      ) : configs.length === 0 ? (
-        <div className="text-center py-10 text-white/30 text-sm">暂无系统配置项。</div>
-      ) : (
+      ) : otherConfigs.length === 0 ? null : (
         <div className="overflow-x-auto rounded-lg border border-white/10">
           <table className="w-full text-xs text-white/80">
             <thead>
@@ -1051,7 +1625,7 @@ function SystemConfigContent() {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/10">
-              {configs.map((c) => (
+              {otherConfigs.map((c) => (
                 <tr key={c.id} className="align-top hover:bg-white/[0.03]">
                   <td className="py-2.5 px-3 font-mono text-[11px] text-white/70 break-all">
                     {c.configKey}

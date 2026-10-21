@@ -17,6 +17,7 @@ export interface AdminUserListItem {
   displayName: string | null
   status: string
   role: string
+  pointsBalance: number
   createTime: string | null
   lastLoginTime: string | null
 }
@@ -58,6 +59,7 @@ export interface BillingUsageSummary {
   promptTokens: number
   completionTokens: number
   totalTokens: number
+  /** 字段名沿用后端汇总；实际为估算成本 CNY */
   estimatedCostUsd: number
 }
 
@@ -76,7 +78,8 @@ export interface BillingUsageDetail {
   promptTokens: number | null
   completionTokens: number | null
   totalTokens: number | null
-  estimatedCostUsd: number | null
+  estimatedCostCny: number | null
+  pointsCharged: number | null
   success: boolean
   createTime: string | null
 }

@@ -1,7 +1,8 @@
 package com.openforge.aimate.agent.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import jakarta.validation.constraints.NotBlank;
+
+import java.util.List;
 
 /**
  * Request body for continuing an existing Agent session with a new
@@ -13,7 +14,6 @@ import jakarta.validation.constraints.NotBlank;
  */
 public record ContinueSessionRequest(
 
-        @NotBlank
         String message,
 
         @JsonProperty("modelSource")
@@ -23,6 +23,9 @@ public record ContinueSessionRequest(
         Long systemModelId,
 
         @JsonProperty("userApiKeyId")
-        Long userApiKeyId
+        Long userApiKeyId,
+
+        @JsonProperty("images")
+        List<String> images
 ) {}
 

@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
     status          VARCHAR(16)     NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE | DISABLED',
     role            VARCHAR(16)     NOT NULL DEFAULT 'USER' COMMENT 'USER | ADMIN',
     last_login_time DATETIME                 COMMENT '最近登录时间',
+    points_balance  BIGINT          NOT NULL DEFAULT 0 COMMENT 'Chat 平台积分余额',
 
     version         INT             NOT NULL DEFAULT 0 COMMENT 'JPA @Version 乐观锁计数器',
     create_time     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -139,7 +140,15 @@ CREATE TABLE IF NOT EXISTS system_models (
     api_key_config_key VARCHAR(128)          COMMENT 'system_config.config_key，用于查找该模型使用的系统级 API Key；为空则使用 provider 默认 key',
     sort_order      INT             NOT NULL DEFAULT 100 COMMENT '排序权重，数值越小越靠前',
     enabled         TINYINT(1)      NOT NULL DEFAULT 1 COMMENT '是否在「切换模型」列表中展示',
+    supports_vision TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '是否接受图片输入',
     description     VARCHAR(256)             COMMENT '简短说明，如能力或适用场景',
+    tip             VARCHAR(128)             COMMENT '选模型时名称旁提示，如非高峰半价时段',
+    points_per_1k_prompt_tokens INT NOT NULL DEFAULT 1 COMMENT '每1K prompt token 扣积分',
+    points_per_1k_completion_tokens INT NOT NULL DEFAULT 3 COMMENT '每1K completion token 扣积分',
+    cost_input_cny_per_1m_peak DECIMAL(12,4) NULL COMMENT '系统成本：百万input高峰CNY',
+    cost_input_cny_per_1m_offpeak DECIMAL(12,4) NULL COMMENT '系统成本：百万input空闲CNY',
+    cost_output_cny_per_1m_peak DECIMAL(12,4) NULL COMMENT '系统成本：百万output高峰CNY',
+    cost_output_cny_per_1m_offpeak DECIMAL(12,4) NULL COMMENT '系统成本：百万output空闲CNY',
 
     version         INT             NOT NULL DEFAULT 0,
     create_time     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -276,6 +285,7 @@ CREATE TABLE IF NOT EXISTS agent_session_messages (
 
     role              VARCHAR(20)     NOT NULL COMMENT 'system | user | assistant | tool',
     content           LONGTEXT        NULL     COMMENT '正文；assistant 仅 tool_calls 时可为空',
+    attachments_json  LONGTEXT        NULL     COMMENT '用户消息图片 URL JSON 数组（COS HTTPS）',
     tool_call_id      VARCHAR(64)     NULL     COMMENT 'role=tool 时对应 ToolCall.id',
     tool_calls_json   TEXT            NULL     COMMENT 'role=assistant 时的 tool_calls 数组 JSON',
     message_status    VARCHAR(20)     NULL     COMMENT '仅 assistant 使用: ANSWERING=回答中 DONE=已完成 INTERRUPTED=已中断',
@@ -332,3 +342,65 @@ CREATE TABLE IF NOT EXISTS system_config (
     UNIQUE KEY uq_system_config_key (config_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='系统配置表';
+
+CREATE TABLE IF NOT EXISTS point_ledger (
+    id                BIGINT          NOT NULL AUTO_INCREMENT,
+    user_id           BIGINT UNSIGNED NOT NULL,
+    delta             BIGINT          NOT NULL COMMENT '正=入账，负=扣费',
+    balance_after     BIGINT          NOT NULL,
+    reason            VARCHAR(32)     NOT NULL COMMENT 'CHAT_DEDUCT|RECHARGE|ADMIN_ADJUST|SYSTEM_GIFT',
+    ref_type          VARCHAR(32)              COMMENT 'ORDER|LLM_CALL|ADMIN',
+    ref_id            VARCHAR(64)              COMMENT '关联业务 id',
+    session_id        VARCHAR(64)              NULL,
+    llm_call_log_id   BIGINT                   NULL,
+    remark            VARCHAR(256)             NULL,
+    version           INT             NOT NULL DEFAULT 0,
+    create_time       DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time       DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    INDEX idx_point_ledger_user_time (user_id, create_time),
+    INDEX idx_point_ledger_reason (reason),
+    CONSTRAINT fk_point_ledger_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='Chat 积分流水';
+
+CREATE TABLE IF NOT EXISTS point_packages (
+    id              BIGINT          NOT NULL AUTO_INCREMENT,
+    name            VARCHAR(128)    NOT NULL,
+    price_yuan      DECIMAL(12,2)   NOT NULL,
+    points          BIGINT          NOT NULL COMMENT '充值积分',
+    bonus_points    BIGINT          NOT NULL DEFAULT 0 COMMENT '赠送积分',
+    enabled         TINYINT(1)      NOT NULL DEFAULT 1,
+    sort_order      INT             NOT NULL DEFAULT 100,
+    description     VARCHAR(256)             NULL,
+    version         INT             NOT NULL DEFAULT 0,
+    create_time     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_point_packages_name (name),
+    INDEX idx_point_packages_enabled_sort (enabled, sort_order)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='积分充值套餐';
+
+CREATE TABLE IF NOT EXISTS payment_orders (
+    id               BIGINT          NOT NULL AUTO_INCREMENT,
+    order_no         VARCHAR(64)     NOT NULL,
+    user_id          BIGINT UNSIGNED NOT NULL,
+    product_type     VARCHAR(32)     NOT NULL DEFAULT 'POINT_PACK',
+    product_id       BIGINT          NOT NULL,
+    amount_yuan      DECIMAL(12,2)   NOT NULL,
+    payment_method   VARCHAR(64)     NOT NULL DEFAULT 'wechat_pay_xunhu',
+    status           VARCHAR(32)     NOT NULL DEFAULT 'PENDING',
+    transaction_id   VARCHAR(128)             NULL,
+    meta_json        LONGTEXT                 NULL,
+    paid_at          DATETIME                 NULL,
+    version          INT             NOT NULL DEFAULT 0,
+    create_time      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_payment_orders_no (order_no),
+    INDEX idx_payment_orders_user_time (user_id, create_time),
+    INDEX idx_payment_orders_status (status),
+    CONSTRAINT fk_payment_orders_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='Chat 支付订单';

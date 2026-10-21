@@ -7,16 +7,17 @@ import com.openforge.aimate.agent.dto.DeleteSessionRequest;
 import com.openforge.aimate.agent.dto.RetryRequest;
 import com.openforge.aimate.agent.dto.SessionResponse;
 import com.openforge.aimate.agent.dto.StartSessionRequest;
+import com.openforge.aimate.billing.PointsService;
 import com.openforge.aimate.domain.AgentSession;
 import com.openforge.aimate.domain.UserDefaultModel;
 import com.openforge.aimate.llm.model.Message;
 import com.openforge.aimate.memory.LongTermMemoryService;
+import com.openforge.aimate.storage.ChatCosStorageService;
 import com.openforge.aimate.repository.AgentSessionRepository;
 import com.openforge.aimate.repository.SystemModelRepository;
 import com.openforge.aimate.repository.UserApiKeyRepository;
 import com.openforge.aimate.repository.UserDefaultModelRepository;
 import jakarta.validation.Valid;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -57,7 +58,6 @@ import java.util.stream.Collectors;
 @Slf4j
 @RestController
 @RequestMapping("/api/agent/sessions")
-@RequiredArgsConstructor
 public class AgentController {
 
     private final AgentLoopService          agentLoopService;
@@ -68,6 +68,32 @@ public class AgentController {
     private final UserDefaultModelRepository userDefaultModelRepository;
     private final SystemModelRepository      systemModelRepository;
     private final UserApiKeyRepository       userApiKeyRepository;
+    private final ChatCosStorageService      chatCosStorageService;
+    private final PointsService              pointsService;
+
+    public AgentController(
+            AgentLoopService agentLoopService,
+            SessionMessageService sessionMessageService,
+            AgentSessionRepository sessionRepository,
+            LongTermMemoryService longTermMemoryService,
+            ExecutorService agentVirtualThreadExecutor,
+            UserDefaultModelRepository userDefaultModelRepository,
+            SystemModelRepository systemModelRepository,
+            UserApiKeyRepository userApiKeyRepository,
+            ChatCosStorageService chatCosStorageService,
+            PointsService pointsService
+    ) {
+        this.agentLoopService = agentLoopService;
+        this.sessionMessageService = sessionMessageService;
+        this.sessionRepository = sessionRepository;
+        this.longTermMemoryService = longTermMemoryService;
+        this.agentVirtualThreadExecutor = agentVirtualThreadExecutor;
+        this.userDefaultModelRepository = userDefaultModelRepository;
+        this.systemModelRepository = systemModelRepository;
+        this.userApiKeyRepository = userApiKeyRepository;
+        this.chatCosStorageService = chatCosStorageService;
+        this.pointsService = pointsService;
+    }
 
     // ── Create & Start ───────────────────────────────────────────────────────
 
@@ -94,6 +120,7 @@ public class AgentController {
 
         // Extract userId from JWT principal (set by JwtAuthFilter)
         Long userId = getCurrentUserId();
+        pointsService.assertCanChat(userId);
 
         // 如果首页在启动会话前已经选择了模型，这里先更新 user_default_models，确保新会话第一轮就用这次选择的模型。
         if (userId != null && request.modelSource() != null && !request.modelSource().isBlank()) {
@@ -131,10 +158,13 @@ public class AgentController {
             }
         }
 
+        List<String> images = normalizeImages(request.images(), userId);
+        String task = textOrImagePrompt(request.task(), images);
+
         AgentSession session = AgentSession.builder()
                 .userId(userId)
                 .sessionId(sessionId)
-                .taskDescription(request.task())
+                .taskDescription(task)
                 .status(AgentSession.SessionStatus.IDLE)
                 .iterationCount(0)
                 .build();
@@ -144,7 +174,7 @@ public class AgentController {
         final AgentSession finalSession = session;
         agentVirtualThreadExecutor.submit(() -> {
             try {
-                agentLoopService.run(finalSession);
+                agentLoopService.run(finalSession, images);
             } catch (Exception e) {
                 log.error("[Controller] Uncaught exception in loop for session {}: {}",
                         sessionId, e.getMessage(), e);
@@ -333,6 +363,7 @@ public class AgentController {
             @Valid @RequestBody ContinueSessionRequest request
     ) {
         AgentSession session = findOrThrow(sessionId);
+        pointsService.assertCanChat(session.getUserId());
 
         // 若前端携带了本次使用的模型选择，则先更新 user_default_models，确保本次调用使用最新模型。
         if (request.modelSource() != null && !request.modelSource().isBlank()) {
@@ -373,7 +404,9 @@ public class AgentController {
             }
         }
 
-        sessionMessageService.append(session, Message.user(request.message()));
+        List<String> images = normalizeImages(request.images(), session.getUserId());
+        String text = textOrImagePrompt(request.message(), images);
+        sessionMessageService.append(session, Message.user(text, images.isEmpty() ? null : images));
         com.openforge.aimate.domain.SessionMessage placeholder = sessionMessageService.createPlaceholderAssistant(session);
         session.setErrorMessage(null);
         sessionRepository.save(session);
@@ -428,6 +461,7 @@ public class AgentController {
             @RequestBody RetryRequest request
     ) {
         AgentSession session = findOrThrow(sessionId);
+        pointsService.assertCanChat(session.getUserId());
         if (request.getUserMessageId() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userMessageId required");
         }
@@ -504,6 +538,41 @@ public class AgentController {
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
+
+    private List<String> normalizeImages(List<String> raw, Long userId) {
+        List<String> images;
+        try {
+            images = ChatImages.normalize(raw);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+        if (!images.isEmpty() && !currentModelSupportsVision(userId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前模型不支持图片，请切换到 DeepSeek V4.1 Flash");
+        }
+        if (images.isEmpty()) return images;
+        try {
+            return chatCosStorageService.persistUserImages(images);
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    private boolean currentModelSupportsVision(Long userId) {
+        if (userId == null) return false;
+        return userDefaultModelRepository.findByUserId(userId)
+                .filter(udm -> "SYSTEM".equalsIgnoreCase(udm.getSource()))
+                .map(UserDefaultModel::getSystemModel)
+                .map(model -> model != null && model.isSupportsVision())
+                .orElse(false);
+    }
+
+    private String textOrImagePrompt(String text, List<String> images) {
+        if (text != null && !text.isBlank()) return text.trim();
+        if (images != null && !images.isEmpty()) return "请看这张图片。";
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请输入内容或上传图片");
+    }
 
     private AgentSession findOrThrow(String sessionId) {
         return sessionRepository.findBySessionId(sessionId)

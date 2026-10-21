@@ -34,6 +34,10 @@ public class SessionMessage extends BaseEntity {
     @Column(name = "content", columnDefinition = "LONGTEXT")
     private String content;
 
+    /** 用户消息附带的图片 URL JSON 数组（Chat COS HTTPS），用于回显并在视觉模型请求中发送。 */
+    @Column(name = "attachments_json", columnDefinition = "LONGTEXT")
+    private String attachmentsJson;
+
     /** role=tool 时对应 ToolCall.id。 */
     @Column(name = "tool_call_id", length = 64)
     private String toolCallId;

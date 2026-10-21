@@ -13,7 +13,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         VectorDbProperties.class,
         ScriptToolProperties.class,
         com.openforge.aimate.agent.ScriptDockerProperties.class,
-        com.openforge.aimate.config.OidcProperties.class
+        com.openforge.aimate.config.OidcProperties.class,
+        com.openforge.aimate.storage.ChatCosProperties.class
 })
 public class AimateApplication {
 

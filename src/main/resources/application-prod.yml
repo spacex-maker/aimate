@@ -60,8 +60,9 @@ agent:
     vector-dimensions: ${TENCENT_VECTORDB_DIMENSIONS:768}
     timeout-seconds: 30
 
-# AIMATEX Account OIDC
+# AIMATEX Account OIDC + Chat 专用 COS
 aimatex:
+  platform-code: ${AIMATEX_PLATFORM_CODE:chat}
   oidc:
     enabled: ${AIMATEX_OIDC_ENABLED:true}
     issuer: ${AIMATEX_OIDC_ISSUER:https://account-api.aimatex.com}

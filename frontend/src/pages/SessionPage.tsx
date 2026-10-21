@@ -232,12 +232,14 @@ export function SessionPage() {
       modelSource?: 'SYSTEM' | 'USER_KEY'
       systemModelId?: number | null
       userApiKeyId?: number | null
+      images?: string[]
     }) =>
       agentApi.continueSession(effectiveSessionId!, {
         message: payload.text,
         modelSource: payload.modelSource,
         systemModelId: payload.systemModelId ?? null,
         userApiKeyId: payload.userApiKeyId ?? null,
+        images: payload.images,
       }),
     onSuccess: () => {
       dispatch({ type: 'CLEAR' })
@@ -489,12 +491,14 @@ export function SessionPage() {
           value={followup}
           onChange={setFollowup}
           onSubmit={(opts) => {
-            if (!followup.trim() || !effectiveSessionId) return
+            const text = followup.trim()
+            if ((!text && !(opts?.images && opts.images.length > 0)) || !effectiveSessionId) return
             continueMutation.mutate({
-              text: followup.trim(),
+              text,
               modelSource: opts?.modelSource,
               systemModelId: opts?.systemModelId,
               userApiKeyId: opts?.userApiKeyId,
+              images: opts?.images,
             })
           }}
           selectedSystemModelId={

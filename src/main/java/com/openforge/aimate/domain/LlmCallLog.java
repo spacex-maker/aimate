@@ -62,9 +62,17 @@ public class LlmCallLog extends BaseEntity {
     @Column(name = "total_tokens")
     private Integer totalTokens;
 
-    /** Estimated cost in USD（可选，按需要事后补算）. */
+    /** Estimated cost in USD（兼容旧字段，可空）. */
     @Column(name = "estimated_cost_usd")
     private Double estimatedCostUsd;
+
+    /** 估算系统成本（人民币），供超管成本核算. */
+    @Column(name = "estimated_cost_cny")
+    private Double estimatedCostCny;
+
+    /** 本次从用户余额扣除的积分. */
+    @Column(name = "points_charged")
+    private Long pointsCharged;
 
     /** HTTP status code from provider (e.g. 200 / 401 / 500). */
     @Column(name = "http_status")

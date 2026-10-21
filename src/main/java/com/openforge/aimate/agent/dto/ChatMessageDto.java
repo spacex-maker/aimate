@@ -21,17 +21,18 @@ public record ChatMessageDto(
         @JsonProperty("thinkingContent") String thinkingContent,  // 仅 assistant：思考过程，前端可折叠展示
         @JsonProperty("toolCalls") List<ToolCallDisplayDto> toolCalls,  // 仅 assistant：该条回复过程中的工具调用列表，前端可折叠展示
         @JsonProperty("thinkingBlocks") List<StreamBlockDto> thinkingBlocks,  // 仅 assistant：标准化思考+工具调用时间线（StreamBlock 列表）
-        @JsonProperty("createTime") String createTime  // 消息创建时间，前端底部展示时间戳
+        @JsonProperty("createTime") String createTime,  // 消息创建时间，前端底部展示时间戳
+        @JsonProperty("images") List<String> images  // 用户消息图片 data URL，用于对话回显
 ) {
     public ChatMessageDto(Long id, String role, String content, String messageStatus) {
-        this(id, null, role, content, messageStatus, null, null, null, null);
+        this(id, null, role, content, messageStatus, null, null, null, null, null);
     }
 
     public ChatMessageDto(Long id, String role, String content, String messageStatus, String thinkingContent) {
-        this(id, null, role, content, messageStatus, thinkingContent, null, null, null);
+        this(id, null, role, content, messageStatus, thinkingContent, null, null, null, null);
     }
 
     public ChatMessageDto(String role, String content, String messageStatus) {
-        this(null, null, role, content, messageStatus, null, null, null, null);
+        this(null, null, role, content, messageStatus, null, null, null, null, null);
     }
 }

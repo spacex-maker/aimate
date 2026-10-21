@@ -9,7 +9,8 @@ public record BillingUsageDetail(
         Integer promptTokens,
         Integer completionTokens,
         Integer totalTokens,
-        Double estimatedCostUsd,
+        Double estimatedCostCny,
+        Long pointsCharged,
         boolean success,
         String createTime
 ) {}

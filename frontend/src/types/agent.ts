@@ -23,6 +23,7 @@ export interface StartSessionRequest {
   modelSource?: 'SYSTEM' | 'USER_KEY'
   systemModelId?: number | null
   userApiKeyId?: number | null
+  images?: string[]
 }
 
 /** 单次工具调用展示（名称、参数、结果），用于在消息上方与思考一起展示 */
@@ -45,6 +46,8 @@ export interface ChatMessageDto {
   /** 标准化思考+工具调用时间线（与实时 StreamBlock 结构一致），历史回放优先使用 */
   thinkingBlocks?: StreamBlock[] | null
   createTime?: string | null
+  /** 用户消息附带的图片 data URL */
+  images?: string[] | null
 }
 
 /** Assistant 回复的一个历史版本 */
@@ -67,6 +70,16 @@ export interface SystemModelDto {
   sortOrder: number
   enabled?: boolean
   description: string | null
+  /** 选模型时显示在名称旁的提示，如非高峰半价时段 */
+  tip?: string | null
+  /** 当前仅 DeepSeek V4.1 Flash 为 true */
+  supportsVision?: boolean
+  pointsPer1kPromptTokens?: number
+  pointsPer1kCompletionTokens?: number
+  costInputCnyPer1mPeak?: number | null
+  costInputCnyPer1mOffpeak?: number | null
+  costOutputCnyPer1mPeak?: number | null
+  costOutputCnyPer1mOffpeak?: number | null
 }
 
 /** 当前用户首选模型（用于恢复聊天输入框默认选中项） */

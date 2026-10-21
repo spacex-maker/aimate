@@ -2,8 +2,9 @@
 """Deploy OpenForgeX AIMate (chat) to 139.155.130.167 (Chengdu).
 
 Domains:
-  chat.aimatex.com       → SPA  (/home/ubuntu/web/chat)
-  chat-api.aimatex.com   → API  (127.0.0.1:9299)
+  chat.aimatex.com        → SPA  (/home/ubuntu/web/chat)
+  chat-admin.aimatex.com  → Admin SPA (same dist, /home/ubuntu/web/chat-admin)
+  chat-api.aimatex.com    → API  (127.0.0.1:9299)
 
 Fresh local MySQL DB `aimate` (schema + seed). Docker per-user VM disabled.
 """
@@ -19,10 +20,11 @@ import paramiko
 
 HOST = "139.155.130.167"
 WEB_DOMAIN = "chat.aimatex.com"
+ADMIN_DOMAIN = "chat-admin.aimatex.com"
 API_DOMAIN = "chat-api.aimatex.com"
 APP_PORT = 9299
 DNS_DOMAIN = "aimatex.com"
-DNS_RECORDS = ["chat", "chat-api"]
+DNS_RECORDS = ["chat", "chat-api", "chat-admin"]
 DNS_VALUE = HOST
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +40,7 @@ DEPLOY_ENV_CANDIDATES = (
 
 REMOTE_JAVA = "/home/ubuntu/java/chat"
 REMOTE_WEB = "/home/ubuntu/web/chat"
+REMOTE_ADMIN_WEB = "/home/ubuntu/web/chat-admin"
 REMOTE_JAR = f"{REMOTE_JAVA}/aimate.jar"
 REMOTE_ENV = f"{REMOTE_JAVA}/aimate.env"
 REMOTE_JDK = "/home/ubuntu/jdk25"
@@ -77,6 +80,20 @@ AIMATEX_OIDC_JWKS_URL={oidc_jwks_url}
 AIMATEX_OIDC_REDIRECT_URI={oidc_redirect_uri}
 AIMATEX_OIDC_REDIRECT_URIS={oidc_redirect_uris}
 AIMATEX_OIDC_SCOPES={oidc_scopes}
+AIMATEX_CHAT_COS_ENABLED={cos_enabled}
+AIMATEX_CHAT_COS_BUCKET={cos_bucket}
+AIMATEX_CHAT_COS_REGION={cos_region}
+AIMATEX_CHAT_COS_PREFIX={cos_prefix}
+TENCENTCLOUD_SECRET_ID={tc_sid}
+TENCENTCLOUD_SECRET_KEY={tc_skey}
+AIMATE_ADMIN_BOOTSTRAP_EMAIL={admin_email}
+AIMATE_ADMIN_BOOTSTRAP_PASSWORD={admin_password}
+AIMATE_ADMIN_BOOTSTRAP_DISPLAY_NAME={admin_display_name}
+AIMATE_SOUL_MEMORY_ENABLED={soul_memory_enabled}
+AIMATE_SOUL_API_BASE={soul_api_base}
+AIMATE_SOUL_PLATFORM_ENSURE_URL={soul_platform_ensure_url}
+AIMATE_SOUL_PLATFORM_KEY={soul_platform_key}
+AIMATE_SOUL_PLATFORM_CODE={soul_platform_code}
 """
 
 SYSTEMD_UNIT = f"""[Unit]
@@ -108,6 +125,29 @@ NGINX_WEB = f"""server {{
     location ^~ /.well-known/acme-challenge/ {{
         default_type "text/plain";
         root /var/www/certbot;
+    }}
+
+    location / {{
+        try_files $uri $uri/ /index.html;
+    }}
+}}
+"""
+
+NGINX_ADMIN = f"""server {{
+    listen 80;
+    server_name {ADMIN_DOMAIN};
+
+    root {REMOTE_ADMIN_WEB};
+    index index.html;
+    client_max_body_size 20m;
+
+    location ^~ /.well-known/acme-challenge/ {{
+        default_type "text/plain";
+        root /var/www/certbot;
+    }}
+
+    location = / {{
+        return 302 /login;
     }}
 
     location / {{
@@ -286,8 +326,8 @@ FLUSH PRIVILEGES;
     run(ssh, f"sudo mysql < {remote_init}")
     run(ssh, f"rm -f {remote_init}", check=False)
 
-    # Drop & recreate for true fresh deploy when DEPLOY_FRESH_DB=1 (default)
-    fresh = os.environ.get("DEPLOY_FRESH_DB", "1").strip().lower() in ("1", "true", "yes", "")
+    # 仅在显式 DEPLOY_FRESH_DB=1 时清空库。默认保留已有数据。
+    fresh = os.environ.get("DEPLOY_FRESH_DB", "0").strip().lower() in ("1", "true", "yes")
     if fresh:
         run(ssh, "sudo mysql -e \"DROP DATABASE IF EXISTS aimate; CREATE DATABASE aimate CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\"")
         run(
@@ -373,6 +413,19 @@ def main() -> int:
         milvus_host=env_get(data, "MILVUS_HOST", default="175.27.255.29"),
         milvus_port=env_get(data, "MILVUS_PORT", default="19530"),
         milvus_enabled=env_get(data, "AGENT_MILVUS_ENABLED", default="false"),
+        soul_memory_enabled=env_get(data, "AIMATE_SOUL_MEMORY_ENABLED", default="true"),
+        soul_api_base=env_get(
+            data, "AIMATE_SOUL_API_BASE", default="https://soul-api.aimatex.com/api/v1/soul"
+        ),
+        soul_platform_ensure_url=env_get(
+            data,
+            "AIMATE_SOUL_PLATFORM_ENSURE_URL",
+            default="https://soul-api.aimatex.com/api/v1/platform/souls/ensure",
+        ),
+        soul_platform_key=env_get(
+            data, "AIMATE_SOUL_PLATFORM_KEY", "SOUL_PLATFORM_API_KEY", default=""
+        ),
+        soul_platform_code=env_get(data, "AIMATE_SOUL_PLATFORM_CODE", default="aimatex-chat"),
         oidc_enabled=env_get(data, "AIMATEX_OIDC_ENABLED", default="true"),
         oidc_client_id=env_get(data, "AIMATEX_OIDC_CLIENT_ID", "AIMATEX_CLIENT_ID", default="aimatex-chat"),
         oidc_issuer=env_get(data, "AIMATEX_OIDC_ISSUER", default="https://account-api.aimatex.com"),
@@ -401,6 +454,29 @@ def main() -> int:
             ),
         ),
         oidc_scopes=env_get(data, "AIMATEX_OIDC_SCOPES", default="openid profile email membership"),
+        cos_enabled=env_get(data, "AIMATEX_CHAT_COS_ENABLED", default="true"),
+        cos_bucket=env_get(data, "AIMATEX_CHAT_COS_BUCKET", default="aimatex-chat-1258150206"),
+        cos_region=env_get(data, "AIMATEX_CHAT_COS_REGION", default="ap-nanjing"),
+        cos_prefix=env_get(data, "AIMATEX_CHAT_COS_PREFIX", default="chat/"),
+        tc_sid=tc_sid,
+        tc_skey=tc_skey,
+        admin_email=env_get(
+            data,
+            "AIMATE_ADMIN_BOOTSTRAP_EMAIL",
+            "NAS_ADMIN_BOOTSTRAP_EMAIL",
+            default="admin@aimatex.com",
+        ),
+        admin_password=env_get(
+            data,
+            "AIMATE_ADMIN_BOOTSTRAP_PASSWORD",
+            "NAS_ADMIN_BOOTSTRAP_PASSWORD",
+            default="",
+        ),
+        admin_display_name=env_get(
+            data,
+            "AIMATE_ADMIN_BOOTSTRAP_DISPLAY_NAME",
+            default="超级管理员",
+        ),
     )
 
     ssh = paramiko.SSHClient()
@@ -417,11 +493,12 @@ def main() -> int:
 
     if frontend_only:
         sftp = ssh.open_sftp()
-        run(ssh, f"mkdir -p {REMOTE_WEB}")
-        run(ssh, f"rm -rf {REMOTE_WEB}/*")
+        run(ssh, f"mkdir -p {REMOTE_WEB} {REMOTE_ADMIN_WEB}")
+        run(ssh, f"rm -rf {REMOTE_WEB}/* {REMOTE_ADMIN_WEB}/*")
         sftp_put_dir(sftp, WEB_DIST, REMOTE_WEB)
+        sftp_put_dir(sftp, WEB_DIST, REMOTE_ADMIN_WEB)
         sftp.close()
-        run(ssh, f"chmod 755 /home/ubuntu /home/ubuntu/web {REMOTE_WEB}")
+        run(ssh, f"chmod 755 /home/ubuntu /home/ubuntu/web {REMOTE_WEB} {REMOTE_ADMIN_WEB}")
         run(ssh, "sudo nginx -t && sudo systemctl reload nginx")
         ssh.close()
         print("\nFrontend-only deploy finished.")
@@ -432,7 +509,7 @@ def main() -> int:
         "sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx certbot python3-certbot-nginx curl tar",
         timeout=600,
     )
-    run(ssh, f"mkdir -p {REMOTE_JAVA} {REMOTE_WEB}")
+    run(ssh, f"mkdir -p {REMOTE_JAVA} {REMOTE_WEB} {REMOTE_ADMIN_WEB}")
     run(ssh, "sudo mkdir -p /var/www/certbot/.well-known/acme-challenge && sudo chmod -R 755 /var/www/certbot")
     run(ssh, "sudo chmod 755 /home/ubuntu")
 
@@ -452,17 +529,39 @@ def main() -> int:
         pass
     if env_exists and not force_env:
         print(f"Keep existing env: {REMOTE_ENV}")
+        # 补齐 COS 相关键，避免 ForceEnv=0 时对话图片无法落桶
+        cos_keys = {
+            "AIMATEX_CHAT_COS_ENABLED": env_get(data, "AIMATEX_CHAT_COS_ENABLED", default="true"),
+            "AIMATEX_CHAT_COS_BUCKET": env_get(data, "AIMATEX_CHAT_COS_BUCKET", default="aimatex-chat-1258150206"),
+            "AIMATEX_CHAT_COS_REGION": env_get(data, "AIMATEX_CHAT_COS_REGION", default="ap-nanjing"),
+            "AIMATEX_CHAT_COS_PREFIX": env_get(data, "AIMATEX_CHAT_COS_PREFIX", default="chat/"),
+            "TENCENTCLOUD_SECRET_ID": tc_sid,
+            "TENCENTCLOUD_SECRET_KEY": tc_skey,
+        }
+        with sftp.file(REMOTE_ENV, "r") as f:
+            existing = f.read().decode("utf-8", "replace")
+        lines = existing.splitlines()
+        have = {ln.split("=", 1)[0].strip() for ln in lines if "=" in ln and not ln.strip().startswith("#")}
+        appended = []
+        for k, v in cos_keys.items():
+            if k not in have and v:
+                appended.append(f"{k}={v}")
+        if appended:
+            with sftp.file(REMOTE_ENV, "a") as f:
+                f.write("\n" + "\n".join(appended) + "\n")
+            print(f"Appended COS keys to {REMOTE_ENV}: {', '.join(k.split('=')[0] for k in appended)}")
     else:
         with sftp.file(REMOTE_ENV, "w") as f:
             f.write(env_body)
         print(f"Wrote {REMOTE_ENV}")
 
-    print("Uploading frontend dist ...")
-    run(ssh, f"rm -rf {REMOTE_WEB}/*")
+    print("Uploading frontend dist (user + admin) ...")
+    run(ssh, f"rm -rf {REMOTE_WEB}/* {REMOTE_ADMIN_WEB}/*")
     sftp_put_dir(sftp, WEB_DIST, REMOTE_WEB)
+    sftp_put_dir(sftp, WEB_DIST, REMOTE_ADMIN_WEB)
     sftp.close()
     run(ssh, f"chmod 600 {REMOTE_ENV}")
-    run(ssh, f"chmod 755 /home/ubuntu /home/ubuntu/web {REMOTE_WEB}")
+    run(ssh, f"chmod 755 /home/ubuntu /home/ubuntu/web {REMOTE_WEB} {REMOTE_ADMIN_WEB}")
 
     unit_b64 = base64.b64encode(SYSTEMD_UNIT.encode()).decode()
     run(
@@ -475,10 +574,15 @@ def main() -> int:
     )
 
     web_b64 = base64.b64encode(NGINX_WEB.encode()).decode()
+    admin_b64 = base64.b64encode(NGINX_ADMIN.encode()).decode()
     api_b64 = base64.b64encode(NGINX_API.encode()).decode()
     run(
         ssh,
         f"echo {web_b64} | base64 -d | sudo tee /etc/nginx/sites-available/{WEB_DOMAIN} >/dev/null",
+    )
+    run(
+        ssh,
+        f"echo {admin_b64} | base64 -d | sudo tee /etc/nginx/sites-available/{ADMIN_DOMAIN} >/dev/null",
     )
     run(
         ssh,
@@ -487,6 +591,7 @@ def main() -> int:
     run(
         ssh,
         f"sudo ln -sfn /etc/nginx/sites-available/{WEB_DOMAIN} /etc/nginx/sites-enabled/{WEB_DOMAIN} && "
+        f"sudo ln -sfn /etc/nginx/sites-available/{ADMIN_DOMAIN} /etc/nginx/sites-enabled/{ADMIN_DOMAIN} && "
         f"sudo ln -sfn /etc/nginx/sites-available/{API_DOMAIN} /etc/nginx/sites-enabled/{API_DOMAIN}",
     )
     run(ssh, "sudo nginx -t && sudo systemctl reload nginx")
@@ -502,16 +607,18 @@ def main() -> int:
     run(ssh, "sudo journalctl -u aimate-chat -n 40 --no-pager", check=False)
     run(ssh, f"curl -sf http://127.0.0.1:{APP_PORT}/actuator/health || true", check=False)
     run(ssh, f"curl -sfI http://127.0.0.1/ -H 'Host: {WEB_DOMAIN}' | head -8", check=False)
+    run(ssh, f"curl -sfI http://127.0.0.1/ -H 'Host: {ADMIN_DOMAIN}' | head -8", check=False)
 
     run(
         ssh,
-        f"sudo certbot --nginx -d {WEB_DOMAIN} -d {API_DOMAIN} "
+        f"sudo certbot --nginx -d {WEB_DOMAIN} -d {API_DOMAIN} -d {ADMIN_DOMAIN} "
         f"--expand --non-interactive --agree-tos --register-unsafely-without-email --redirect",
         check=False,
         timeout=180,
     )
     run(ssh, "sudo systemctl reload nginx", check=False)
     run(ssh, f"curl -sfI https://{WEB_DOMAIN}/ | head -8", check=False)
+    run(ssh, f"curl -sfI https://{ADMIN_DOMAIN}/ | head -8", check=False)
     run(ssh, f"curl -sf https://{API_DOMAIN}/actuator/health || true", check=False)
     run(
         ssh,
@@ -522,8 +629,9 @@ def main() -> int:
 
     ssh.close()
     print("\nDeploy finished.")
-    print(f"  Web: https://{WEB_DOMAIN}")
-    print(f"  API: https://{API_DOMAIN}/actuator/health")
+    print(f"  Web:   https://{WEB_DOMAIN}")
+    print(f"  Admin: https://{ADMIN_DOMAIN}")
+    print(f"  API:   https://{API_DOMAIN}/actuator/health")
     return 0
 
 

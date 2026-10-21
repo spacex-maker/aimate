@@ -1,5 +1,7 @@
 package com.openforge.aimate.auth;
 
+import com.openforge.aimate.admin.AdminAccount;
+import com.openforge.aimate.admin.AdminAccountRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -20,8 +22,7 @@ import java.util.List;
 
 /**
  * Reads the JWT from the Authorization header on every request.
- * If valid, puts an authenticated principal into the SecurityContext
- * so the rest of the filter chain treats the request as authenticated.
+ * Admin tokens (typ=admin) resolve against admin_users; user tokens keep role claim.
  */
 @Slf4j
 @Component
@@ -29,6 +30,7 @@ import java.util.List;
 public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
+    private final AdminAccountRepository adminAccountRepository;
 
     @Override
     protected void doFilterInternal(
@@ -39,25 +41,48 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         String header = request.getHeader("Authorization");
 
         if (header != null && header.startsWith("Bearer ")) {
-            String token    = header.substring(7);
-            Long   userId   = jwtUtil.extractUserId(token);
-            String username = jwtUtil.extractUsername(token);
-            String role     = jwtUtil.extractRole(token);
-
-            if (userId != null && username != null
-                    && SecurityContextHolder.getContext().getAuthentication() == null) {
-
-                // Use userId as the principal, username as a granted authority label
-                List<GrantedAuthority> authorities = (role != null && !role.isBlank())
-                        ? List.of(new SimpleGrantedAuthority(role))
-                        : List.of();
-                var auth = new UsernamePasswordAuthenticationToken(userId, null, authorities);
-                auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                SecurityContextHolder.getContext().setAuthentication(auth);
-                log.debug("[JWT] Authenticated userId={} path={}", userId, request.getRequestURI());
+            String token = header.substring(7);
+            if (SecurityContextHolder.getContext().getAuthentication() == null) {
+                if (jwtUtil.isAdminToken(token)) {
+                    authenticateAdmin(request, token);
+                } else {
+                    authenticateUser(request, token);
+                }
             }
         }
 
         chain.doFilter(request, response);
+    }
+
+    private void authenticateAdmin(HttpServletRequest request, String token) {
+        Long adminId = jwtUtil.extractUserId(token);
+        if (adminId == null) {
+            return;
+        }
+        AdminAccount admin = adminAccountRepository.findById(adminId).orElse(null);
+        if (admin == null || !admin.isAccountEnabled()) {
+            return;
+        }
+        List<GrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ADMIN"));
+        var auth = new UsernamePasswordAuthenticationToken(adminId, null, authorities);
+        auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+        log.debug("[JWT] Authenticated adminId={} path={}", adminId, request.getRequestURI());
+    }
+
+    private void authenticateUser(HttpServletRequest request, String token) {
+        Long   userId   = jwtUtil.extractUserId(token);
+        String username = jwtUtil.extractUsername(token);
+
+        if (userId == null || username == null) {
+            return;
+        }
+
+        // 用户 JWT 即使历史 role=ADMIN 也不再授予后台权限（后台走独立 admin_users）
+        List<GrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("USER"));
+        var auth = new UsernamePasswordAuthenticationToken(userId, null, authorities);
+        auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+        log.debug("[JWT] Authenticated userId={} path={}", userId, request.getRequestURI());
     }
 }

@@ -4,6 +4,7 @@ import { Search, Plus, Trash2, ChevronLeft, ChevronRight, RefreshCw, Merge, Data
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { memoryApi } from '../api/memory'
+import { systemApi } from '../api/system'
 import { MemoryTable } from '../components/memory/MemoryTable'
 import { AddMemoryModal } from '../components/memory/AddMemoryModal'
 import { CompressMemoryModal } from '../components/memory/CompressMemoryModal'
@@ -48,10 +49,16 @@ export function MemoryPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [updatingId, setUpdatingId] = useState<string | null>(null)
 
+  const { data: features, isLoading: featuresLoading } = useQuery({
+    queryKey: ['system-features'],
+    queryFn: () => systemApi.features(),
+  })
+  const memoryOn = features?.ragMemoryEnabled === true
+
   const { data: migrationStatusData } = useQuery({
     queryKey: ['migration-status', user?.userId],
     queryFn: () => memoryApi.migrationStatus(),
-    enabled: !!user?.userId,
+    enabled: !!user?.userId && memoryOn,
   })
 
   const migrationRestoredRef = useRef(false)
@@ -149,17 +156,19 @@ export function MemoryPage() {
         session: sessionFilter || undefined,
         keyword: keyword || undefined,
       }),
-    enabled: tab === 'browse',
+    enabled: memoryOn && tab === 'browse',
   })
 
   const { data: countData } = useQuery({
     queryKey: ['memory-count', typeFilter, sessionFilter],
     queryFn: () => memoryApi.count(typeFilter || undefined, sessionFilter || undefined),
+    enabled: memoryOn,
   })
 
   const { data: meta } = useQuery({
     queryKey: ['memory-meta'],
     queryFn: () => memoryApi.meta(),
+    enabled: memoryOn,
   })
 
   const migrateMutation = useMutation({
@@ -181,7 +190,7 @@ export function MemoryPage() {
   const { data: searchResults, isLoading: searchLoading } = useQuery({
     queryKey: ['memory-search', searchTrigger],
     queryFn: () => memoryApi.search(searchTrigger, 20),
-    enabled: !!searchTrigger,
+    enabled: memoryOn && !!searchTrigger,
   })
 
   // ── Mutations ────────────────────────────────────────────────────────────────
@@ -333,6 +342,19 @@ export function MemoryPage() {
   })
 
   const totalPages = browseData ? Math.ceil(browseData.total / PAGE_SIZE) : 0
+
+  if (!featuresLoading && features && !memoryOn) {
+    return (
+      <div className="h-full flex items-center justify-center px-6">
+        <div className="max-w-md text-center">
+          <h1 className="text-base font-semibold text-white">长期记忆已关闭</h1>
+          <p className="text-sm text-white/45 mt-2">
+            系统设置里关闭了 RAG 记忆。对话不会召回或写入记忆，这里也不会访问向量库。
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="h-full flex flex-col">

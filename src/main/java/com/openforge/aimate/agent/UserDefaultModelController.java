@@ -11,7 +11,6 @@ import com.openforge.aimate.domain.UserDefaultModel;
 import com.openforge.aimate.repository.SystemModelRepository;
 import com.openforge.aimate.repository.UserApiKeyRepository;
 import com.openforge.aimate.repository.UserDefaultModelRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -31,13 +30,22 @@ import static org.springframework.http.HttpStatus.UNAUTHORIZED;
  */
 @Slf4j
 @RestController
-@RequiredArgsConstructor
 @RequestMapping("/api/agent/user-default-model")
 public class UserDefaultModelController {
 
     private final UserDefaultModelRepository userDefaultModelRepository;
     private final SystemModelRepository      systemModelRepository;
     private final UserApiKeyRepository       userApiKeyRepository;
+
+    public UserDefaultModelController(
+            UserDefaultModelRepository userDefaultModelRepository,
+            SystemModelRepository systemModelRepository,
+            UserApiKeyRepository userApiKeyRepository
+    ) {
+        this.userDefaultModelRepository = userDefaultModelRepository;
+        this.systemModelRepository = systemModelRepository;
+        this.userApiKeyRepository = userApiKeyRepository;
+    }
 
     /**
      * 查询当前登录用户可用的所有模型信息：

@@ -388,9 +388,34 @@ public class LlmClient {
 
     private String serialize(Object obj) {
         try {
+            if (obj instanceof ChatRequest request) {
+                com.fasterxml.jackson.databind.node.ObjectNode node = objectMapper.valueToTree(request);
+                applyImageContent(node, request);
+                return objectMapper.writeValueAsString(node);
+            }
             return objectMapper.writeValueAsString(obj);
         } catch (JsonProcessingException e) {
             throw new LlmException("Failed to serialize request", e);
+        }
+    }
+
+    /** 用户消息带图片时，把 content 写成 OpenAI / DeepSeek 的 text + image_url 数组。 */
+    private void applyImageContent(com.fasterxml.jackson.databind.node.ObjectNode requestNode, ChatRequest request) {
+        if (request.messages() == null || !requestNode.get("messages").isArray()) return;
+        com.fasterxml.jackson.databind.node.ArrayNode messages =
+                (com.fasterxml.jackson.databind.node.ArrayNode) requestNode.get("messages");
+        int n = Math.min(messages.size(), request.messages().size());
+        for (int i = 0; i < n; i++) {
+            Message src = request.messages().get(i);
+            if (src.imageDataUrls() == null || src.imageDataUrls().isEmpty() || !"user".equals(src.role())) continue;
+            com.fasterxml.jackson.databind.node.ArrayNode content = objectMapper.createArrayNode();
+            if (src.content() != null && !src.content().isBlank()) {
+                content.addObject().put("type", "text").put("text", src.content());
+            }
+            for (String url : src.imageDataUrls()) {
+                content.addObject().put("type", "image_url").putObject("image_url").put("url", url);
+            }
+            ((com.fasterxml.jackson.databind.node.ObjectNode) messages.get(i)).set("content", content);
         }
     }
 
@@ -400,6 +425,7 @@ public class LlmClient {
             com.fasterxml.jackson.databind.node.ObjectNode node =
                     objectMapper.valueToTree(request);
             node.put("stream", true);
+            applyImageContent(node, request);
             return objectMapper.writeValueAsString(node);
         } catch (JsonProcessingException e) {
             throw new LlmException("Failed to serialize streaming request", e);

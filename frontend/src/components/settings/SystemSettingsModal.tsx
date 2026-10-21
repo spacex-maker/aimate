@@ -77,7 +77,6 @@ export function SystemSettingsModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="p-5 overflow-y-auto flex-1 space-y-6">
-          {/* 容器管理 */}
           <section>
             <h3 className="flex items-center gap-2 text-sm font-medium text-white/90 mb-3">
               <Box className="w-4 h-4 text-blue-400" />

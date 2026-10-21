@@ -49,7 +49,36 @@ public class SystemModel extends BaseEntity {
     @Column(nullable = false)
     private boolean enabled = true;
 
+    /** 是否接受图片输入。当前仅 DeepSeek V4.1 Flash。 */
+    @Column(name = "supports_vision", nullable = false)
+    private boolean supportsVision = false;
+
     /** 简短说明，如能力或适用场景 */
     @Column(length = 256)
     private String description;
+
+    /**
+     * 选模型时展示在名称旁的提示，如「非高峰半价」。
+     * 与 description 区分：tip 面向选模型场景的短标签。
+     */
+    @Column(length = 128)
+    private String tip;
+
+    @Column(name = "points_per_1k_prompt_tokens", nullable = false)
+    private int pointsPer1kPromptTokens = 1;
+
+    @Column(name = "points_per_1k_completion_tokens", nullable = false)
+    private int pointsPer1kCompletionTokens = 3;
+
+    @Column(name = "cost_input_cny_per_1m_peak")
+    private Double costInputCnyPer1mPeak;
+
+    @Column(name = "cost_input_cny_per_1m_offpeak")
+    private Double costInputCnyPer1mOffpeak;
+
+    @Column(name = "cost_output_cny_per_1m_peak")
+    private Double costOutputCnyPer1mPeak;
+
+    @Column(name = "cost_output_cny_per_1m_offpeak")
+    private Double costOutputCnyPer1mOffpeak;
 }

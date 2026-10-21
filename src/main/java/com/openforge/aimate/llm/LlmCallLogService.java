@@ -1,17 +1,20 @@
 package com.openforge.aimate.llm;
 
+import com.openforge.aimate.billing.InsufficientPointsException;
+import com.openforge.aimate.billing.ModelCostEstimator;
+import com.openforge.aimate.billing.PointsService;
 import com.openforge.aimate.domain.LlmCallLog;
+import com.openforge.aimate.domain.PointLedger;
+import com.openforge.aimate.domain.SystemModel;
 import com.openforge.aimate.llm.model.ChatResponse;
 import com.openforge.aimate.repository.LlmCallLogRepository;
+import com.openforge.aimate.repository.SystemModelRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
- * Helper service to persist LLM call logs for cost/usage analytics.
- *
- * Kept intentionally lightweight: callers传入必要上下文（provider/model/userId/会话等），
- * 由本服务将 ChatResponse.usage / latency 等落库。
+ * Persist LLM call logs + 系统成本估算 + Chat 积分扣费。
  */
 @Slf4j
 @Service
@@ -19,6 +22,8 @@ import org.springframework.stereotype.Service;
 public class LlmCallLogService {
 
     private final LlmCallLogRepository repository;
+    private final SystemModelRepository systemModelRepository;
+    private final PointsService pointsService;
 
     public void logSuccess(String provider,
                            String model,
@@ -29,24 +34,55 @@ public class LlmCallLogService {
                            String sessionId,
                            long latencyMs,
                            ChatResponse response) {
+        LlmCallLog row;
         try {
-            LlmCallLog log = new LlmCallLog();
-            log.setProvider(provider);
-            log.setModel(model);
-            log.setCallType(callType != null ? callType : LlmCallLog.CallType.OTHER);
-            log.setToolName(toolName);
-            log.setEndpoint(endpoint);
-            log.setUserId(userId);
-            log.setSessionId(sessionId);
-            log.setLatencyMs(latencyMs);
+            row = new LlmCallLog();
+            row.setProvider(provider);
+            row.setModel(model);
+            row.setCallType(callType != null ? callType : LlmCallLog.CallType.OTHER);
+            row.setToolName(toolName);
+            row.setEndpoint(endpoint);
+            row.setUserId(userId);
+            row.setSessionId(sessionId);
+            row.setLatencyMs(latencyMs);
+            int prompt = 0;
+            int completion = 0;
             if (response != null && response.usage() != null) {
-                log.setPromptTokens(response.usage().promptTokens());
-                log.setCompletionTokens(response.usage().completionTokens());
-                log.setTotalTokens(response.usage().totalTokens());
+                prompt = Math.max(0, response.usage().promptTokens());
+                completion = Math.max(0, response.usage().completionTokens());
+                row.setPromptTokens(prompt);
+                row.setCompletionTokens(completion);
+                row.setTotalTokens(response.usage().totalTokens());
             }
-            log.setHttpStatus(200);
-            log.setSuccess(true);
-            repository.save(log);
+            SystemModel sm = resolveModel(model);
+            double costCny = ModelCostEstimator.estimateCny(sm, prompt, completion);
+            row.setEstimatedCostCny(costCny);
+            // 兼容旧汇总字段：用 CNY 写入（管理端改为展示 CNY）
+            row.setEstimatedCostUsd(costCny);
+            row.setHttpStatus(200);
+            row.setSuccess(true);
+            row = repository.save(row);
+
+            if (userId != null && (prompt > 0 || completion > 0)
+                    && callType != LlmCallLog.CallType.MEMORY_COMPRESS) {
+                long points = ModelCostEstimator.pointsForTokens(sm, prompt, completion);
+                if (points > 0) {
+                    pointsService.deduct(
+                            userId,
+                            points,
+                            PointLedger.CHAT_DEDUCT,
+                            "LLM_CALL",
+                            String.valueOf(row.getId()),
+                            sessionId,
+                            row.getId(),
+                            model + " · " + points + " 积分"
+                    );
+                    row.setPointsCharged(points);
+                    repository.save(row);
+                }
+            }
+        } catch (InsufficientPointsException e) {
+            throw e;
         } catch (Exception e) {
             log.warn("[LlmCallLog] Failed to persist success log: {}", e.getMessage());
         }
@@ -64,25 +100,29 @@ public class LlmCallLogService {
                          String errorCode,
                          String errorMessage) {
         try {
-            LlmCallLog log = new LlmCallLog();
-            log.setProvider(provider);
-            log.setModel(model);
-            log.setCallType(callType != null ? callType : LlmCallLog.CallType.OTHER);
-            log.setToolName(toolName);
-            log.setEndpoint(endpoint);
-            log.setUserId(userId);
-            log.setSessionId(sessionId);
-            log.setLatencyMs(latencyMs);
-            log.setHttpStatus(httpStatus);
-            log.setErrorCode(errorCode);
-            log.setErrorMessage(errorMessage != null && errorMessage.length() > 500
+            LlmCallLog row = new LlmCallLog();
+            row.setProvider(provider);
+            row.setModel(model);
+            row.setCallType(callType != null ? callType : LlmCallLog.CallType.OTHER);
+            row.setToolName(toolName);
+            row.setEndpoint(endpoint);
+            row.setUserId(userId);
+            row.setSessionId(sessionId);
+            row.setLatencyMs(latencyMs);
+            row.setHttpStatus(httpStatus);
+            row.setErrorCode(errorCode);
+            row.setErrorMessage(errorMessage != null && errorMessage.length() > 500
                     ? errorMessage.substring(0, 500)
                     : errorMessage);
-            log.setSuccess(false);
-            repository.save(log);
+            row.setSuccess(false);
+            repository.save(row);
         } catch (Exception e) {
             log.warn("[LlmCallLog] Failed to persist error log: {}", e.getMessage());
         }
     }
-}
 
+    private SystemModel resolveModel(String modelId) {
+        if (modelId == null || modelId.isBlank()) return null;
+        return systemModelRepository.findFirstByModelId(modelId).orElse(null);
+    }
+}

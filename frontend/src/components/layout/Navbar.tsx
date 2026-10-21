@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Bot, Brain, Cog, Cpu, KeyRound, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Settings2, Wrench, Clock } from 'lucide-react'
+import { Bot, Brain, Cog, Cpu, KeyRound, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Wrench, Clock } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../hooks/useAuth'
-import { AdminModal } from '../admin/AdminModal'
+import { UserCenterModal } from '../billing/UserCenterModal'
 import { SystemSettingsModal } from '../settings/SystemSettingsModal'
 import { agentApi } from '../../api/agent'
 import { StatusBadge } from '../agent/StatusBadge'
@@ -27,8 +27,8 @@ interface NavbarProps {
 export function Navbar({ collapsed, onToggle }: NavbarProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
-  const [adminModalOpen, setAdminModalOpen] = useState(false)
   const [systemSettingsOpen, setSystemSettingsOpen] = useState(false)
+  const [userCenterOpen, setUserCenterOpen] = useState(false)
 
   const { data: recentSessions = [], isLoading: recentLoading } = useQuery<SessionResponse[]>({
     queryKey: ['recent-sessions', user?.userId],
@@ -149,24 +149,6 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
         )}
       </div>
 
-      {/* 管理入口（仅管理员） */}
-      {user?.role === 'ADMIN' && (
-        <div className="px-2 pb-2 border-t border-white/10 pt-2 flex-shrink-0">
-          <button
-            type="button"
-            onClick={() => setAdminModalOpen(true)}
-            title="管理"
-            className={clsx(
-              'flex items-center w-full rounded-lg text-sm text-white/50 hover:text-white/80 hover:bg-white/5 transition-colors',
-              collapsed ? 'justify-center p-2' : 'gap-3 px-3 py-2'
-            )}
-          >
-            <Settings2 className="w-4 h-4 flex-shrink-0" />
-            {!collapsed && <span>管理</span>}
-          </button>
-        </div>
-      )}
-
       {/* 系统设置 + 个人信息 */}
       <div className={clsx('border-t border-white/10 space-y-2 flex-shrink-0', collapsed ? 'px-0 py-3 flex flex-col items-center' : 'px-3 py-3')}>
         {/* 系统设置：个人信息上方 */}
@@ -184,19 +166,26 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
         </button>
         {user && (
           <div className={clsx('flex items-center py-1.5', collapsed ? 'flex-col gap-1' : 'gap-2.5 px-2')}>
-            <div
-              className="w-7 h-7 rounded-full bg-blue-600/30 border border-blue-500/30 flex items-center justify-center flex-shrink-0"
-              title={collapsed ? (user.displayName ?? user.username ?? '') : undefined}
+            <button
+              type="button"
+              onClick={() => setUserCenterOpen(true)}
+              className="w-7 h-7 rounded-full bg-blue-600/30 border border-blue-500/30 flex items-center justify-center flex-shrink-0 hover:border-blue-400/50"
+              title="用户中心"
             >
               <span className="text-[11px] font-bold text-blue-300 uppercase">
                 {(user.displayName ?? user.username ?? '?').charAt(0)}
               </span>
-            </div>
+            </button>
             {!collapsed && (
-              <div className="flex-1 min-w-0">
+              <button
+                type="button"
+                onClick={() => setUserCenterOpen(true)}
+                className="flex-1 min-w-0 text-left"
+                title="用户中心"
+              >
                 <div className="text-xs text-white/80 font-medium truncate">{user.displayName ?? user.username ?? ''}</div>
                 <div className="text-[10px] text-white/30 truncate">@{user.username ?? ''}</div>
-              </div>
+              </button>
             )}
             <button
               onClick={handleLogout}
@@ -214,8 +203,8 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
         )}
       </div>
 
-      {adminModalOpen && <AdminModal onClose={() => setAdminModalOpen(false)} />}
       {systemSettingsOpen && <SystemSettingsModal onClose={() => setSystemSettingsOpen(false)} />}
+      {userCenterOpen && <UserCenterModal onClose={() => setUserCenterOpen(false)} />}
     </nav>
   )
 }

@@ -1,5 +1,6 @@
 package com.openforge.aimate.llm.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Builder;
@@ -43,7 +44,10 @@ public record Message(
          * When using deepseek-reasoner (or thinking enabled), every assistant message
          * in the request must have this field (use "" if none).
          */
-        @JsonProperty("reasoning_content") String reasoningContent
+        @JsonProperty("reasoning_content") String reasoningContent,
+
+        /** 仅用户消息：data URL，序列化请求时展开为 image_url，不作为独立字段发给模型。 */
+        @JsonIgnore List<String> imageDataUrls
 ) {
 
     // ── Static factory helpers ──────────────────────────────────────────────
@@ -53,7 +57,22 @@ public record Message(
     }
 
     public static Message user(String content) {
-        return Message.builder().role("user").content(content).build();
+        return user(content, null);
+    }
+
+    public static Message user(String content, List<String> imageDataUrls) {
+        return Message.builder().role("user").content(content).imageDataUrls(imageDataUrls).build();
+    }
+
+    public Message withoutImages() {
+        if (imageDataUrls == null || imageDataUrls.isEmpty()) return this;
+        return Message.builder()
+                .role(role)
+                .content(content)
+                .toolCalls(toolCalls)
+                .toolCallId(toolCallId)
+                .reasoningContent(reasoningContent)
+                .build();
     }
 
     public static Message assistantText(String content) {
