@@ -1637,3 +1637,391 @@ a.auth-gate__cta {
     display: none;
   }
 }
+
+/* —— Feature: context compress pipeline —— */
+.agent-land__pipe {
+  display: grid;
+  gap: 20px;
+  margin-top: 8px;
+}
+
+@media (min-width: 900px) {
+  .agent-land__pipe {
+    grid-template-columns: minmax(200px, 280px) 1fr;
+    gap: 28px;
+    align-items: stretch;
+  }
+}
+
+.agent-land__pipe-rail {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+@media (min-width: 900px) {
+  .agent-land__pipe-rail {
+    flex-direction: column;
+    overflow: visible;
+  }
+}
+
+.agent-land__pipe-step {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 7.5rem;
+  padding: 12px 14px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--al-mute);
+  background: rgba(232, 238, 248, 0.03);
+  border: 1px solid rgba(232, 238, 248, 0.08);
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.agent-land__pipe-step .id {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  color: var(--al-dim);
+}
+
+.agent-land__pipe-step .title {
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.agent-land__pipe-step.is-active {
+  color: var(--al-ink);
+  border-color: rgba(56, 189, 248, 0.45);
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.12), rgba(245, 165, 36, 0.06));
+}
+
+.agent-land__pipe-step.is-active .id {
+  color: var(--al-cyan);
+}
+
+.agent-land__pipe-stage {
+  position: relative;
+  padding: clamp(22px, 4vw, 36px);
+  min-height: 220px;
+  background:
+    radial-gradient(ellipse 70% 60% at 0% 0%, rgba(56, 189, 248, 0.1), transparent 55%),
+    rgba(8, 12, 20, 0.65);
+  border: 1px solid rgba(232, 238, 248, 0.1);
+  animation: agent-land-stage-in 0.45s ease both;
+}
+
+@keyframes agent-land-stage-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.agent-land__pipe-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  color: var(--al-cyan);
+}
+
+.agent-land__pipe-stage h3 {
+  margin: 0 0 8px;
+  font-family: Syne, Outfit, sans-serif;
+  font-size: clamp(1.35rem, 2.5vw, 1.75rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.agent-land__pipe-lead {
+  margin: 0 0 16px;
+  font-size: 0.95rem;
+  color: var(--al-mute);
+}
+
+.agent-land__pipe-list {
+  margin: 0 0 20px;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.agent-land__pipe-list li {
+  position: relative;
+  padding-left: 16px;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--al-ink);
+}
+
+.agent-land__pipe-list li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 6px;
+  height: 6px;
+  background: var(--al-ember);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+.agent-land__assemble {
+  margin-top: 28px;
+  padding: 20px clamp(16px, 3vw, 28px);
+  border: 1px dashed rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.04);
+}
+
+.agent-land__assemble-label {
+  margin: 0 0 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--al-cyan);
+}
+
+.agent-land__assemble-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  color: var(--al-ink);
+}
+
+.agent-land__assemble-flow span:not(.arr) {
+  padding: 6px 10px;
+  background: rgba(232, 238, 248, 0.06);
+  border: 1px solid rgba(232, 238, 248, 0.1);
+}
+
+.agent-land__assemble-flow .arr {
+  color: var(--al-dim);
+}
+
+.agent-land__assemble-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 14px 0 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--al-mute);
+}
+
+.agent-land__assemble-hint svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--al-ember);
+}
+
+/* —— Hire —— */
+.agent-land__hire {
+  display: grid;
+  gap: 28px;
+  margin-top: 8px;
+}
+
+@media (min-width: 880px) {
+  .agent-land__hire {
+    grid-template-columns: minmax(220px, 0.9fr) 1.1fr;
+    gap: 40px;
+    align-items: center;
+  }
+}
+
+.agent-land__hire-visual {
+  position: relative;
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(56, 189, 248, 0.18), transparent 55%),
+    radial-gradient(circle at 70% 70%, rgba(245, 165, 36, 0.12), transparent 45%);
+}
+
+.agent-land__hire-orb {
+  width: 96px;
+  height: 96px;
+  display: grid;
+  place-items: center;
+  color: #041018;
+  background: linear-gradient(145deg, var(--al-cyan), var(--al-teal) 50%, var(--al-ember));
+  clip-path: polygon(18% 0, 100% 0, 100% 82%, 82% 100%, 0 100%, 0 18%);
+  animation: agent-land-node 3.2s ease-in-out infinite;
+}
+
+.agent-land__hire-chip {
+  position: absolute;
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  font-weight: 650;
+  color: var(--al-ink);
+  background: rgba(6, 10, 18, 0.82);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  backdrop-filter: blur(8px);
+  animation: agent-land-float 4.5s ease-in-out infinite;
+}
+
+.agent-land__hire-chip--a {
+  top: 18%;
+  left: 8%;
+  animation-delay: 0s;
+}
+
+.agent-land__hire-chip--b {
+  top: 28%;
+  right: 6%;
+  animation-delay: 0.6s;
+}
+
+.agent-land__hire-chip--c {
+  bottom: 16%;
+  left: 22%;
+  animation-delay: 1.2s;
+}
+
+@keyframes agent-land-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+.agent-land__hire-list {
+  display: grid;
+  gap: 18px;
+}
+
+.agent-land__hire-item h3 {
+  margin: 0 0 6px;
+  font-family: Syne, Outfit, sans-serif;
+  font-size: 1.15rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.agent-land__hire-item p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--al-mute);
+}
+
+.agent-land__inline-cta {
+  padding-top: 6px;
+}
+
+/* —— Soul —— */
+.agent-land__soul-grid {
+  display: grid;
+  gap: 1px;
+  margin-top: 8px;
+  background: rgba(232, 238, 248, 0.08);
+  border: 1px solid rgba(232, 238, 248, 0.1);
+}
+
+@media (min-width: 800px) {
+  .agent-land__soul-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.agent-land__soul-cell {
+  padding: clamp(22px, 3.5vw, 32px);
+  background: #0a0e16;
+}
+
+.agent-land__soul-cell h3 {
+  margin: 10px 0 8px;
+  font-family: Syne, Outfit, sans-serif;
+  font-size: 1.1rem;
+  font-weight: 750;
+}
+
+.agent-land__soul-cell p {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: var(--al-mute);
+}
+
+/* —— Runtime rows —— */
+.agent-land__runtime {
+  display: grid;
+  gap: 0;
+  margin-top: 8px;
+  border-top: 1px solid rgba(232, 238, 248, 0.1);
+}
+
+.agent-land__runtime-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 16px;
+  align-items: start;
+  padding: 20px 4px;
+  border-bottom: 1px solid rgba(232, 238, 248, 0.08);
+}
+
+.agent-land__runtime-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  color: var(--al-cyan);
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+}
+
+.agent-land__runtime-row h3 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.agent-land__runtime-row p {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--al-mute);
+}
+
+.agent-land__obs--wide {
+  max-width: 52rem;
+  margin-inline: auto;
+}
+
+.agent-land__closing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+
+/* 用户中心 · 画像：压掉浏览器默认/autofill 白边与浅底 */
+.uc-profile-field {
+  -webkit-appearance: none;
+  appearance: none;
+  box-shadow: none;
+  color-scheme: dark;
+}
+
+.uc-profile-field:-webkit-autofill,
+.uc-profile-field:-webkit-autofill:hover,
+.uc-profile-field:-webkit-autofill:focus {
+  -webkit-text-fill-color: #fff;
+  caret-color: #fff;
+  transition: background-color 99999s ease-out 0s;
+  box-shadow: 0 0 0 1000px rgba(255, 255, 255, 0.04) inset;
+  border-color: rgba(255, 255, 255, 0.06);
+}

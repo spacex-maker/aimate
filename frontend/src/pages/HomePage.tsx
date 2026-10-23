@@ -12,6 +12,7 @@ import type { SessionResponse } from '../types/agent'
 import { useModelSelection } from '../state/modelSelection.ts'
 import { DeleteSessionModal } from '../components/agent/DeleteSessionModal'
 import { AgentInputBox } from '../components/agent/AgentInputBox'
+import { AgentAvatar } from '../components/agent/AgentAvatar'
 
 const EXAMPLES = [
   '用 Python 写一个能批量压缩图片的脚本，并解释每一步',
@@ -63,6 +64,7 @@ export function HomePage() {
     }) => agentApi.startSession(payload),
     onSuccess: (session) => {
       queryClient.invalidateQueries({ queryKey: ['recent-sessions'] })
+      queryClient.invalidateQueries({ queryKey: ['conversations'] })
       navigate(`/session/${session.sessionId}`)
     },
     onError: (err: Error) => toast.error(err.message),
@@ -73,6 +75,7 @@ export function HomePage() {
       agentApi.deleteSession(params.session.sessionId, params.options),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['recent-sessions'] })
+      queryClient.invalidateQueries({ queryKey: ['conversations'] })
       toast.success('会话已更新')
       setSelectedSession(null)
     },
@@ -113,14 +116,17 @@ export function HomePage() {
                     type="button"
                     onClick={() => setUserAgentId(a.id)}
                     className={clsx(
-                      'rounded-lg border px-3 py-1.5 text-xs transition-colors',
+                      'inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-colors',
                       userAgentId === a.id
                         ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-100'
                         : 'border-white/10 text-white/50 hover:border-white/20'
                     )}
                   >
-                    {a.name}
-                    {a.kind === 'SECRETARY' ? ' · 秘书' : ''}
+                    <AgentAvatar agent={a} size={20} />
+                    <span>
+                      {a.name}
+                      {a.kind === 'SECRETARY' ? ' · 秘书' : ''}
+                    </span>
                   </button>
                 ))}
             </div>

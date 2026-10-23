@@ -111,7 +111,9 @@ public class SecretaryAgentService {
         UserAgent ua = new UserAgent();
         ua.setUserId(user.getId());
         ua.setKind(UserAgent.Kind.SECRETARY);
-        ua.setName(secretaryName(profile));
+        String secName = secretaryName(profile);
+        ua.setName(secName);
+        ua.setOriginalName(secName);
         ua.setGender(profile.getGender());
         ua.setPersonality("贴合用户职业与生活的专属秘书");
         ua.setExternalAgentKey(EXT_KEY_SECRETARY);

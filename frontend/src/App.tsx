@@ -11,13 +11,16 @@ import { RegisterPage } from './pages/RegisterPage'
 import { OAuthCallbackPage } from './pages/OAuthCallbackPage'
 import { LandingPage } from './pages/LandingPage'
 import { HomePage } from './pages/HomePage'
+import { DashboardPage } from './pages/DashboardPage'
 import { SessionPage } from './pages/SessionPage'
-import { MemoryPage } from './pages/MemoryPage'
 import { ApiKeyPage } from './pages/ApiKeyPage'
 import { EmbeddingModelPage } from './pages/EmbeddingModelPage'
 import { ToolsPage } from './pages/ToolsPage'
 import { AgentHirePage } from './pages/AgentHirePage'
+import { OfficeHirePage } from './pages/OfficeHirePage'
 import { MyAgentsPage } from './pages/MyAgentsPage'
+import { GroupChatPage } from './pages/GroupChatPage'
+import { JoinGroupPage } from './pages/JoinGroupPage'
 import { ADMIN_SITE_ORIGIN } from './lib/host'
 
 const queryClient = new QueryClient({
@@ -111,6 +114,16 @@ export default function App() {
             element={
               <RequireAuth>
                 <AppLayout>
+                  <DashboardPage />
+                </AppLayout>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/app/new"
+            element={
+              <RequireAuth>
+                <AppLayout>
                   <HomePage />
                 </AppLayout>
               </RequireAuth>
@@ -126,16 +139,8 @@ export default function App() {
               </RequireAuth>
             }
           />
-          <Route
-            path="/memory"
-            element={
-              <RequireAuth>
-                <AppLayout>
-                  <MemoryPage />
-                </AppLayout>
-              </RequireAuth>
-            }
-          />
+          {/* 记忆已并入「我的 Agent」按魂查看；旧路由跳转 */}
+          <Route path="/memory" element={<Navigate to="/agents/mine" replace />} />
 
           <Route
             path="/api-keys"
@@ -182,11 +187,45 @@ export default function App() {
           />
 
           <Route
+            path="/offices"
+            element={
+              <RequireAuth>
+                <AppLayout>
+                  <OfficeHirePage />
+                </AppLayout>
+              </RequireAuth>
+            }
+          />
+
+          <Route
             path="/agents/mine"
             element={
               <RequireAuth>
                 <AppLayout>
                   <MyAgentsPage />
+                </AppLayout>
+              </RequireAuth>
+            }
+          />
+
+          {/* 群组入口已并入侧栏「新建」；旧 /groups 列表页跳转控制台 */}
+          <Route path="/groups" element={<Navigate to="/app" replace />} />
+
+          <Route
+            path="/groups/join/:inviteCode"
+            element={
+              <AppLayout>
+                <JoinGroupPage />
+              </AppLayout>
+            }
+          />
+
+          <Route
+            path="/groups/:publicId"
+            element={
+              <RequireAuth>
+                <AppLayout>
+                  <GroupChatPage />
                 </AppLayout>
               </RequireAuth>
             }

@@ -27,7 +27,7 @@ public class UserToolSettings extends BaseEntity {
     @Column(name = "memory_enabled", nullable = false)
     private Boolean memoryEnabled = true;
 
-    /** 联网搜索：tavily_search */
+    /** 联网搜索：等同开启 Tavily（tavily_search）；与 http_request 无关 */
     @Builder.Default
     @Column(name = "web_search_enabled", nullable = false)
     private Boolean webSearchEnabled = true;

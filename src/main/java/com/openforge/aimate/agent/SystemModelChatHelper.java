@@ -24,12 +24,19 @@ public class SystemModelChatHelper {
     private final SystemConfigService systemConfigService;
 
     public String chatText(SystemModel m, String system, String user) {
+        return chatMessages(m, List.of(Message.system(system), Message.user(user)), 0.3, 1024);
+    }
+
+    /** 多轮消息（群聊 Agent 等）；temperature/maxTokens 可按场景覆盖。 */
+    public String chatMessages(SystemModel m, List<Message> messages, double temperature, int maxTokens) {
         LlmProperties.ProviderConfig config = buildConfig(m);
         LlmClient client = new LlmClient(httpClient, objectMapper, config);
-        ChatRequest req = ChatRequest.simple(config.model(), List.of(
-                Message.system(system),
-                Message.user(user)
-        ));
+        ChatRequest req = ChatRequest.builder()
+                .model(config.model())
+                .messages(messages)
+                .temperature(temperature)
+                .maxTokens(maxTokens)
+                .build();
         ChatResponse resp = client.chat(req);
         Message msg = resp.firstMessage();
         return msg != null && StringUtils.hasText(msg.content()) ? msg.content().trim() : "";

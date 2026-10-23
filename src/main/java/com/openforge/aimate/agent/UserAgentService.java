@@ -1,9 +1,12 @@
 package com.openforge.aimate.agent;
 
+import com.openforge.aimate.domain.AgentCatalog;
 import com.openforge.aimate.domain.AgentPromptVersion;
 import com.openforge.aimate.domain.UserAgent;
+import com.openforge.aimate.repository.AgentCatalogRepository;
 import com.openforge.aimate.repository.AgentPromptVersionRepository;
 import com.openforge.aimate.repository.UserAgentRepository;
+import com.openforge.aimate.storage.ChatCosStorageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,8 +22,10 @@ import java.util.Map;
 public class UserAgentService {
 
     private final UserAgentRepository userAgentRepository;
+    private final AgentCatalogRepository agentCatalogRepository;
     private final AgentPromptVersionRepository promptVersionRepository;
     private final AgentPromptService agentPromptService;
+    private final ChatCosStorageService chatCosStorageService;
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listMine(Long userId) {
@@ -49,10 +54,44 @@ public class UserAgentService {
     @Transactional
     public Map<String, Object> updatePersona(Long userId, Long id, PersonaBody body) {
         UserAgent ua = require(userId, id);
-        if (body.name() != null) ua.setName(trim(body.name(), 128));
+        if (body.name() != null) {
+            String nick = trim(body.name(), 128);
+            if (!StringUtils.hasText(nick)) {
+                throw new IllegalArgumentException("昵称不能为空");
+            }
+            ensureOriginalName(ua);
+            ua.setName(nick);
+        }
         if (body.avatarUrl() != null) ua.setAvatarUrl(trim(body.avatarUrl(), 512));
         if (body.gender() != null) ua.setGender(trim(body.gender(), 32));
         if (body.personality() != null) ua.setPersonality(trim(body.personality(), 512));
+        if (body.dailyPointsLimit() != null) {
+            long lim = body.dailyPointsLimit();
+            ua.setDailyPointsLimit(lim <= 0 ? null : lim);
+        }
+        userAgentRepository.save(ua);
+        return briefView(ua);
+    }
+
+    /**
+     * 上传头像：data URL / https → COS 永久 URL；clear=true 清除自定义头像（前端回退到唯一默认图）。
+     */
+    @Transactional
+    public Map<String, Object> updateAvatar(Long userId, Long id, String imageDataUrl, boolean clear) {
+        UserAgent ua = require(userId, id);
+        if (clear) {
+            ua.setAvatarUrl(null);
+            userAgentRepository.save(ua);
+            return briefView(ua);
+        }
+        if (!StringUtils.hasText(imageDataUrl)) {
+            throw new IllegalArgumentException("请选择图片");
+        }
+        List<String> urls = chatCosStorageService.persistUserImages(List.of(imageDataUrl.trim()));
+        if (urls.isEmpty()) {
+            throw new IllegalStateException("头像上传失败");
+        }
+        ua.setAvatarUrl(trim(urls.get(0), 512));
         userAgentRepository.save(ua);
         return briefView(ua);
     }
@@ -114,13 +153,42 @@ public class UserAgentService {
         m.put("catalogId", ua.getCatalogId());
         m.put("tier", ua.getTier() != null ? ua.getTier().name() : null);
         m.put("name", ua.getName());
+        String original = resolveOriginalName(ua);
+        m.put("originalName", original);
         m.put("avatarUrl", ua.getAvatarUrl());
         m.put("gender", ua.getGender());
         m.put("status", ua.getStatus().name());
         m.put("expiresAt", ua.getExpiresAt() != null ? ua.getExpiresAt().toString() : null);
         m.put("currentPromptVersion", ua.getCurrentPromptVersion());
         m.put("defaultSystemModelId", ua.getDefaultSystemModelId());
+        m.put("soulAgentId", ua.getSoulAgentId());
+        m.put("soulBound", ua.getSoulAgentId() != null && StringUtils.hasText(ua.getSoulAccessToken()));
+        m.put("externalAgentKey", ua.getExternalAgentKey());
+        m.put("dailyPointsLimit", ua.getDailyPointsLimit());
+        m.put("executionMode", ua.getExecutionMode() != null ? ua.getExecutionMode().name() : "CLOUD_LLM");
+        m.put("localBridge", ua.getExecutionMode() == com.openforge.aimate.domain.AgentExecutionMode.LOCAL_BRIDGE);
+        m.put("localBridgeConfigured", StringUtils.hasText(ua.getLocalBridgeTokenHash()));
+        m.put("localBridgeTokenPrefix", ua.getLocalBridgeTokenPrefix());
         return m;
+    }
+
+    /** 首次改昵称前锁定原始名；已有值不覆盖。 */
+    private void ensureOriginalName(UserAgent ua) {
+        if (StringUtils.hasText(ua.getOriginalName())) return;
+        String fromCatalog = catalogName(ua.getCatalogId());
+        ua.setOriginalName(StringUtils.hasText(fromCatalog) ? fromCatalog : ua.getName());
+    }
+
+    private String resolveOriginalName(UserAgent ua) {
+        if (StringUtils.hasText(ua.getOriginalName())) return ua.getOriginalName().trim();
+        String fromCatalog = catalogName(ua.getCatalogId());
+        if (StringUtils.hasText(fromCatalog)) return fromCatalog;
+        return ua.getName();
+    }
+
+    private String catalogName(Long catalogId) {
+        if (catalogId == null) return null;
+        return agentCatalogRepository.findById(catalogId).map(AgentCatalog::getName).orElse(null);
     }
 
     private Map<String, Object> versionView(AgentPromptVersion v) {
@@ -141,5 +209,5 @@ public class UserAgentService {
         return t.length() > max ? t.substring(0, max) : t;
     }
 
-    public record PersonaBody(String name, String avatarUrl, String gender, String personality) {}
+    public record PersonaBody(String name, String avatarUrl, String gender, String personality, Long dailyPointsLimit) {}
 }

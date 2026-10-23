@@ -26,6 +26,7 @@ export const adminApi = {
     sortOrder?: number
     apiKeyConfigKey?: string | null
     tip?: string | null
+    contextWindowTokens?: number
     pointsPer1kPromptTokens?: number
     pointsPer1kCompletionTokens?: number
     costInputCnyPer1mPeak?: number | null
@@ -114,6 +115,14 @@ export const adminApi = {
   createDeepseekKey: (body: { configValue: string; description?: string }) =>
     http<SystemConfigItem>('/api/admin/system-configs', {
       method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+
+  /** 写入 / 更新 Tavily API Key（留空则清空） */
+  upsertTavilyKey: (body: { configValue: string; description?: string }) =>
+    http<SystemConfigItem>('/api/admin/system-configs/tavily', {
+      method: 'PUT',
       body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
     }),
@@ -221,10 +230,25 @@ export const adminApi = {
     }),
 
   getBillingSettings: () =>
-    http<{ markupMultiplier: number; pointsPerYuan: number }>('/api/admin/billing/settings'),
+    http<{
+      markupMultiplier: number
+      pointsPerYuan: number
+      webSearchCostCnyBasic: number
+      webSearchCostCnyAdvanced: number
+    }>('/api/admin/billing/settings'),
 
-  updateBillingSettings: (body: { markupMultiplier?: number; pointsPerYuan?: number }) =>
-    http<{ markupMultiplier: number; pointsPerYuan: number }>('/api/admin/billing/settings', {
+  updateBillingSettings: (body: {
+    markupMultiplier?: number
+    pointsPerYuan?: number
+    webSearchCostCnyBasic?: number
+    webSearchCostCnyAdvanced?: number
+  }) =>
+    http<{
+      markupMultiplier: number
+      pointsPerYuan: number
+      webSearchCostCnyBasic: number
+      webSearchCostCnyAdvanced: number
+    }>('/api/admin/billing/settings', {
       method: 'PUT',
       body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },

@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
     aimatex_account_sub VARCHAR(64)          COMMENT 'AIMATEX Account OIDC sub',
     password_hash   VARCHAR(255)             COMMENT '密码哈希；OIDC 用户可为空',
     display_name    VARCHAR(128)             COMMENT '展示昵称',
+    avatar_url      VARCHAR(1024)            COMMENT '统一登录中心同步的头像 URL',
     status          VARCHAR(16)     NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE | DISABLED',
     role            VARCHAR(16)     NOT NULL DEFAULT 'USER' COMMENT 'USER | ADMIN',
     last_login_time DATETIME                 COMMENT '最近登录时间',
@@ -249,6 +250,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
 
     current_plan     TEXT                    COMMENT 'JSON 序列化的 List<PlanStep>；Planner 首次运行后填充',
     context_window   LONGTEXT                COMMENT 'JSON 序列化的 List<Message>；每轮迭代追加后写回',
+    context_summary  LONGTEXT                COMMENT '上下文压缩滚动摘要（送模用，UI 历史不删）',
 
     iteration_count  INT            NOT NULL DEFAULT 0 COMMENT 'Agent 循环计数，防止无限循环',
     result           TEXT                    COMMENT '上一轮最终答案',
@@ -293,6 +295,8 @@ CREATE TABLE IF NOT EXISTS agent_session_messages (
     thinking_content  LONGTEXT        NULL     COMMENT '仅 assistant：思考过程正文，前端可折叠展示',
     thinking_blocks_json LONGTEXT     NULL     COMMENT '仅 assistant：思考+工具调用时间线 StreamBlock JSON',
     reply_to_message_id BIGINT        NULL     COMMENT '归属某条 assistant 回复（工具消息等）；NULL=主序消息',
+    exclude_from_context TINYINT(1)  NOT NULL DEFAULT 0 COMMENT '已纳入上下文压缩摘要则送模时跳过；UI 仍展示',
+    pinned               TINYINT(1)  NOT NULL DEFAULT 0 COMMENT 'true=钉住，压缩时保留原文送模',
 
     version           INT             NOT NULL DEFAULT 0,
     create_time       DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,

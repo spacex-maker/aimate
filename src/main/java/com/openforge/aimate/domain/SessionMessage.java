@@ -65,6 +65,20 @@ public class SessionMessage extends BaseEntity {
     @Column(name = "reply_to_message_id")
     private Long replyToMessageId;
 
+    /**
+     * true = 已纳入上下文压缩摘要，送模时不再附带原文；UI 历史仍展示。
+     */
+    @Builder.Default
+    @Column(name = "exclude_from_context", nullable = false)
+    private boolean excludeFromContext = false;
+
+    /**
+     * true = 钉住：压缩时永不 exclude；约束/决策/关键 ID 等应 pin。
+     */
+    @Builder.Default
+    @Column(name = "pinned", nullable = false)
+    private boolean pinned = false;
+
     public static final String STATUS_ANSWERING = "ANSWERING";
     public static final String STATUS_DONE = "DONE";
     public static final String STATUS_INTERRUPTED = "INTERRUPTED";

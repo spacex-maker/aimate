@@ -14,6 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 
+import static com.openforge.aimate.config.SystemConfigService.TAVILY_API_KEY;
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.CONFLICT;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
@@ -92,6 +93,26 @@ public class AdminSystemConfigController {
         return ResponseEntity.ok(SystemConfigItemDto.from(config));
     }
 
+    /**
+     * 写入 / 更新 Tavily API Key（联网搜索）。留空 configValue 表示清空 Key。
+     */
+    @PutMapping("/tavily")
+    public ResponseEntity<SystemConfigItemDto> upsertTavily(@RequestBody UpsertTavilyRequest request) {
+        String value = request != null && request.configValue() != null
+                ? request.configValue().trim()
+                : "";
+        SystemConfig config = systemConfigRepository.findByConfigKey(TAVILY_API_KEY).orElseGet(SystemConfig::new);
+        config.setConfigKey(TAVILY_API_KEY);
+        config.setConfigValue(value.isEmpty() ? null : value);
+        if (StringUtils.hasText(request != null ? request.description() : null)) {
+            config.setDescription(request.description().trim());
+        } else if (config.getDescription() == null || config.getDescription().isBlank()) {
+            config.setDescription("Tavily 联网搜索 API Key。用户开启「联网搜索」后，Agent 通过 tavily_search 调用。");
+        }
+        config = systemConfigRepository.save(config);
+        return ResponseEntity.ok(SystemConfigItemDto.from(config));
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         SystemConfig config = systemConfigRepository.findById(id)
@@ -132,6 +153,11 @@ public class AdminSystemConfigController {
 
     public record CreateDeepseekKeyRequest(
             @JsonProperty("configKey") String configKey,
+            @JsonProperty("configValue") String configValue,
+            @JsonProperty("description") String description
+    ) {}
+
+    public record UpsertTavilyRequest(
             @JsonProperty("configValue") String configValue,
             @JsonProperty("description") String description
     ) {}

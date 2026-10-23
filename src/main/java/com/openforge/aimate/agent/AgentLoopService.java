@@ -25,6 +25,9 @@ import com.openforge.aimate.llm.model.ToolCall;
 import com.openforge.aimate.llm.model.ToolFunction;
 import com.openforge.aimate.billing.InsufficientPointsException;
 import com.openforge.aimate.config.SystemConfigService;
+import com.openforge.aimate.domain.UserOffice;
+import com.openforge.aimate.office.OfficeRemoteExecutor;
+import com.openforge.aimate.office.OfficeRentalService;
 import com.openforge.aimate.storage.ChatCosStorageService;
 import com.openforge.aimate.memory.LongTermMemoryService;
 import com.openforge.aimate.memory.MemoryRecord;
@@ -95,10 +98,10 @@ public class AgentLoopService {
             Tools (use only when you judge it helps):
             - recall_memory: search long-term memory by query (e.g. user name, preferences, past facts). Use when the user's question might be answered from something you stored before.
             - store_memory: save a fact for future sessions. Use at most once per distinct, important fact; then reply in natural language.
-            - tavily_search: search the web for real-time or factual information. Use when the user asks about current events, news, or facts you need to look up.
-            - http_request: call any public http/https API from the server (GET/POST/PUT/PATCH/DELETE). Prefer this for REST/Soul/OAuth/health checks. Do NOT use curl via run_container_cmd for HTTP—http_request works without Docker.
+            - tavily_search: web search via Tavily (only when the user enabled 联网搜索). Use for current events, news, or facts you need to look up. Do NOT use http_request as a substitute for search engines.
+            - http_request: call a specific public http/https URL from the server (GET/POST/PUT/PATCH/DELETE). Prefer this for REST/Soul/OAuth/health checks. It is NOT a web search tool. Do NOT use curl via run_container_cmd for HTTP—http_request works without Docker.
             - create_tool: register a new tool (script-based: PYTHON_SCRIPT, NODE_SCRIPT, SHELL_CMD). Use when the user asks you to create a tool, add a capability, or write a reusable script/function that the agent can call later. Provide tool_name, tool_description, input_schema (JSON string), tool_type, and optionally script_content and entry_point.
-            - install_container_package / run_container_cmd / write_container_file: ONLY available when Docker user isolation is enabled. If these tools are not in your tool list, Docker is off—use http_request for HTTP instead of curl.
+            - install_container_package / run_container_cmd / write_container_file: ONLY available when the user has rented an Office (private CVM). If these tools are missing, the user has no Office—use http_request for HTTP; do not invent curl/shell.
             
             Creating script files in the container (only when container tools are available):
             - NEVER use run_container_cmd with cat/heredoc to write script content—it will be truncated and fail. NEVER suggest the user to "manually paste" or "run in terminal" to create the script; you MUST complete the task yourself.
@@ -146,6 +149,8 @@ public class AgentLoopService {
     private final UserApiKeyRepository       userApiKeyRepository;
     private final ChatCosStorageService      chatCosStorageService;
     private final AgentPromptService         agentPromptService;
+    private final OfficeRentalService        officeRentalService;
+    private final OfficeRemoteExecutor       officeRemoteExecutor;
 
     // Tracks which exact contents have already been stored via store_memory
     // in this JVM, per sessionId, to avoid spamming duplicate memories.
@@ -447,15 +452,25 @@ public class AgentLoopService {
 
             var llmCaller = buildCaller(session);
             Long userId = session.getUserId();
-            // 用户发送消息即预创建/启动脚本执行容器，后续执行 run_container_cmd / 脚本工具时无需等待
-            if (scriptDockerProperties.enabled() && userId != null) {
+            // 有办公室则探测 office-agent；兼容旧 Docker 沙箱预热
+            if (userId != null && officeRentalService.hasActiveOffice(userId)) {
+                try {
+                    UserOffice office = officeRentalService.requireActiveOfficeEntity(userId);
+                    boolean ok = officeRemoteExecutor.health(office);
+                    log.info("[Agent:{}] Office health userId={} ok={}", sessionId, userId, ok);
+                } catch (Exception e) {
+                    log.warn("[Agent:{}] Office precheck failed: {}", sessionId, e.getMessage());
+                }
+            } else if (scriptDockerProperties.enabled() && userId != null) {
                 String container = userContainerManager.getOrCreateContainer(userId);
                 if (container != null) {
                     log.info("[Agent:{}] Pre-warmed script container for userId={}: {}", sessionId, userId, container);
-                } else {
-                    log.warn("[Agent:{}] Pre-warm container for userId={} failed (Docker disabled or create failed).", sessionId, userId);
                 }
             }
+            // 重新加载会话以带上最新 contextSummary（手动压缩后）
+            session = sessionRepository.findBySessionId(sessionId).orElse(session);
+            placeholder = sessionMessageService.findById(placeholderId)
+                    .orElseThrow(() -> new IllegalStateException("Placeholder not found: " + placeholderId));
             List<Message> context = sessionMessageService.loadContextForReply(session, placeholder);
             context = trimTrailingEmptyAssistant(context);
 
@@ -985,7 +1000,7 @@ public class AgentLoopService {
         }
         // Built-in: tavily_search — web search via Tavily API (key from system_config)
         if ("tavily_search".equals(toolName)) {
-            return executeTavilySearchTool(arguments);
+            return executeTavilySearchTool(arguments, sessionId, userId);
         }
         // Built-in: http_request — 服务端直连 HTTP，不依赖 Docker
         if ("http_request".equals(toolName)) {
@@ -1119,18 +1134,38 @@ public class AgentLoopService {
 
     /**
      * Built-in tavily_search tool: web search via Tavily API.
-     * API Key 从系统配置表 system_config 的 TAVILY_API_KEY 读取。
+     * API Key 从系统配置表 system_config 的 TAVILY_API_KEY 读取；成功后按计费规则扣联网搜索成本。
      */
-    private String executeTavilySearchTool(String argumentsJson) {
+    private String executeTavilySearchTool(String argumentsJson, String sessionId, Long userId) {
+        long startMs = System.currentTimeMillis();
+        String searchDepth = "basic";
         try {
             JsonNode args = objectMapper.readTree(argumentsJson);
             String query = args.path("query").asText("");
             int maxResults = args.path("max_results").asInt(5);
-            String searchDepth = args.path("search_depth").asText("basic");
+            searchDepth = args.path("search_depth").asText("basic");
             String topic = args.path("topic").asText("general");
             String apiKey = systemConfigService.getTavilyApiKey().orElse(null);
-            return tavilySearchService.search(apiKey, query, maxResults, searchDepth, topic);
+            String result = tavilySearchService.search(apiKey, query, maxResults, searchDepth, topic);
+            long latencyMs = System.currentTimeMillis() - startMs;
+            boolean ok = result != null && !result.startsWith("[ToolError]");
+            try {
+                llmCallLogService.logAndChargeWebSearch(userId, sessionId, searchDepth, latencyMs, ok,
+                        ok ? null : result);
+            } catch (InsufficientPointsException e) {
+                throw e;
+            }
+            return result;
+        } catch (InsufficientPointsException e) {
+            throw e;
         } catch (Exception e) {
+            long latencyMs = System.currentTimeMillis() - startMs;
+            try {
+                llmCallLogService.logAndChargeWebSearch(userId, sessionId, searchDepth, latencyMs, false, e.getMessage());
+            } catch (InsufficientPointsException pointsEx) {
+                throw pointsEx;
+            } catch (Exception ignored) {
+            }
             log.warn("[Agent] tavily_search failed: {}", e.getMessage());
             return "[ToolError] tavily_search failed: " + e.getMessage();
         }
@@ -1227,11 +1262,8 @@ public class AgentLoopService {
      * 在用户容器内执行 apt-get 安装；输出实时推送到前端（TOOL_OUTPUT_CHUNK），与 run_container_cmd/脚本一致。
      */
     private String executeInstallContainerPackage(String sessionId, String argumentsJson, Long userId, String toolCallId, int iteration) {
-        if (!scriptDockerProperties.enabled()) {
-            return "[ToolError] install_container_package 仅在启用 Docker 用户隔离时可用。请在配置中开启 agent.script.docker.enabled。";
-        }
         if (userId == null) {
-            return "[ToolError] install_container_package 需要已登录用户（无法确定用户容器）。";
+            return "[ToolError] install_container_package 需要已登录用户。";
         }
         try {
             JsonNode args = objectMapper.readTree(argumentsJson);
@@ -1250,6 +1282,15 @@ public class AgentLoopService {
             }
             if (packages.isEmpty()) {
                 return "[ToolError] install_container_package 需要至少一个合法包名，例如 \"python3\"。";
+            }
+            if (officeRentalService.hasActiveOffice(userId)) {
+                UserOffice office = officeRentalService.requireActiveOfficeEntity(userId);
+                String result = officeRemoteExecutor.install(office, packages);
+                publisher.publish(AgentEvent.toolOutputChunk(sessionId, toolCallId, result, iteration));
+                return result;
+            }
+            if (!scriptDockerProperties.enabled()) {
+                return "[ToolError] 请先租用办公室后再安装软件包（宽边界工具依赖办公室 CVM）。";
             }
             String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
             if (containerIdOrName == null) {
@@ -1302,11 +1343,8 @@ public class AgentLoopService {
      * 超时策略：有输出则重置「空闲计时」；仅当连续无输出超过 idleTimeout 或总时长超过 maxTimeout 才判超时。
      */
     private String executeRunContainerCmd(String sessionId, String argumentsJson, Long userId, String toolCallId, int iteration) {
-        if (!scriptDockerProperties.enabled()) {
-            return "[ToolError] run_container_cmd 仅在启用 Docker 用户隔离时可用。";
-        }
         if (userId == null) {
-            return "[ToolError] run_container_cmd 需要已登录用户（无法确定用户容器）。";
+            return "[ToolError] run_container_cmd 需要已登录用户。";
         }
         try {
             JsonNode args = objectMapper.readTree(argumentsJson);
@@ -1328,10 +1366,29 @@ public class AgentLoopService {
             if (commandsToRun.isEmpty()) {
                 return "[ToolError] run_container_cmd 需要非空的 command 或 commands（字符串数组）参数。";
             }
-                for (String cmd : commandsToRun) {
+            for (String cmd : commandsToRun) {
                 if (cmd.length() > 800) {
                     return "[ToolError] run_container_cmd 单条命令不得超过 800 字符（当前 " + cmd.length() + "）。长脚本请使用 write_container_file 写入脚本文件，再通过 run_container_cmd 执行脚本。";
                 }
+            }
+            if (officeRentalService.hasActiveOffice(userId)) {
+                UserOffice office = officeRentalService.requireActiveOfficeEntity(userId);
+                StringBuilder all = new StringBuilder();
+                for (int i = 0; i < commandsToRun.size(); i++) {
+                    String one = officeRemoteExecutor.exec(office, commandsToRun.get(i), 300);
+                    publisher.publish(AgentEvent.toolOutputChunk(sessionId, toolCallId, one + "\n", iteration));
+                    if (one.startsWith("[ToolError]")) {
+                        return "第 " + (i + 1) + "/" + commandsToRun.size() + " 条命令失败:\n" + one;
+                    }
+                    if (all.length() > 0) all.append("\n");
+                    all.append(one);
+                }
+                return all.toString().isBlank()
+                        ? "(共 " + commandsToRun.size() + " 条命令在办公室执行成功，无输出)"
+                        : all.toString();
+            }
+            if (!scriptDockerProperties.enabled()) {
+                return "[ToolError] 请先租用办公室后再执行命令（宽边界工具依赖办公室 CVM）。";
             }
             String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
             if (containerIdOrName == null) {
@@ -1413,9 +1470,6 @@ public class AgentLoopService {
      * 单次 content 不得超过 WRITE_CONTAINER_FILE_MAX_CONTENT_CHARS，长脚本分多次调用、append=true 追加。
      */
     private String executeWriteContainerFile(String sessionId, String argumentsJson, Long userId) {
-        if (!scriptDockerProperties.enabled()) {
-            return "[ToolError] write_container_file 仅在启用 Docker 用户隔离时可用。";
-        }
         if (userId == null) {
             return "[ToolError] write_container_file 需要已登录用户。";
         }
@@ -1431,7 +1485,20 @@ public class AgentLoopService {
             if (path.contains("\n") || path.contains("\r")) {
                 return "[ToolError] write_container_file 的 path 不能包含换行符。";
             }
-            // 不再对 content 人为限制长度；如脚本极大，可由调用方自行按需拆分多次写入。
+            if (officeRentalService.hasActiveOffice(userId)) {
+                UserOffice office = officeRentalService.requireActiveOfficeEntity(userId);
+                if (append) {
+                    // 简化：办公室路径先读后拼（exec cat）；失败则直接覆盖写
+                    String existing = officeRemoteExecutor.exec(office, "cat " + path + " 2>/dev/null || true", 30);
+                    if (!existing.startsWith("[ToolError]")) {
+                        content = existing + content;
+                    }
+                }
+                return officeRemoteExecutor.write(office, path, content);
+            }
+            if (!scriptDockerProperties.enabled()) {
+                return "[ToolError] 请先租用办公室后再写文件（宽边界工具依赖办公室 CVM）。";
+            }
             String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
             if (containerIdOrName == null) {
                 return "[ToolError] 无法获取或创建用户 Linux 容器。";
@@ -1609,40 +1676,45 @@ public class AgentLoopService {
             "install_container_package", "run_container_cmd", "write_container_file");
 
     /**
-     * 按用户工具开关组装修复：长期记忆、联网搜索、HTTP、AI 编写工具、脚本执行。
+     * 按用户工具开关组装修复：长期记忆、联网搜索（Tavily）、HTTP、AI 编写工具、脚本执行。
      * 将启用的系统工具置于列表前，再追加 DB 中非内置工具。
      * Docker 未启用时不暴露容器类工具，避免 Agent 误用 curl。
+     * <p>
+     * 联网搜索 = Tavily（需后台配置 TAVILY_API_KEY + 用户开启 webSearchEnabled）。
+     * http_request 是独立的 HTTP 调用工具，不绑定联网搜索开关。
      */
     private List<Tool> ensureSystemToolsFirst(List<Tool> tools, Long userId) {
         UserToolSettings settings = userToolSettingsService.getOrCreate(userId);
         boolean memoryEnabled = systemConfigService.isRagMemoryEnabled()
                 && (settings == null || Boolean.TRUE.equals(settings.getMemoryEnabled()));
         boolean webSearchEnabled = settings == null || Boolean.TRUE.equals(settings.getWebSearchEnabled());
+        boolean tavilyConfigured = systemConfigService.getTavilyApiKey().isPresent();
         boolean createToolEnabled = settings == null || Boolean.TRUE.equals(settings.getCreateToolEnabled());
         boolean scriptExecEnabled = settings == null || Boolean.TRUE.equals(settings.getScriptExecEnabled());
+        boolean hasOffice = userId != null && officeRentalService.hasActiveOffice(userId);
         boolean dockerOn = scriptDockerProperties.enabled();
+        boolean wideWorkspace = hasOffice || dockerOn;
 
         List<Tool> out = new ArrayList<>();
         if (memoryEnabled) {
             out.add(buildRecallMemoryTool());
             out.add(buildStoreMemoryTool());
         }
-        if (webSearchEnabled) {
+        if (webSearchEnabled && tavilyConfigured) {
             out.add(buildTavilySearchTool());
         }
-        // HTTP 与联网开关共用：关联网搜索时也关掉外呼，避免绕过
-        if (webSearchEnabled) {
-            out.add(buildHttpRequestTool());
-        }
+        // http_request：通用 HTTP 请求工具，与联网搜索无关
+        out.add(buildHttpRequestTool());
         for (Tool t : tools) {
             if (!CODE_BUILT_TOOL_NAMES.contains(t.function().name())) out.add(t);
         }
-        if (scriptExecEnabled && dockerOn) {
+        // 宽边界工具：优先办公室 CVM；无办公室时不暴露（平台仅基础工具）
+        if (scriptExecEnabled && wideWorkspace) {
             out.add(buildInstallContainerPackageTool());
             out.add(buildRunContainerCmdTool());
             out.add(buildWriteContainerFileTool());
         }
-        if (createToolEnabled) {
+        if (createToolEnabled && hasOffice) {
             out.add(buildCreateToolTool());
         }
         return out;

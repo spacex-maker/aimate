@@ -77,3 +77,21 @@ aimate:
     platform-base-url: ${AIMATE_SOUL_PLATFORM_BASE_URL:https://soul-api.aimatex.com/api/v1/platform/souls}
     platform-key: ${AIMATE_SOUL_PLATFORM_KEY:}
     platform-code: ${AIMATE_SOUL_PLATFORM_CODE:aimatex-chat}
+  # 本地 AI 桥接（Cursor / Codex 等拉取群聊任务）
+  local-bridge:
+    public-api-base: ${AIMATE_PUBLIC_API_BASE:https://chat-api.aimatex.com}
+    poll-interval-seconds: ${AIMATE_LOCAL_BRIDGE_POLL_SECONDS:8}
+  # 办公室 CVM（同 VPC 无公网；未配齐时 mockProvision=true 本地可租用）
+  office:
+    mock-provision: ${AIMATE_OFFICE_MOCK:true}
+    region: ${AIMATE_OFFICE_REGION:ap-guangzhou}
+    secret-id: ${AIMATE_OFFICE_SECRET_ID:${TENCENTCLOUD_SECRET_ID:}}
+    secret-key: ${AIMATE_OFFICE_SECRET_KEY:${TENCENTCLOUD_SECRET_KEY:}}
+    vpc-id: ${AIMATE_OFFICE_VPC_ID:}
+    subnet-id: ${AIMATE_OFFICE_SUBNET_ID:}
+    security-group-id: ${AIMATE_OFFICE_SECURITY_GROUP_ID:}
+    image-id: ${AIMATE_OFFICE_IMAGE_ID:}
+    key-ids: ${AIMATE_OFFICE_KEY_IDS:}
+    agent-port: ${AIMATE_OFFICE_AGENT_PORT:18765}
+    chat-private-ip: ${AIMATE_OFFICE_CHAT_PRIVATE_IP:}
+    idle-tick-hours: ${AIMATE_OFFICE_IDLE_TICK_HOURS:6}

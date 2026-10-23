@@ -2,7 +2,9 @@ package com.openforge.aimate.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.openforge.aimate.billing.PointsService;
+import com.openforge.aimate.domain.AgentCareer;
 import com.openforge.aimate.domain.AgentCatalog;
+import com.openforge.aimate.domain.AgentExecutionMode;
 import com.openforge.aimate.domain.AgentRentOrder;
 import com.openforge.aimate.domain.AgentTier;
 import com.openforge.aimate.domain.AgentTierModel;
@@ -10,7 +12,9 @@ import com.openforge.aimate.domain.PointLedger;
 import com.openforge.aimate.domain.RentPeriod;
 import com.openforge.aimate.domain.User;
 import com.openforge.aimate.domain.UserAgent;
+import com.openforge.aimate.knowledge.OfficialKnowledgeService;
 import com.openforge.aimate.memory.SoulPlatformClient;
+import com.openforge.aimate.repository.AgentCareerRepository;
 import com.openforge.aimate.repository.AgentCatalogRepository;
 import com.openforge.aimate.repository.AgentRentOrderRepository;
 import com.openforge.aimate.repository.AgentTierModelRepository;
@@ -23,6 +27,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -31,12 +36,14 @@ import java.util.UUID;
 public class AgentHireService {
 
     private final AgentCatalogRepository catalogRepository;
+    private final AgentCareerRepository careerRepository;
     private final AgentTierModelRepository tierModelRepository;
     private final UserAgentRepository userAgentRepository;
     private final AgentRentOrderRepository rentOrderRepository;
     private final UserRepository userRepository;
     private final PointsService pointsService;
     private final SoulPlatformClient soulPlatformClient;
+    private final OfficialKnowledgeService officialKnowledgeService;
 
     @Transactional(readOnly = true)
     public Map<String, Object> quote(Long catalogId, RentPeriod period) {
@@ -53,10 +60,13 @@ public class AgentHireService {
         m.put("agentPoints", agentPts);
         m.put("soulPoints", soulPts);
         m.put("totalPoints", agentPts + soulPts);
-        m.put("lines", java.util.List.of(
+        m.put("lines", List.of(
                 Map.of("label", "Agent 租用", "points", agentPts),
                 Map.of("label", "Soul 席位", "points", soulPts)
         ));
+        List<Map<String, Object>> kbs = officialKnowledgeService.listCatalogKnowledge(c.getId());
+        m.put("knowledgeBases", kbs);
+        m.put("knowledgeBaseCount", kbs.size());
         return m;
     }
 
@@ -127,6 +137,7 @@ public class AgentHireService {
         ua.setCatalogId(c.getId());
         ua.setTier(c.getTier());
         ua.setName(c.getName());
+        ua.setOriginalName(c.getName());
         ua.setAvatarUrl(c.getDefaultAvatarUrl());
         ua.setGender(c.getDefaultGender());
         ua.setPersonality(c.getPersonaTemplate() != null && c.getPersonaTemplate().length() > 512
@@ -139,8 +150,18 @@ public class AgentHireService {
         ua.setSoulAccessToken(soul.path("accessToken").asText(null));
         ua.setExpiresAt(expiresAt(period));
         ua.setStatus(UserAgent.Status.ACTIVE);
-        ua.setDefaultSystemModelId(defaultModelId(c.getTier()));
+        AgentExecutionMode execMode = careerRepository.findById(c.getCareerId())
+                .map(AgentCareer::getExecutionMode)
+                .orElse(AgentExecutionMode.CLOUD_LLM);
+        ua.setExecutionMode(execMode != null ? execMode : AgentExecutionMode.CLOUD_LLM);
+        // 本地桥接不走云端 LLM 计费模型绑定
+        if (ua.getExecutionMode() != AgentExecutionMode.LOCAL_BRIDGE) {
+            ua.setDefaultSystemModelId(defaultModelId(c.getTier()));
+        }
         ua = userAgentRepository.save(ua);
+
+        // 招聘不仅获得人设，还继承官方 Agent 绑定的领域知识库
+        officialKnowledgeService.bindCatalogKnowledgeToUserAgent(c.getId(), ua.getId());
 
         order.setUserAgentId(ua.getId());
         rentOrderRepository.save(order);
@@ -152,6 +173,7 @@ public class AgentHireService {
         out.put("agentPoints", agentPts);
         out.put("soulPoints", soulPts);
         out.put("totalPoints", total);
+        out.put("knowledgeBases", officialKnowledgeService.listUserAgentKnowledge(ua.getId()));
         return out;
     }
 

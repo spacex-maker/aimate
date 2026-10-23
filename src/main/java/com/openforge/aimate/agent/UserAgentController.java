@@ -1,6 +1,7 @@
 package com.openforge.aimate.agent;
 
 import com.openforge.aimate.domain.RentPeriod;
+import com.openforge.aimate.memory.SoulMemoryBridge;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
@@ -20,10 +21,16 @@ public class UserAgentController {
     private final AgentHireService agentHireService;
     private final AgentCatalogService agentCatalogService;
     private final SecretaryAgentService secretaryAgentService;
+    private final SoulMemoryBridge soulMemoryBridge;
 
     @GetMapping("/agents/catalog")
     public List<Map<String, Object>> catalog() {
         return agentCatalogService.listCatalog(true);
+    }
+
+    @GetMapping("/agents/industries")
+    public List<Map<String, Object>> industries() {
+        return agentCatalogService.listIndustries(true);
     }
 
     @GetMapping("/agents/careers")
@@ -96,6 +103,19 @@ public class UserAgentController {
         }
     }
 
+    @PostMapping("/me/agents/{id}/avatar")
+    public Map<String, Object> avatar(@PathVariable Long id, @RequestBody AvatarBody body) {
+        try {
+            boolean clear = body != null && Boolean.TRUE.equals(body.clear());
+            String image = body != null ? body.image() : null;
+            return userAgentService.updateAvatar(requireUserId(), id, image, clear);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        }
+    }
+
     @PostMapping("/me/agents/{id}/prompt/exclude-atoms")
     public Map<String, Object> excludeAtoms(@PathVariable Long id, @RequestBody ExcludeBody body) {
         try {
@@ -119,6 +139,18 @@ public class UserAgentController {
         }
     }
 
+    /** 查看某 Agent 绑定 Soul 的记忆预览（不暴露 token） */
+    @GetMapping("/me/agents/{id}/soul-memories")
+    public Map<String, Object> soulMemories(@PathVariable Long id) {
+        try {
+            // 校验归属
+            userAgentService.detail(requireUserId(), id);
+            return soulMemoryBridge.listMemories(requireUserId(), id);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        }
+    }
+
     private Long requireUserId() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth != null && auth.getPrincipal() instanceof Long id) return id;
@@ -128,4 +160,5 @@ public class UserAgentController {
     public record HireBody(Long catalogId, String period) {}
     public record RenewBody(String period) {}
     public record ExcludeBody(List<String> atomIds) {}
+    public record AvatarBody(String image, Boolean clear) {}
 }

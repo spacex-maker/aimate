@@ -98,6 +98,74 @@ public class SoulMemoryBridge {
         }
     }
 
+    /**
+     * 列出某 UserAgent 绑定 Soul 上的记忆条目（供「我的 Agent」内联预览）。
+     * 不返回 accessToken。
+     */
+    public Map<String, Object> listMemories(Long userId, Long userAgentId) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", true);
+        out.put("items", List.of());
+        out.put("total", 0);
+        if (!isEnabled() || userId == null || userAgentId == null) {
+            out.put("soulEnabled", isEnabled());
+            return out;
+        }
+        UserAgent ua = userAgentRepository.findById(userAgentId).orElse(null);
+        if (ua == null || !userId.equals(ua.getUserId())) {
+            out.put("ok", false);
+            out.put("error", "Agent 不存在");
+            return out;
+        }
+        out.put("soulEnabled", true);
+        out.put("soulAgentId", ua.getSoulAgentId());
+        out.put("soulBound", ua.getSoulAgentId() != null && StringUtils.hasText(ua.getSoulAccessToken()));
+        out.put("externalAgentKey", ua.getExternalAgentKey());
+        String token = resolveToken(userId, userAgentId);
+        if (!StringUtils.hasText(token)) {
+            out.put("ok", false);
+            out.put("error", "尚未绑定 Soul 或令牌不可用");
+            return out;
+        }
+        try {
+            String url = trimSlash(props.getApiBase()) + "/memories";
+            ResponseEntity<String> resp = http().exchange(url, HttpMethod.GET, authEntity(token, null), String.class);
+            JsonNode root = objectMapper.readTree(resp.getBody());
+            JsonNode items = root.path("items");
+            List<Map<String, Object>> list = new ArrayList<>();
+            if (items.isArray()) {
+                for (JsonNode n : items) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    if (n.has("id") && !n.path("id").isNull()) row.put("id", n.path("id").asLong());
+                    row.put("content", n.path("content").asText(""));
+                    row.put("kind", n.path("kind").asText("FACT"));
+                    row.put("scope", n.path("scope").asText(null));
+                    row.put("project", n.path("project").asText(null));
+                    row.put("importance", n.path("importance").asDouble(0.5));
+                    row.put("pinned", n.path("pinned").asBoolean(false));
+                    row.put("status", n.path("status").asText(null));
+                    String updatedAt = n.path("updatedAt").asText(null);
+                    if (!StringUtils.hasText(updatedAt)) {
+                        updatedAt = n.path("updated_at").asText(null);
+                    }
+                    row.put("updatedAt", updatedAt);
+                    String content = (String) row.get("content");
+                    if (StringUtils.hasText(content)) {
+                        list.add(row);
+                    }
+                }
+            }
+            out.put("items", list);
+            out.put("total", list.size());
+            return out;
+        } catch (Exception e) {
+            log.warn("[SoulMemory] list failed user={} agent={}: {}", userId, userAgentId, e.toString());
+            out.put("ok", false);
+            out.put("error", "读取 Soul 记忆失败");
+            return out;
+        }
+    }
+
     public void store(String content, String kind, float importance, Long userId) {
         store(content, kind, importance, userId, null);
     }
@@ -192,6 +260,62 @@ public class SoulMemoryBridge {
     public void cacheAgentToken(Long userAgentId, String token) {
         if (userAgentId != null && StringUtils.hasText(token)) {
             tokenByAgent.put(userAgentId, token);
+        }
+    }
+
+    /**
+     * 本地桥接：用 Agent 自有 Soul token 代理 GET/POST（不把 token 下发给本机提示词）。
+     * path 相对 soul apiBase，如 {@code /me}、{@code /context?q=xx}、{@code /memories}。
+     */
+    public Map<String, Object> proxyAgentSoul(
+            Long userId,
+            Long userAgentId,
+            HttpMethod method,
+            String relativePath,
+            Object body
+    ) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (!isEnabled()) {
+            out.put("ok", false);
+            out.put("error", "Soul 记忆未启用");
+            return out;
+        }
+        UserAgent ua = userAgentRepository.findById(userAgentId).orElse(null);
+        if (ua == null || !userId.equals(ua.getUserId())) {
+            out.put("ok", false);
+            out.put("error", "Agent 不存在");
+            return out;
+        }
+        String token = resolveToken(userId, userAgentId);
+        if (!StringUtils.hasText(token)) {
+            out.put("ok", false);
+            out.put("error", "尚未绑定 Soul 或令牌不可用");
+            return out;
+        }
+        String path = relativePath == null ? "" : relativePath.trim();
+        if (!path.startsWith("/")) path = "/" + path;
+        if (path.contains("..")) {
+            out.put("ok", false);
+            out.put("error", "非法路径");
+            return out;
+        }
+        try {
+            String url = trimSlash(props.getApiBase()) + path;
+            ResponseEntity<String> resp = http().exchange(url, method, authEntity(token, body), String.class);
+            out.put("ok", true);
+            out.put("httpStatus", resp.getStatusCode().value());
+            if (StringUtils.hasText(resp.getBody())) {
+                JsonNode root = objectMapper.readTree(resp.getBody());
+                out.put("data", objectMapper.convertValue(root, Map.class));
+            } else {
+                out.put("data", Map.of());
+            }
+            return out;
+        } catch (Exception e) {
+            log.warn("[SoulMemory] proxy failed agent={} path={}: {}", userAgentId, path, e.toString());
+            out.put("ok", false);
+            out.put("error", "Soul 代理请求失败");
+            return out;
         }
     }
 

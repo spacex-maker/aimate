@@ -1,9 +1,11 @@
 package com.openforge.aimate.config;
 
 import com.openforge.aimate.auth.JwtAuthFilter;
+import com.openforge.aimate.localbridge.LocalBridgeAuthFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -22,6 +24,7 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
+    private final LocalBridgeAuthFilter localBridgeAuthFilter;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -42,11 +45,17 @@ public class SecurityConfig {
                     "/api/health",
                     "/actuator/health",
                     "/api/pay/**",
+                    // 未捕获异常会 forward 到 /error；若这里要登录，真实 500 会被伪装成 401
+                    "/error",
                     // WebSocket handshake (SockJS)
                     "/ws/**"
                 ).permitAll()
+                // 群邀请预览（扫码落地页未登录也可看群名）
+                .requestMatchers(HttpMethod.GET, "/api/groups/join/**").permitAll()
                 // Admin-only APIs（含 /api/admin/auth/me）
                 .requestMatchers("/api/admin/**").hasAuthority("ADMIN")
+                // 本机 AI worker：专属 lba_ 令牌
+                .requestMatchers("/api/local-bridge/**").hasAuthority("LOCAL_BRIDGE")
                 // Everything else requires a valid JWT
                 .anyRequest().authenticated()
             )
@@ -58,7 +67,8 @@ public class SecurityConfig {
                     res.getWriter().write("{\"error\":\"Unauthorized\",\"message\":\"Missing or invalid token\"}");
                 })
             )
-            // Insert JWT filter before Spring's username/password filter
+            // Local bridge before JWT so /api/local-bridge does not need user session
+            .addFilterBefore(localBridgeAuthFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

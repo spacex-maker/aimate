@@ -92,6 +92,13 @@ public class AgentSession extends BaseEntity {
     @Column(name = "context_window", columnDefinition = "LONGTEXT")
     private String contextWindow;
 
+    /**
+     * 上下文压缩摘要（滚动 summary）：替代已被 exclude_from_context 的更早轮次，
+     * 送模时插在系统提示之后、近期原文之前（Cursor / OpenAI Session Memory 同款）。
+     */
+    @Column(name = "context_summary", columnDefinition = "LONGTEXT")
+    private String contextSummary;
+
     @Builder.Default
     @Column(name = "iteration_count", nullable = false)
     private Integer iterationCount = 0;
@@ -110,9 +117,13 @@ public class AgentSession extends BaseEntity {
 
     /**
      * 是否在「最近会话」等列表中隐藏该会话。
-     * true = 仅从列表中隐藏，不物理删除会话本身及其相关数据。
+     * true = 仅从列表中隐藏，不物理删除会话本身及其相关数据（归档）。
      */
     @Builder.Default
     @Column(name = "hidden", nullable = false)
     private boolean hidden = false;
+
+    /** 置顶时间；非空表示置顶，越新越靠前 */
+    @Column(name = "pinned_at")
+    private java.time.LocalDateTime pinnedAt;
 }

@@ -1,23 +1,20 @@
 /**
  * Central HTTP client.
  * Automatically attaches the JWT from localStorage to every request.
- * On 401, clears auth state, reminds user to re-login, and redirects to /login.
+ *
+ * 401 策略：只抛错 + console.error，绝不清会话、绝不跳转登录页。
+ * 真正要登出由用户点退出或 RequireAuth（本地无 token）处理。
  *
  * 后端地址规则（按前端访问方式）：
  * - 前端通过本地访问（localhost / 127.0.0.1）→ 请求本地后端（默认 http://localhost:9299，可用 VITE_API_BASE 覆盖）
  * - 前端通过域名访问 → 使用 VITE_API_BASE（同源部署时可不设，用相对路径）
  */
 
-import toast from 'react-hot-toast'
-import { setAuthUser } from '../hooks/useAuth'
 import { isAdminHost } from '../lib/host'
 
 const AUTH_KEY = 'ofx_auth_user'
 const ADMIN_TOKEN_KEY = 'chat_admin_jwt'
 const DEFAULT_LOCAL_BACKEND = 'http://localhost:9299'
-
-/** 并发 401 只弹一次、只跳转一次 */
-let handlingUnauthorized = false
 
 function isLocalHost(): boolean {
   if (typeof window === 'undefined') return false
@@ -59,33 +56,22 @@ function getToken(): string | null {
   }
 }
 
-function handleUnauthorized(): never {
-  const onLoginPage =
-    typeof window !== 'undefined' && window.location.pathname.startsWith('/login')
-
-  if (!handlingUnauthorized) {
-    handlingUnauthorized = true
-    if (isAdminHost()) {
-      localStorage.removeItem(ADMIN_TOKEN_KEY)
-      toast.error('后台会话已失效，请重新登录')
-    } else {
-      setAuthUser(null)
-      toast.error('登录已失效，请重新登录')
-    }
-    if (!onLoginPage && typeof window !== 'undefined') {
-      const from = window.location.pathname + window.location.search
-      const q = from && from !== '/' && from !== '/login' ? `?from=${encodeURIComponent(from)}` : ''
-      window.location.href = `/login${q}`
-    } else {
-      // 已在登录页：允许后续请求再次触发（例如用户重新点登录）
-      handlingUnauthorized = false
-    }
+function parseErrorMessage(text: string, status: number): string {
+  let message = `HTTP ${status}`
+  if (!text) return message
+  try {
+    const json = JSON.parse(text) as { message?: string; error?: string; detail?: string }
+    message = json.message ?? json.error ?? json.detail ?? message
+  } catch {
+    if (text.length < 300) message = text
   }
-  throw new Error('未授权（401）')
+  return message
 }
 
 export async function http<T>(url: string, init: RequestInit = {}): Promise<T> {
   const token = getToken()
+  const method = (init.method ?? 'GET').toUpperCase()
+  const resolved = fullUrl(url)
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -95,19 +81,16 @@ export async function http<T>(url: string, init: RequestInit = {}): Promise<T> {
     headers['Authorization'] = `Bearer ${token}`
   }
 
-  const res = await fetch(fullUrl(url), { ...init, headers })
-
-  if (res.status === 401) {
-    handleUnauthorized()
-  }
+  const res = await fetch(resolved, { ...init, headers })
 
   if (!res.ok) {
-    const text = await res.text()
-    let message = `HTTP ${res.status}`
-    try {
-      const json = JSON.parse(text)
-      message = json.message ?? json.error ?? message
-    } catch { /* not JSON, keep default */ }
+    const text = await res.text().catch(() => '')
+    const message = parseErrorMessage(text, res.status)
+    console.error('[http]', method, resolved, res.status, {
+      message,
+      body: text.slice(0, 2000),
+      hasToken: !!token,
+    })
     throw new Error(message)
   }
 

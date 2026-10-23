@@ -11,5 +11,6 @@ public interface UserAgentRepository extends JpaRepository<UserAgent, Long> {
     Optional<UserAgent> findByIdAndUserId(Long id, Long userId);
     Optional<UserAgent> findByUserIdAndKind(Long userId, UserAgent.Kind kind);
     Optional<UserAgent> findByUserIdAndExternalAgentKey(Long userId, String externalAgentKey);
+    Optional<UserAgent> findByLocalBridgeTokenHash(String localBridgeTokenHash);
     List<UserAgent> findByStatus(UserAgent.Status status);
 }

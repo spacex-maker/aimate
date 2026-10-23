@@ -45,4 +45,6 @@ public class PointLedger extends BaseEntity {
     public static final String SYSTEM_GIFT = "SYSTEM_GIFT";
     public static final String AGENT_RENT = "AGENT_RENT";
     public static final String SOUL_SEAT = "SOUL_SEAT";
+    public static final String OFFICE_RENT = "OFFICE_RENT";
+    public static final String IDLE_AUTONOMY = "IDLE_AUTONOMY";
 }

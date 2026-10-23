@@ -5,6 +5,8 @@ import {
   SystemConfigContent,
   UserManageContent,
 } from '../../components/admin/AdminModal'
+import { AdminAgentsPanel } from '../../components/admin/AdminAgentsPanel'
+export { AdminKnowledgePage } from './AdminKnowledgePage'
 
 export function AdminModelsPage() {
   return (
@@ -61,6 +63,18 @@ export function AdminSystemPage() {
       <p className="admin-page__lead">功能开关与系统参数</p>
       <div className="mt-4">
         <SystemConfigContent />
+      </div>
+    </div>
+  )
+}
+
+export function AdminAgentsPage() {
+  return (
+    <div>
+      <h1 className="admin-page__title">官方 Agent</h1>
+      <p className="admin-page__lead">招聘目录、等级模型，以及与官方知识库的绑定</p>
+      <div className="mt-4">
+        <AdminAgentsPanel />
       </div>
     </div>
   )

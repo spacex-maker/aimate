@@ -1,6 +1,8 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import {
   Activity,
+  BookOpen,
+  Bot,
   Box,
   LogOut,
   Receipt,
@@ -12,6 +14,8 @@ import { CLOUD_SITE_ORIGIN } from '../../lib/host'
 
 const nav = [
   { to: '/admin', end: true, label: '模型管理', icon: Box },
+  { to: '/admin/agents', end: false, label: '官方 Agent', icon: Bot },
+  { to: '/admin/knowledge', end: false, label: '官方知识库', icon: BookOpen },
   { to: '/admin/host', end: false, label: '主机状态', icon: Activity },
   { to: '/admin/users', end: false, label: '用户管理', icon: Users },
   { to: '/admin/billing', end: false, label: '计费管理', icon: Receipt },

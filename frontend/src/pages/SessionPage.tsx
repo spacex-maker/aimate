@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { agentApi } from '../api/agent'
+import { multiAgentApi } from '../api/multiAgent'
 import { useAgentSocket } from '../hooks/useAgentSocket'
 import { ThinkingStream } from '../components/agent/ThinkingStream'
 import { AgentInputBox } from '../components/agent/AgentInputBox'
@@ -139,6 +140,14 @@ export function SessionPage() {
     queryKey: ['session-messages', sessionId],
     queryFn: () => agentApi.getSessionMessages(effectiveSessionId!, 10),
     enabled: !!effectiveSessionId && !!session,
+  })
+
+  const sessionAgentId = session?.userAgentId ?? null
+  const { data: sessionAgent } = useQuery({
+    queryKey: ['my-agent', sessionAgentId],
+    queryFn: () => multiAgentApi.detail(sessionAgentId!),
+    enabled: sessionAgentId != null,
+    staleTime: 60_000,
   })
 
   // 往上滚动加载更多：已加载的「更早」消息，与接口返回的最近 N 条合并展示
@@ -486,6 +495,16 @@ export function SessionPage() {
           isRetrying={retryMutation.isPending}
           sessionId={effectiveSessionId ?? undefined}
           onInterrupt={(id) => interruptMutation.mutate(id)}
+          agent={
+            sessionAgent
+              ? {
+                  id: sessionAgent.id,
+                  name: sessionAgent.name,
+                  avatarUrl: sessionAgent.avatarUrl,
+                  externalAgentKey: sessionAgent.externalAgentKey,
+                }
+              : null
+          }
         />
       </div>
 

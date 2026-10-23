@@ -10,8 +10,14 @@ export interface SessionResponse {
   iterationCount: number
   result: string | null
   errorMessage: string | null
-  /** 是否在最近会话等列表中被隐藏 */
+  /** 是否在最近会话等列表中被隐藏（归档） */
   hidden: boolean
+  /** 绑定的 UserAgent */
+  userAgentId?: number | null
+  agentName?: string | null
+  agentAvatarUrl?: string | null
+  pinned?: boolean
+  pinnedAt?: string | null
   wsSubscribePath: string
   createTime: string
   updateTime: string
@@ -86,13 +92,17 @@ export interface SystemModelDto {
   costOutputCnyPer1mOffpeak?: number | null
 }
 
-/** 会话上下文占用估算（输入框圆环） */
+/** 会话上下文占用估算（输入框圆环，对齐 Cursor context window） */
 export interface ContextUsageDto {
   usedTokens: number
   limitTokens: number
   percent: number
   messageTokens: number
   toolsTokens: number
+  systemTokens?: number
+  conversationTokens?: number
+  /** 占用 ≥72% 或消息量足够时建议压缩 */
+  compressRecommended?: boolean
 }
 
 /** 当前用户首选模型（用于恢复聊天输入框默认选中项） */

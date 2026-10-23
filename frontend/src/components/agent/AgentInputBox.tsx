@@ -9,6 +9,14 @@ import { agentApi } from '../../api/agent'
 import { estimateTokens } from '../../lib/estimateTokens'
 import { fileToChatImage } from '../../lib/chatImage'
 import type { AvailableModelsDto, SystemModelDto, UserModelDto } from '../../types/agent'
+import {
+  MentionPicker,
+  detectMentionAt,
+  filterMentions,
+  type MentionCandidate,
+} from '../chat/MentionPicker'
+
+export type { MentionCandidate }
 
 /** provider 转展示用公司名（如 openai → OpenAI，xai → xAI） */
 function formatProvider(provider: string): string {
@@ -43,6 +51,15 @@ export interface AgentInputBoxProps {
   bottomRightSlot?: ReactNode
   /** 有会话时拉取服务端上下文占用；首页无会话则仅估算当前输入 */
   sessionId?: string | null
+  /**
+   * plain：群聊等场景复用同一外壳，隐藏模型/工具/上下文环（仍可传图）。
+   * agent：默认，会话页完整能力。
+   */
+  variant?: 'agent' | 'plain'
+  /** 群聊：输入 @ 后可快捷选择的成员 / Agent */
+  mentionCandidates?: MentionCandidate[]
+  /** 输入区顶部插槽（如引用条） */
+  topSlot?: ReactNode
 }
 
 /**
@@ -66,9 +83,16 @@ export function AgentInputBox({
   onModelChange,
   bottomRightSlot,
   sessionId = null,
+  variant = 'agent',
+  mentionCandidates = [],
+  topSlot,
 }: AgentInputBoxProps) {
+  const plain = variant === 'plain'
   const [images, setImages] = useState<string[]>([])
   const imageInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null)
+  const [mentionIndex, setMentionIndex] = useState(0)
   const [glow, setGlow] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
   const [toolsAnchor, setToolsAnchor] = useState<{ left: number; bottom: number } | null>(null)
@@ -83,6 +107,7 @@ export function AgentInputBox({
   const { data: availableModels, isLoading: modelsLoading } = useQuery<AvailableModelsDto>({
     queryKey: ['available-models'],
     queryFn: () => agentApi.getAvailableModels(),
+    enabled: !plain,
   })
   const systemModels: SystemModelDto[] = availableModels?.systemModels ?? []
   const userModels: UserModelDto[] = availableModels?.userModels ?? []
@@ -94,9 +119,47 @@ export function AgentInputBox({
     selectedSource === 'SYSTEM' && selectedModelId != null
       ? systemModels.find((m) => m.id === selectedModelId) ?? null
       : null
-  const visionOn = selectedSource === 'SYSTEM' && !!selectedModel?.supportsVision
+  const visionOn = plain || (selectedSource === 'SYSTEM' && !!selectedModel?.supportsVision)
   const canSubmit = (value.trim() !== '' || images.length > 0) && !isPending && !disabled
 
+  const mentionEnabled = mentionCandidates.length > 0
+  const mentionItems = useMemo(() => {
+    if (!mention) return []
+    return filterMentions(mentionCandidates, mention.query).slice(0, 12)
+  }, [mention, mentionCandidates])
+
+  useEffect(() => {
+    setMentionIndex(0)
+  }, [mention?.start, mention?.query, mentionItems.length])
+
+  const syncMentionFromCaret = (text: string, caret: number) => {
+    if (!mentionEnabled) {
+      setMention(null)
+      return
+    }
+    setMention(detectMentionAt(text, caret))
+  }
+
+  const applyMention = (item: MentionCandidate) => {
+    if (!mention) return
+    const ta = textareaRef.current
+    const caret = ta?.selectionStart ?? value.length
+    const before = value.slice(0, mention.start)
+    const after = value.slice(caret)
+    const insert = `@${item.label} `
+    const next = before + insert + after
+    onChange(next)
+    setMention(null)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (!el) return
+      const pos = before.length + insert.length
+      el.focus()
+      el.setSelectionRange(pos, pos)
+    })
+  }
+
+  /** 占用率分母：以当前选中大模型声明的上下文窗口为准 */
   const modelLimit =
     selectedSource === 'SYSTEM' && selectedModel?.contextWindowTokens && selectedModel.contextWindowTokens > 0
       ? selectedModel.contextWindowTokens
@@ -114,14 +177,20 @@ export function AgentInputBox({
     staleTime: 5_000,
   })
 
-  const contextLimit = contextUsage?.limitTokens && contextUsage.limitTokens > 0
-    ? contextUsage.limitTokens
-    : modelLimit
+  // 系统模型：始终用模型配置的窗口；自有密钥：用接口回退默认
+  const contextLimit =
+    selectedSource === 'SYSTEM' && modelLimit > 0
+      ? modelLimit
+      : contextUsage?.limitTokens && contextUsage.limitTokens > 0
+        ? contextUsage.limitTokens
+        : modelLimit
   const draftTokens = useMemo(() => estimateTokens(value), [value])
-  const messageTokens = contextUsage?.messageTokens ?? 0
-  const toolsTokens = contextUsage?.toolsTokens ?? 0
+  const systemTokens = contextUsage?.systemTokens ?? 0
+  const conversationTokens = contextUsage?.conversationTokens ?? 0
+  const messageTokens = contextUsage?.messageTokens ?? systemTokens + conversationTokens
+  const toolsTokens = contextUsage?.toolsTokens ?? (sessionId ? 1800 : 0)
   const usedTokens = messageTokens + toolsTokens + draftTokens
-  const usagePercent = Math.min(100, Math.round((usedTokens * 1000) / contextLimit) / 10)
+  const usagePercent = Math.min(100, Math.round((usedTokens * 1000) / Math.max(1, contextLimit)) / 10)
 
   // 按用户期望：按钮上仅显示模型名称，不再附带 provider，名称过长时允许区域适当变宽
   const displayModelLabel = modelsLoading
@@ -258,6 +327,7 @@ export function AgentInputBox({
       images: images.length ? images : undefined,
     }
     setImages([])
+    setMention(null)
     onSubmit(payload)
   }
 
@@ -275,13 +345,24 @@ export function AgentInputBox({
     >
       <div className="max-w-3xl w-full flex flex-col items-center min-w-0">
         <div
-          className={`rounded-3xl bg-white/[0.06] backdrop-blur-xl border border-white/10 shadow-xl focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10 transition-all overflow-hidden flex flex-col min-h-[120px] w-full ${glow ? 'animate-input-glow border-white/20' : ''}`}
+          className={`relative rounded-3xl bg-white/[0.06] backdrop-blur-xl border border-white/10 shadow-xl focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10 transition-all overflow-visible flex flex-col min-h-[128px] w-full ${glow ? 'animate-input-glow border-white/20' : ''}`}
         >
+          {mention && (
+            <MentionPicker
+              items={mentionItems}
+              activeIndex={Math.min(mentionIndex, Math.max(0, mentionItems.length - 1))}
+              onHover={setMentionIndex}
+              onSelect={applyMention}
+              query={mention.query}
+            />
+          )}
+          <div className="rounded-3xl overflow-hidden flex flex-col flex-1 min-h-[128px]">
+          {topSlot}
           {images.length > 0 && (
-            <div className="flex gap-2 px-4 pt-3">
+            <div className="flex gap-2 px-4 pt-2.5">
               {images.map((src, i) => (
                 <div key={i} className="relative">
-                  <img src={src} alt="" className="h-16 w-16 rounded-lg object-cover border border-white/10" />
+                  <img src={src} alt="" className="h-14 w-14 rounded-lg object-cover border border-white/10" />
                   <button
                     type="button"
                     onClick={() => setImages((prev) => prev.filter((_, idx) => idx !== i))}
@@ -295,9 +376,49 @@ export function AgentInputBox({
             </div>
           )}
           <textarea
+            ref={textareaRef}
             value={value}
-            onChange={e => onChange(e.target.value)}
-            onKeyDown={e => {
+            onChange={(e) => {
+              const next = e.target.value
+              onChange(next)
+              syncMentionFromCaret(next, e.target.selectionStart ?? next.length)
+            }}
+            onClick={(e) => {
+              const el = e.currentTarget
+              syncMentionFromCaret(el.value, el.selectionStart ?? el.value.length)
+            }}
+            onKeyUp={(e) => {
+              if (['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) return
+              const el = e.currentTarget
+              syncMentionFromCaret(el.value, el.selectionStart ?? el.value.length)
+            }}
+            onKeyDown={(e) => {
+              if (mention) {
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setMention(null)
+                  return
+                }
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  if (mentionItems.length === 0) return
+                  setMentionIndex((i) => (i + 1) % mentionItems.length)
+                  return
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  if (mentionItems.length === 0) return
+                  setMentionIndex((i) => (i - 1 + mentionItems.length) % mentionItems.length)
+                  return
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  if (mentionItems.length > 0) {
+                    e.preventDefault()
+                    applyMention(mentionItems[Math.min(mentionIndex, mentionItems.length - 1)])
+                    return
+                  }
+                }
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 if (canSubmit) {
@@ -306,12 +427,12 @@ export function AgentInputBox({
                 }
               }
             }}
-            rows={1}
-            className="flex-1 min-h-[56px] max-h-40 py-4 px-4 bg-transparent text-sm text-white placeholder-white/40 resize-none focus:outline-none"
+            rows={2}
+            className="flex-1 min-h-[72px] max-h-44 py-3.5 px-4 bg-transparent text-sm text-white placeholder-white/40 resize-none focus:outline-none leading-relaxed"
             placeholder={placeholder}
           />
-          <div className="flex-shrink-0 flex items-center justify-between px-3 py-2 border-t border-white/[0.06]">
-            <div className="flex items-center gap-1 relative">
+          <div className="flex-shrink-0 flex items-center justify-between px-2.5 py-1 border-t border-white/[0.06]">
+            <div className="flex items-center gap-0.5 relative">
               <input
                 ref={imageInputRef}
                 type="file"
@@ -327,22 +448,30 @@ export function AgentInputBox({
                 type="button"
                 disabled={!visionOn}
                 onClick={() => imageInputRef.current?.click()}
-                className="p-2 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed"
-                title={visionOn ? '上传图片，DeepSeek Flash 会看图回答' : '当前模型不支持图片，请选择 DeepSeek V4.1 Flash'}
+                className="p-1.5 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                title={
+                  plain
+                    ? '上传图片'
+                    : visionOn
+                      ? '上传图片，DeepSeek Flash 会看图回答'
+                      : '当前模型不支持图片，请选择 DeepSeek V4.1 Flash'
+                }
               >
                 <ImagePlus className="w-4 h-4" />
               </button>
+              {!plain && (
               <button
                 ref={toolsButtonRef}
                 type="button"
                 onClick={() => setToolsOpen((o) => !o)}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors ${toolsOpen ? 'text-white/90 bg-white/10' : 'text-white/50 hover:text-white/80 hover:bg-white/10'}`}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs transition-colors ${toolsOpen ? 'text-white/90 bg-white/10' : 'text-white/50 hover:text-white/80 hover:bg-white/10'}`}
                 title="系统工具开关"
               >
-                <SlidersHorizontal className="w-4 h-4" />
+                <SlidersHorizontal className="w-3.5 h-3.5" />
                 <span>工具</span>
               </button>
-              {toolsOpen &&
+              )}
+              {!plain && toolsOpen &&
                 toolsAnchor &&
                 createPortal(
                   <>
@@ -353,7 +482,7 @@ export function AgentInputBox({
                       aria-hidden
                     />
                     <div
-                      className="fixed z-50 w-72"
+                      className="fixed z-50"
                       style={{
                         left: toolsAnchor.left,
                         bottom: toolsAnchor.bottom + 8,
@@ -366,13 +495,14 @@ export function AgentInputBox({
                 )}
             </div>
             <div className="flex items-center gap-0.5">
+              {!plain && (
               <div className="relative flex items-center">
                 <button
                   ref={modelButtonRef}
                   type="button"
                   onClick={() => !modelsLoading && setModelOpen((o) => !o)}
                   disabled={modelsLoading}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors ${
+                  className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs transition-colors ${
                     modelsLoading
                       ? 'text-white/40 bg-white/5 cursor-wait'
                       : modelOpen
@@ -505,34 +635,47 @@ export function AgentInputBox({
                     document.body
                   )}
               </div>
+              )}
+              {!plain && (
               <ContextUsageRing
                 percent={usagePercent}
                 usedTokens={usedTokens}
                 limitTokens={contextLimit}
+                systemTokens={systemTokens}
+                conversationTokens={conversationTokens}
                 messageTokens={messageTokens}
                 toolsTokens={toolsTokens}
                 draftTokens={draftTokens}
+                compressRecommended={
+                  !!contextUsage?.compressRecommended || usagePercent >= 72
+                }
+                sessionId={sessionId}
+                systemModelId={selectedSource === 'SYSTEM' ? selectedModelId : null}
               />
+              )}
+              {!plain && (
               <button
                 type="button"
-                className="p-2 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
+                className="p-1.5 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
                 title="语音输入（敬请期待）"
               >
                 <Mic className="w-4 h-4" />
               </button>
+              )}
               <button
                 type="submit"
                 disabled={!canSubmit}
-                className="p-2.5 rounded-xl text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
+                className="p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
                 title={submitTitle}
               >
                 {isPending ? (
                   <span className="text-xs px-1">{pendingLabel}</span>
                 ) : (
-                  <Send className="w-5 h-5" />
+                  <Send className="w-4 h-4" />
                 )}
               </button>
             </div>
+          </div>
           </div>
         </div>
         <div className="mt-1.5 w-full flex items-center justify-between gap-2">

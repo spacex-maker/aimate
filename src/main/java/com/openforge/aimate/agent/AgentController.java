@@ -2,6 +2,7 @@ package com.openforge.aimate.agent;
 
 import com.openforge.aimate.agent.dto.AssistantVersionDto;
 import com.openforge.aimate.agent.dto.ChatMessageDto;
+import com.openforge.aimate.agent.dto.ContextCompressResultDto;
 import com.openforge.aimate.agent.dto.ContextUsageDto;
 import com.openforge.aimate.agent.dto.ContinueSessionRequest;
 import com.openforge.aimate.agent.dto.DeleteSessionRequest;
@@ -16,8 +17,10 @@ import com.openforge.aimate.memory.LongTermMemoryService;
 import com.openforge.aimate.storage.ChatCosStorageService;
 import com.openforge.aimate.repository.AgentSessionRepository;
 import com.openforge.aimate.repository.SystemModelRepository;
+import com.openforge.aimate.repository.UserAgentRepository;
 import com.openforge.aimate.repository.UserApiKeyRepository;
 import com.openforge.aimate.repository.UserDefaultModelRepository;
+import com.openforge.aimate.domain.UserAgent;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -30,6 +33,7 @@ import org.springframework.data.domain.PageRequest;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
@@ -64,6 +68,7 @@ public class AgentController {
     private final AgentLoopService          agentLoopService;
     private final SessionMessageService     sessionMessageService;
     private final ContextUsageService       contextUsageService;
+    private final ContextCompressService    contextCompressService;
     private final AgentSessionRepository    sessionRepository;
     private final LongTermMemoryService     longTermMemoryService;
     private final ExecutorService           agentVirtualThreadExecutor;
@@ -73,11 +78,13 @@ public class AgentController {
     private final ChatCosStorageService      chatCosStorageService;
     private final PointsService              pointsService;
     private final UserAgentService           userAgentService;
+    private final UserAgentRepository        userAgentRepository;
 
     public AgentController(
             AgentLoopService agentLoopService,
             SessionMessageService sessionMessageService,
             ContextUsageService contextUsageService,
+            ContextCompressService contextCompressService,
             AgentSessionRepository sessionRepository,
             LongTermMemoryService longTermMemoryService,
             ExecutorService agentVirtualThreadExecutor,
@@ -86,16 +93,19 @@ public class AgentController {
             UserApiKeyRepository userApiKeyRepository,
             ChatCosStorageService chatCosStorageService,
             PointsService pointsService,
-            UserAgentService userAgentService
+            UserAgentService userAgentService,
+            UserAgentRepository userAgentRepository
     ) {
         this.agentLoopService = agentLoopService;
         this.sessionMessageService = sessionMessageService;
         this.contextUsageService = contextUsageService;
+        this.contextCompressService = contextCompressService;
         this.sessionRepository = sessionRepository;
         this.longTermMemoryService = longTermMemoryService;
         this.agentVirtualThreadExecutor = agentVirtualThreadExecutor;
         this.userDefaultModelRepository = userDefaultModelRepository;
         this.userAgentService = userAgentService;
+        this.userAgentRepository = userAgentRepository;
         this.systemModelRepository = systemModelRepository;
         this.userApiKeyRepository = userApiKeyRepository;
         this.chatCosStorageService = chatCosStorageService;
@@ -238,11 +248,50 @@ public class AgentController {
         if (userId == null) return ResponseEntity.ok(Collections.emptyList());
         limit = Math.min(Math.max(1, limit), 50);
         List<AgentSession> sessions = sessionRepository.findByUserIdAndHiddenFalseOrderByCreateTimeDesc(
-                userId, PageRequest.of(0, limit));
+                userId, PageRequest.of(0, Math.max(limit * 2, 40)));
         List<SessionResponse> list = sessions.stream()
-                .map(SessionResponse::from)
+                .map(this::toSessionResponse)
+                .sorted((a, b) -> {
+                    int pin = Boolean.compare(b.pinned(), a.pinned());
+                    if (pin != 0) return pin;
+                    if (a.pinned() && b.pinned()) {
+                        var ap = a.pinnedAt();
+                        var bp = b.pinnedAt();
+                        if (ap != null && bp != null) return bp.compareTo(ap);
+                    }
+                    var au = a.updateTime();
+                    var bu = b.updateTime();
+                    if (au != null && bu != null) return bu.compareTo(au);
+                    return 0;
+                })
+                .limit(limit)
                 .collect(Collectors.toList());
         return ResponseEntity.ok(list);
+    }
+
+    @PostMapping("/{sessionId}/pin")
+    public ResponseEntity<SessionResponse> pinSession(
+            @PathVariable String sessionId,
+            @RequestBody(required = false) Map<String, Boolean> body) {
+        AgentSession session = findOrThrow(sessionId);
+        ensureSessionOwner(session);
+        boolean pinned = body == null || body.get("pinned") == null || Boolean.TRUE.equals(body.get("pinned"));
+        session.setPinnedAt(pinned ? java.time.LocalDateTime.now() : null);
+        sessionRepository.save(session);
+        return ResponseEntity.ok(toSessionResponse(session));
+    }
+
+    @PostMapping("/{sessionId}/archive")
+    public ResponseEntity<SessionResponse> archiveSession(
+            @PathVariable String sessionId,
+            @RequestBody(required = false) Map<String, Boolean> body) {
+        AgentSession session = findOrThrow(sessionId);
+        ensureSessionOwner(session);
+        boolean archived = body == null || body.get("archived") == null || Boolean.TRUE.equals(body.get("archived"));
+        session.setHidden(archived);
+        if (archived) session.setPinnedAt(null);
+        sessionRepository.save(session);
+        return ResponseEntity.ok(toSessionResponse(session));
     }
 
     // ── Status query ─────────────────────────────────────────────────────────
@@ -254,7 +303,7 @@ public class AgentController {
     @GetMapping("/{sessionId}")
     public ResponseEntity<SessionResponse> getSession(@PathVariable String sessionId) {
         AgentSession session = findOrThrow(sessionId);
-        return ResponseEntity.ok(SessionResponse.from(session));
+        return ResponseEntity.ok(toSessionResponse(session));
     }
 
     /**
@@ -285,6 +334,44 @@ public class AgentController {
         AgentSession session = findOrThrow(sessionId);
         return ResponseEntity.ok(contextUsageService.estimate(session, systemModelId));
     }
+
+    /**
+     * 手动压缩上下文：L0 裁剪 + L1 结构化 SessionState + L2 Soul 写前外置；近期原文与 pin 保留。
+     */
+    @PostMapping("/{sessionId}/compress-context")
+    public ResponseEntity<ContextCompressResultDto> compressContext(
+            @PathVariable String sessionId,
+            @RequestParam(required = false) Long systemModelId) {
+        AgentSession session = findOrThrow(sessionId);
+        if (session.getStatus() == AgentSession.SessionStatus.ACTIVE
+                || session.getStatus() == AgentSession.SessionStatus.RUNNING) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "请先等待当前回答结束再压缩");
+        }
+        try {
+            return ResponseEntity.ok(contextCompressService.compress(session, systemModelId));
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        }
+    }
+
+    /** 钉住 / 取消钉住消息：压缩时 pin 消息永不 exclude。 */
+    @PatchMapping("/{sessionId}/messages/{messageId}/pin")
+    public ResponseEntity<Void> pinMessage(
+            @PathVariable String sessionId,
+            @PathVariable long messageId,
+            @RequestBody(required = false) PinMessageBody body) {
+        AgentSession session = findOrThrow(sessionId);
+        try {
+            sessionMessageService.setPinned(session, messageId, body != null && body.pinned());
+            return ResponseEntity.noContent().build();
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    public record PinMessageBody(boolean pinned) {}
 
     // ── Pause ────────────────────────────────────────────────────────────────
 
@@ -625,6 +712,26 @@ public class AgentController {
         return sessionRepository.findBySessionId(sessionId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Session not found: " + sessionId));
+    }
+
+    private void ensureSessionOwner(AgentSession session) {
+        Long userId = getCurrentUserId();
+        if (userId == null || session.getUserId() == null || !userId.equals(session.getUserId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权操作该会话");
+        }
+    }
+
+    private SessionResponse toSessionResponse(AgentSession session) {
+        String agentName = null;
+        String agentAvatar = null;
+        if (session.getUserAgentId() != null) {
+            UserAgent ua = userAgentRepository.findById(session.getUserAgentId()).orElse(null);
+            if (ua != null) {
+                agentName = ua.getName();
+                agentAvatar = ua.getAvatarUrl();
+            }
+        }
+        return SessionResponse.from(session, agentName, agentAvatar);
     }
 
     private Long getCurrentUserId() {

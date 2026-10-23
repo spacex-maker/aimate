@@ -34,6 +34,7 @@ public enum EventType {
     ITERATION_START,
 
     /** @deprecated Use PLAN_READY. */
+    @Deprecated
     PLAN_UPDATE,
 
     /** Final answer; session complete. */

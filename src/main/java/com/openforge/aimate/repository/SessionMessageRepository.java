@@ -28,17 +28,22 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessage, 
     List<SessionMessage> findMainMessagesBySessionIdAndSeqBeforeOrderBySeqDesc(
             @Param("sessionId") Long sessionId, @Param("beforeSeq") int beforeSeq, Pageable pageable);
 
-    /** 某条回复的上下文：主序消息 seq≤maxSeq 或归属该回复的消息，按 seq 升序。 */
+    /** 某条回复的上下文：主序消息 seq≤maxSeq 或归属该回复的消息，按 seq 升序（已压缩排除的不送模）。 */
     @Query("SELECT m FROM SessionMessage m WHERE m.agentSession.id = :sessionId " +
+           "AND m.excludeFromContext = false " +
            "AND ((m.replyToMessageId IS NULL AND m.seq <= :maxSeq) OR m.replyToMessageId = :replyToId) " +
            "ORDER BY m.seq ASC")
     List<SessionMessage> findContextForReply(@Param("sessionId") Long sessionId,
                                              @Param("maxSeq") int maxSeq,
                                              @Param("replyToId") Long replyToId);
 
-    /** 上下文截止到某 seq（主序消息，用于重试时只取该条之前的上下文）。 */
-    @Query("SELECT m FROM SessionMessage m WHERE m.agentSession.id = :sessionId AND m.replyToMessageId IS NULL AND m.seq <= :maxSeq ORDER BY m.seq ASC")
+    /** 上下文截止到某 seq（主序消息，用于重试时只取该条之前的上下文；已压缩排除的不送模）。 */
+    @Query("SELECT m FROM SessionMessage m WHERE m.agentSession.id = :sessionId AND m.replyToMessageId IS NULL " +
+           "AND m.excludeFromContext = false AND m.seq <= :maxSeq ORDER BY m.seq ASC")
     List<SessionMessage> findContextUpToSeq(@Param("sessionId") Long sessionId, @Param("maxSeq") int maxSeq);
+
+    @Query("SELECT m FROM SessionMessage m WHERE m.agentSession.id = :sessionId AND m.excludeFromContext = false ORDER BY m.seq ASC")
+    List<SessionMessage> findActiveContextBySessionId(@Param("sessionId") Long sessionId);
 
     /** 按会话 + seq 取一条（用于重试时找 user 的下一条 assistant）。 */
     java.util.Optional<SessionMessage> findByAgentSession_IdAndSeq(Long agentSessionId, int seq);

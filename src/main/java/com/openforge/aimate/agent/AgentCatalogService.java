@@ -2,14 +2,18 @@ package com.openforge.aimate.agent;
 
 import com.openforge.aimate.domain.AgentCareer;
 import com.openforge.aimate.domain.AgentCatalog;
+import com.openforge.aimate.domain.AgentExecutionMode;
+import com.openforge.aimate.domain.AgentIndustry;
 import com.openforge.aimate.domain.AgentTier;
 import com.openforge.aimate.domain.AgentTierModel;
 import com.openforge.aimate.domain.SystemModel;
+import com.openforge.aimate.knowledge.OfficialKnowledgeService;
 import com.openforge.aimate.repository.AgentCareerRepository;
 import com.openforge.aimate.repository.AgentCatalogRepository;
+import com.openforge.aimate.repository.AgentIndustryRepository;
 import com.openforge.aimate.repository.AgentTierModelRepository;
 import com.openforge.aimate.repository.SystemModelRepository;
-import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -20,20 +24,67 @@ import java.util.List;
 import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
 public class AgentCatalogService {
 
+    private final AgentIndustryRepository industryRepository;
     private final AgentCareerRepository careerRepository;
     private final AgentCatalogRepository catalogRepository;
     private final AgentTierModelRepository tierModelRepository;
     private final SystemModelRepository systemModelRepository;
+    private final OfficialKnowledgeService officialKnowledgeService;
+
+    public AgentCatalogService(
+            AgentIndustryRepository industryRepository,
+            AgentCareerRepository careerRepository,
+            AgentCatalogRepository catalogRepository,
+            AgentTierModelRepository tierModelRepository,
+            SystemModelRepository systemModelRepository,
+            @Lazy OfficialKnowledgeService officialKnowledgeService
+    ) {
+        this.industryRepository = industryRepository;
+        this.careerRepository = careerRepository;
+        this.catalogRepository = catalogRepository;
+        this.tierModelRepository = tierModelRepository;
+        this.systemModelRepository = systemModelRepository;
+        this.officialKnowledgeService = officialKnowledgeService;
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listIndustries(boolean enabledOnly) {
+        List<AgentIndustry> list = enabledOnly
+                ? industryRepository.findByEnabledTrueOrderBySortOrderAscIdAsc()
+                : industryRepository.findAllByOrderBySortOrderAscIdAsc();
+        return list.stream().map(this::industryView).toList();
+    }
+
+    @Transactional
+    public Map<String, Object> saveIndustry(Long id, IndustryBody body) {
+        AgentIndustry c = id != null
+                ? industryRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("行业不存在"))
+                : new AgentIndustry();
+        if (!StringUtils.hasText(body.code()) || !StringUtils.hasText(body.name())) {
+            throw new IllegalArgumentException("code 与 name 必填");
+        }
+        industryRepository.findByCodeIgnoreCase(body.code().trim()).ifPresent(ex -> {
+            if (id == null || !ex.getId().equals(id)) {
+                throw new IllegalArgumentException("行业 code 已存在");
+            }
+        });
+        c.setCode(body.code().trim().toUpperCase());
+        c.setName(body.name().trim());
+        c.setDescription(body.description());
+        if (body.sortOrder() != null) c.setSortOrder(body.sortOrder());
+        if (body.enabled() != null) c.setEnabled(body.enabled());
+        return industryView(industryRepository.save(c));
+    }
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listCareers(boolean enabledOnly) {
         List<AgentCareer> list = enabledOnly
                 ? careerRepository.findByEnabledTrueOrderBySortOrderAscIdAsc()
                 : careerRepository.findAllByOrderBySortOrderAscIdAsc();
-        return list.stream().map(this::careerView).toList();
+        Map<Long, AgentIndustry> industries = industryIndex();
+        return list.stream().map(c -> careerView(c, industries.get(c.getIndustryId()))).toList();
     }
 
     @Transactional
@@ -49,12 +100,25 @@ public class AgentCatalogService {
                 throw new IllegalArgumentException("职业 code 已存在");
             }
         });
+        AgentIndustry industry = null;
+        if (body.industryId() != null) {
+            industry = industryRepository.findById(body.industryId())
+                    .orElseThrow(() -> new IllegalArgumentException("行业不存在"));
+            c.setIndustryId(industry.getId());
+        } else if (body.clearIndustry() != null && body.clearIndustry()) {
+            c.setIndustryId(null);
+        }
         c.setCode(body.code().trim().toUpperCase());
         c.setName(body.name().trim());
         c.setDescription(body.description());
+        if (StringUtils.hasText(body.executionMode())) {
+            c.setExecutionMode(AgentExecutionMode.valueOf(body.executionMode().trim().toUpperCase()));
+        } else if (id == null && c.getExecutionMode() == null) {
+            c.setExecutionMode(AgentExecutionMode.CLOUD_LLM);
+        }
         if (body.sortOrder() != null) c.setSortOrder(body.sortOrder());
         if (body.enabled() != null) c.setEnabled(body.enabled());
-        return careerView(careerRepository.save(c));
+        return careerView(careerRepository.save(c), industry != null ? industry : industryIndex().get(c.getIndustryId()));
     }
 
     @Transactional(readOnly = true)
@@ -64,9 +128,20 @@ public class AgentCatalogService {
                 : catalogRepository.findAllByOrderBySortOrderAscIdAsc();
         Map<Long, AgentCareer> careers = new LinkedHashMap<>();
         careerRepository.findAll().forEach(x -> careers.put(x.getId(), x));
+        Map<Long, AgentIndustry> industries = industryIndex();
         List<Map<String, Object>> out = new ArrayList<>();
         for (AgentCatalog cat : list) {
-            out.add(catalogView(cat, careers.get(cat.getCareerId())));
+            AgentCareer career = careers.get(cat.getCareerId());
+            AgentIndustry industry = career != null && career.getIndustryId() != null
+                    ? industries.get(career.getIndustryId())
+                    : null;
+            out.add(catalogView(cat, career, industry));
+        }
+        Map<Long, List<Map<String, Object>>> kbByCatalog = officialKnowledgeService.briefsByCatalogIds(
+                list.stream().map(AgentCatalog::getId).toList());
+        for (Map<String, Object> row : out) {
+            Long cid = (Long) row.get("id");
+            row.put("knowledgeBases", kbByCatalog.getOrDefault(cid, List.of()));
         }
         return out;
     }
@@ -102,7 +177,12 @@ public class AgentCatalogService {
         if (body.soulPriceYearPoints() != null) c.setSoulPriceYearPoints(body.soulPriceYearPoints());
         if (body.enabled() != null) c.setEnabled(body.enabled());
         if (body.sortOrder() != null) c.setSortOrder(body.sortOrder());
-        return catalogView(catalogRepository.save(c), career);
+        AgentIndustry industry = career.getIndustryId() != null
+                ? industryRepository.findById(career.getIndustryId()).orElse(null)
+                : null;
+        Map<String, Object> view = catalogView(catalogRepository.save(c), career, industry);
+        view.put("knowledgeBases", officialKnowledgeService.listCatalogKnowledge(c.getId()));
+        return view;
     }
 
     @Transactional(readOnly = true)
@@ -154,7 +234,13 @@ public class AgentCatalogService {
         return listTierModels().stream().filter(m -> tier.name().equals(m.get("tier"))).toList();
     }
 
-    private Map<String, Object> careerView(AgentCareer c) {
+    private Map<Long, AgentIndustry> industryIndex() {
+        Map<Long, AgentIndustry> m = new LinkedHashMap<>();
+        industryRepository.findAll().forEach(x -> m.put(x.getId(), x));
+        return m;
+    }
+
+    private Map<String, Object> industryView(AgentIndustry c) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", c.getId());
         m.put("code", c.getCode());
@@ -165,11 +251,30 @@ public class AgentCatalogService {
         return m;
     }
 
-    private Map<String, Object> catalogView(AgentCatalog c, AgentCareer career) {
+    private Map<String, Object> careerView(AgentCareer c, AgentIndustry industry) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", c.getId());
+        m.put("industryId", c.getIndustryId());
+        m.put("industryName", industry != null ? industry.getName() : null);
+        m.put("code", c.getCode());
+        m.put("name", c.getName());
+        m.put("description", c.getDescription());
+        m.put("executionMode", c.getExecutionMode() != null ? c.getExecutionMode().name() : AgentExecutionMode.CLOUD_LLM.name());
+        m.put("sortOrder", c.getSortOrder());
+        m.put("enabled", c.isEnabled());
+        return m;
+    }
+
+    private Map<String, Object> catalogView(AgentCatalog c, AgentCareer career, AgentIndustry industry) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", c.getId());
         m.put("careerId", c.getCareerId());
         m.put("careerName", career != null ? career.getName() : null);
+        m.put("industryId", career != null ? career.getIndustryId() : null);
+        m.put("industryName", industry != null ? industry.getName() : null);
+        m.put("executionMode", career != null && career.getExecutionMode() != null
+                ? career.getExecutionMode().name()
+                : AgentExecutionMode.CLOUD_LLM.name());
         m.put("tier", c.getTier().name());
         m.put("name", c.getName());
         m.put("description", c.getDescription());
@@ -187,7 +292,18 @@ public class AgentCatalogService {
         return m;
     }
 
-    public record CareerBody(String code, String name, String description, Integer sortOrder, Boolean enabled) {}
+    public record IndustryBody(String code, String name, String description, Integer sortOrder, Boolean enabled) {}
+
+    public record CareerBody(
+            Long industryId,
+            Boolean clearIndustry,
+            String code,
+            String name,
+            String description,
+            String executionMode,
+            Integer sortOrder,
+            Boolean enabled
+    ) {}
 
     public record CatalogBody(
             Long careerId,

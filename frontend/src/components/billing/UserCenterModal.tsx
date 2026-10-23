@@ -165,13 +165,17 @@ export function UserCenterModal({ onClose }: UserCenterModalProps) {
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-center gap-3.5 min-w-0">
               <div
-                className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-lg font-bold text-white"
+                className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-lg font-bold text-white overflow-hidden"
                 style={{
                   background: 'linear-gradient(145deg, #38bdf8, #6366f1 55%, #f5a524)',
                   boxShadow: '0 8px 28px -8px rgba(56,189,248,0.55)',
                 }}
               >
-                {initial}
+                {user?.avatarUrl ? (
+                  <img src={user.avatarUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  initial
+                )}
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -401,7 +405,7 @@ function ProfilePane() {
         <input
           value={occupation}
           onChange={(e) => setOccupation(e.target.value)}
-          className="mt-1 w-full rounded-lg border border-white/12 bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400/40"
+          className="uc-profile-field mt-1 w-full rounded-lg border border-white/[0.06] bg-white/[0.04] px-3 py-2 text-sm text-white placeholder:text-white/25 outline-none transition-colors focus:border-cyan-400/35 focus:bg-white/[0.055]"
           placeholder="如：产品经理"
         />
       </label>
@@ -410,7 +414,7 @@ function ProfilePane() {
         <input
           value={age}
           onChange={(e) => setAge(e.target.value.replace(/\D/g, ''))}
-          className="mt-1 w-full rounded-lg border border-white/12 bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400/40"
+          className="uc-profile-field mt-1 w-full rounded-lg border border-white/[0.06] bg-white/[0.04] px-3 py-2 text-sm text-white placeholder:text-white/25 outline-none transition-colors focus:border-cyan-400/35 focus:bg-white/[0.055]"
           placeholder="如：28"
         />
       </label>
@@ -428,10 +432,10 @@ function ProfilePane() {
               type="button"
               onClick={() => setGender(g.id)}
               className={clsx(
-                'rounded-lg border px-3 py-1.5 text-xs',
+                'rounded-lg border px-3 py-1.5 text-xs transition-colors',
                 gender === g.id
-                  ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-100'
-                  : 'border-white/10 text-white/45'
+                  ? 'border-cyan-400/35 bg-cyan-400/10 text-cyan-100'
+                  : 'border-white/[0.06] bg-white/[0.03] text-white/45 hover:border-white/10 hover:text-white/65'
               )}
             >
               {g.label}
@@ -445,7 +449,7 @@ function ProfilePane() {
           value={bio}
           onChange={(e) => setBio(e.target.value)}
           rows={3}
-          className="mt-1 w-full rounded-lg border border-white/12 bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400/40"
+          className="uc-profile-field mt-1 w-full rounded-lg border border-white/[0.06] bg-white/[0.04] px-3 py-2 text-sm text-white placeholder:text-white/25 outline-none transition-colors focus:border-cyan-400/35 focus:bg-white/[0.055]"
           placeholder="工作习惯、沟通偏好等"
         />
       </label>

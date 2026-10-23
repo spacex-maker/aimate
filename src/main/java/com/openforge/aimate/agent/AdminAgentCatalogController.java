@@ -18,6 +18,21 @@ public class AdminAgentCatalogController {
     private final AgentCatalogService agentCatalogService;
     private final SystemConfigService systemConfigService;
 
+    @GetMapping("/industries")
+    public List<Map<String, Object>> industries() {
+        return agentCatalogService.listIndustries(false);
+    }
+
+    @PostMapping("/industries")
+    public Map<String, Object> createIndustry(@RequestBody AgentCatalogService.IndustryBody body) {
+        return wrap(() -> agentCatalogService.saveIndustry(null, body));
+    }
+
+    @PutMapping("/industries/{id}")
+    public Map<String, Object> updateIndustry(@PathVariable Long id, @RequestBody AgentCatalogService.IndustryBody body) {
+        return wrap(() -> agentCatalogService.saveIndustry(id, body));
+    }
+
     @GetMapping("/careers")
     public List<Map<String, Object>> careers() {
         return agentCatalogService.listCareers(false);

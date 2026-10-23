@@ -4,7 +4,15 @@ import { useQuery } from '@tanstack/react-query'
 import { agentApi } from '../../api/agent'
 import { ToolCallCard } from './ToolCallCard'
 import { MarkdownContent } from './MarkdownContent'
+import { AgentBubbleHeader } from './AgentAvatar'
 import type { AssistantVersionDto, ChatMessageDto, StreamBlock } from '../../types/agent'
+
+export type StreamAgentInfo = {
+  id?: number | null
+  name?: string | null
+  avatarUrl?: string | null
+  externalAgentKey?: string | null
+}
 
 /** 思考+工具调用区域固定高度，单区按事件顺序滚动（思考与工具调用穿插显示） */
 const BLOCKS_AREA_HEIGHT = 'min(70vh, 520px)'
@@ -192,9 +200,11 @@ interface Props {
   onInterrupt?: (assistantMessageId: number) => void
   /** 会话 id，用于拉取 assistant 历史版本 */
   sessionId?: string
+  /** 当前会话绑定的 Agent，用于回复气泡顶部展示 */
+  agent?: StreamAgentInfo | null
 }
 
-export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, isRunning, retryTargetUserMessageId, canRetry, onRetry, onInterrupt, sessionId }: Props) {
+export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, isRunning, retryTargetUserMessageId, canRetry, onRetry, onInterrupt, sessionId, agent }: Props) {
   const outerScrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
   const [versionsOpenForId, setVersionsOpenForId] = useState<number | null>(null)
@@ -255,6 +265,7 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
                 return (
                   <div key={`retry-reply-${i}`} className="group flex justify-start">
                     <div className="flex flex-col items-start gap-1.5 max-w-[85%] w-full min-w-0">
+                      {agent && <AgentBubbleHeader agent={agent} />}
                       <div className="rounded-2xl rounded-tl-md px-4 py-3 text-sm leading-relaxed bg-white/5 text-white/80 w-full min-w-0">
                         <div className="flex items-center gap-2 mb-2">
                           <span className="text-amber-400/90 text-xs">再次回答中…</span>
@@ -281,6 +292,7 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
                   className={`group min-w-0 ${msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}`}
                 >
                   <div className={`min-w-0 w-full flex flex-col gap-1.5 max-w-[85%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                  {msg.role === 'assistant' && agent && <AgentBubbleHeader agent={agent} />}
                   {/* AI 回复消息卡上方：思考（展开后含思考文字 + 工具调用，工具显示在思考内容下方） */}
                   {msg.role === 'assistant' && (
                     (msg.thinkingBlocks && msg.thinkingBlocks.length > 0) ||
@@ -449,6 +461,7 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
                     {messageRow}
                     <div className="flex justify-start">
                       <div className="flex flex-col items-start gap-1.5 max-w-[85%] w-full min-w-0">
+                        {agent && <AgentBubbleHeader agent={agent} />}
                         <div className="rounded-2xl rounded-tl-md px-4 py-3 text-sm leading-relaxed bg-white/5 text-white/80 w-full min-w-0">
                           {isRunning && (
                             <div className="flex items-center gap-2 mb-2">
@@ -480,6 +493,7 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
         {showBlocksAtBottom && (
           <div className="flex justify-start">
             <div className="flex flex-col items-start gap-1.5 max-w-[85%] w-full min-w-0">
+              {agent && <AgentBubbleHeader agent={agent} />}
               <BlocksArea blocks={blocks} isRunning={isRunning} />
             </div>
           </div>

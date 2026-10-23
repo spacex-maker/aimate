@@ -614,6 +614,7 @@ export function ModelManageContent() {
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">服务商</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">展示名</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">模型 ID</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-24" title="上下文窗口上限（token）">上下文</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 min-w-[8rem]">提示</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-28">积分/1K</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-36">成本 CNY/1M</th>
@@ -649,6 +650,24 @@ export function ModelManageContent() {
                   <td className="py-2 px-3 text-white/70">{formatProvider(m.provider)}</td>
                   <td className="py-2 px-3">{m.displayName}</td>
                   <td className="py-2 px-3 font-mono text-white/60">{m.modelId}</td>
+                  <td className="py-2 px-2">
+                    <input
+                      type="number"
+                      min={1000}
+                      step={1000}
+                      defaultValue={m.contextWindowTokens ?? 128000}
+                      key={`ctx-${m.id}-${m.contextWindowTokens}`}
+                      title="上下文窗口上限 token"
+                      disabled={updateMutation.isPending}
+                      onBlur={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v) || v < 1000) return
+                        if (v === (m.contextWindowTokens ?? 128000)) return
+                        updateMutation.mutate({ id: m.id, body: { contextWindowTokens: Math.round(v) } })
+                      }}
+                      className="w-20 bg-black/20 border border-white/15 rounded px-1.5 py-1.5 text-[11px] text-white font-mono"
+                    />
+                  </td>
                   <td className="py-2 px-3">
                     <input
                       type="text"
@@ -1334,6 +1353,8 @@ export function BillingManageContent() {
   const queryClient = useQueryClient()
   const [markupInput, setMarkupInput] = useState('4')
   const [pointsPerYuanInput, setPointsPerYuanInput] = useState('1000')
+  const [webSearchBasicInput, setWebSearchBasicInput] = useState('0.06')
+  const [webSearchAdvancedInput, setWebSearchAdvancedInput] = useState('0.12')
 
   const fromIso = useMemo(() => {
     const d = new Date()
@@ -1359,10 +1380,21 @@ export function BillingManageContent() {
     enabled: subTab === 'rules',
   })
 
+  const { data: systemConfigs = [] } = useQuery({
+    queryKey: ['admin-system-configs'],
+    queryFn: () => adminApi.listSystemConfigs(),
+    enabled: subTab === 'rules',
+  })
+  const tavilyConfigured = systemConfigs.some(
+    (c) => c.configKey === 'TAVILY_API_KEY' && !!c.configValue?.trim(),
+  )
+
   useEffect(() => {
     if (!billingSettings) return
     setMarkupInput(String(billingSettings.markupMultiplier))
     setPointsPerYuanInput(String(billingSettings.pointsPerYuan))
+    setWebSearchBasicInput(String(billingSettings.webSearchCostCnyBasic ?? 0.06))
+    setWebSearchAdvancedInput(String(billingSettings.webSearchCostCnyAdvanced ?? 0.12))
   }, [billingSettings])
 
   const saveSettingsMutation = useMutation({
@@ -1370,6 +1402,12 @@ export function BillingManageContent() {
       adminApi.updateBillingSettings({
         markupMultiplier: Number(markupInput),
         pointsPerYuan: Number(pointsPerYuanInput),
+        ...(tavilyConfigured
+          ? {
+              webSearchCostCnyBasic: Number(webSearchBasicInput),
+              webSearchCostCnyAdvanced: Number(webSearchAdvancedInput),
+            }
+          : {}),
       }),
     onSuccess: (res) => {
       toast.success('计费规则已保存')
@@ -1452,7 +1490,9 @@ export function BillingManageContent() {
           <div className="mb-4 flex items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-medium text-white">成本核算</h3>
-              <p className="text-xs text-white/40 mt-0.5">Token 合计 + 估算系统成本 CNY（含桌面代理）</p>
+              <p className="text-xs text-white/40 mt-0.5">
+                Token / 模型调用 + 联网搜索（Tavily）等估算系统成本 CNY
+              </p>
             </div>
             <div className="flex items-center gap-2">
               {([7, 30, 90] as const).map((d) => (
@@ -1577,8 +1617,62 @@ export function BillingManageContent() {
                 />
                 <span className="text-[11px] text-white/35">1 元人民币 = N 积分，默认 1000</span>
               </label>
+
+              {tavilyConfigured ? (
+                <div className="rounded border border-cyan-500/25 bg-cyan-500/[0.06] p-3 space-y-3">
+                  <div>
+                    <div className="text-xs text-cyan-200/90 font-medium">联网搜索成本（Tavily）</div>
+                    <p className="text-[11px] text-white/40 mt-0.5">
+                      用户开启「联网搜索」后按次核算。basic≈1 credit、advanced≈2 credits；再乘加成倍率与积分换算。
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label className="block space-y-1.5">
+                      <span className="text-xs text-white/60">Basic 单次成本 (CNY)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={webSearchBasicInput}
+                        onChange={(e) => setWebSearchBasicInput(e.target.value)}
+                        className="w-full bg-black/20 border border-white/15 rounded px-3 py-2 text-sm text-white"
+                      />
+                      <span className="text-[11px] text-white/35">默认 0.06（约 $0.008）</span>
+                    </label>
+                    <label className="block space-y-1.5">
+                      <span className="text-xs text-white/60">Advanced 单次成本 (CNY)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={webSearchAdvancedInput}
+                        onChange={(e) => setWebSearchAdvancedInput(e.target.value)}
+                        className="w-full bg-black/20 border border-white/15 rounded px-3 py-2 text-sm text-white"
+                      />
+                      <span className="text-[11px] text-white/35">默认 0.12（约 2 credits）</span>
+                    </label>
+                  </div>
+                  <div className="rounded border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-white/55 space-y-1">
+                    <div>预览：一次 basic 搜索</div>
+                    <div className="font-mono text-white/85">
+                      扣积分 = ceil({Number(webSearchBasicInput) || 0} × {Number(markupInput) || 0} ×{' '}
+                      {Number(pointsPerYuanInput) || 0}) ={' '}
+                      {Math.ceil(
+                        (Number(webSearchBasicInput) || 0) *
+                          (Number(markupInput) || 0) *
+                          (Number(pointsPerYuanInput) || 0),
+                      ) || 0}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded border border-white/10 bg-white/[0.03] px-3 py-2.5 text-[11px] text-white/45">
+                  配置 Tavily API Key（系统配置）后，可在此设置联网搜索成本核算。
+                </div>
+              )}
+
               <div className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/55 space-y-1">
-                <div>预览：若 API 成本 ¥1.00</div>
+                <div>预览：若模型 API 成本 ¥1.00</div>
                 <div className="font-mono text-white/85">
                   扣积分 = ceil(1 × {Number(markupInput) || 0} × {Number(pointsPerYuanInput) || 0}) ={' '}
                   {Math.ceil(1 * (Number(markupInput) || 0) * (Number(pointsPerYuanInput) || 0)) || 0}
@@ -1592,6 +1686,12 @@ export function BillingManageContent() {
                   || Number(markupInput) <= 0
                   || !Number.isFinite(Number(pointsPerYuanInput))
                   || Number(pointsPerYuanInput) < 1
+                  || (tavilyConfigured && (
+                    !Number.isFinite(Number(webSearchBasicInput))
+                    || Number(webSearchBasicInput) < 0
+                    || !Number.isFinite(Number(webSearchAdvancedInput))
+                    || Number(webSearchAdvancedInput) < 0
+                  ))
                 }
                 onClick={() => saveSettingsMutation.mutate()}
                 className="px-3 py-1.5 rounded bg-blue-600 text-xs text-white disabled:opacity-40"
@@ -1860,7 +1960,7 @@ function UserOperationModal({
                 {(
                   [
                     ['memoryEnabled', '长期记忆'],
-                    ['webSearchEnabled', '联网搜索'],
+                    ['webSearchEnabled', '联网搜索 (Tavily)'],
                     ['createToolEnabled', 'AI 自主编写工具'],
                     ['scriptExecEnabled', '用户系统脚本执行'],
                   ] as [keyof ToolSettingsDto, string][]
@@ -1900,17 +2000,35 @@ function UserOperationModal({
 }
 
 const DEEPSEEK_KEY = /^DEEPSEEK_API_KEY(_[A-Za-z0-9]+)?$/
+const HIDDEN_SYSTEM_KEYS = new Set([
+  'RAG_MEMORY_ENABLED',
+  'TAVILY_API_KEY',
+  'CHAT_BILLING_MARKUP_MULTIPLIER',
+  'CHAT_POINTS_PER_YUAN',
+  'CHAT_WEB_SEARCH_COST_CNY_BASIC',
+  'CHAT_WEB_SEARCH_COST_CNY_ADVANCED',
+])
 
 export function SystemConfigContent() {
   const queryClient = useQueryClient()
   const [keyLabel, setKeyLabel] = useState('')
   const [keyValue, setKeyValue] = useState('')
+  const [tavilyValue, setTavilyValue] = useState('')
+  const [tavilyDirty, setTavilyDirty] = useState(false)
   const { data: configs = [], isLoading } = useQuery({
     queryKey: ['admin-system-configs'],
     queryFn: () => adminApi.listSystemConfigs(),
   })
   const deepseekKeys = configs.filter((c) => DEEPSEEK_KEY.test(c.configKey))
-  const otherConfigs = configs.filter((c) => !DEEPSEEK_KEY.test(c.configKey) && c.configKey !== 'RAG_MEMORY_ENABLED')
+  const tavilyConfig = configs.find((c) => c.configKey === 'TAVILY_API_KEY')
+  const otherConfigs = configs.filter(
+    (c) => !DEEPSEEK_KEY.test(c.configKey) && !HIDDEN_SYSTEM_KEYS.has(c.configKey),
+  )
+
+  useEffect(() => {
+    if (tavilyDirty) return
+    setTavilyValue(tavilyConfig?.configValue ?? '')
+  }, [tavilyConfig?.configValue, tavilyDirty])
 
   const updateMutation = useMutation({
     mutationFn: ({ id, body }: { id: number; body: { configValue?: string | null; description?: string | null } }) =>
@@ -1929,6 +2047,18 @@ export function SystemConfigContent() {
       setKeyLabel('')
       setKeyValue('')
       queryClient.invalidateQueries({ queryKey: ['admin-system-configs'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const tavilyMutation = useMutation({
+    mutationFn: (value: string) => adminApi.upsertTavilyKey({ configValue: value.trim() }),
+    onSuccess: (_res, value) => {
+      toast.success(value.trim() ? 'Tavily API Key 已保存' : '已清空 Tavily API Key')
+      setTavilyDirty(false)
+      setTavilyValue(value.trim())
+      queryClient.invalidateQueries({ queryKey: ['admin-system-configs'] })
+      queryClient.invalidateQueries({ queryKey: ['admin-billing-settings'] })
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -1962,13 +2092,67 @@ export function SystemConfigContent() {
     })
   }
 
+  const tavilyConfigured = !!tavilyValue.trim() || !!tavilyConfig?.configValue?.trim()
+
   return (
     <div className="h-full flex flex-col">
       <div className="mb-4">
         <h3 className="text-sm font-medium text-white">系统配置</h3>
         <p className="text-xs text-white/40 mt-0.5">
-          可添加多条 DeepSeek API Key。模型管理里为每个模型选择其中一条后，对话就会用对应的模型。
+          可添加多条 DeepSeek API Key；配置 Tavily 后，用户「联网搜索」即走 Tavily，并可在计费管理中核算搜索成本。
         </p>
+      </div>
+
+      <div className="mb-4 rounded-lg border border-cyan-500/20 bg-cyan-500/[0.04] p-3 space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xs text-cyan-100/90">Tavily API Key（联网搜索）</div>
+            <p className="text-[11px] text-white/40 mt-0.5">
+              用户开启「联网搜索」= 启用 tavily_search。http_request 仍是独立的 HTTP 调用工具。
+            </p>
+          </div>
+          <span
+            className={clsx(
+              'shrink-0 rounded border px-2 py-0.5 text-[10px]',
+              tavilyConfigured
+                ? 'border-emerald-500/40 text-emerald-300/90'
+                : 'border-white/15 text-white/40',
+            )}
+          >
+            {tavilyConfigured ? '已配置' : '未配置'}
+          </span>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            type="password"
+            value={tavilyValue}
+            onChange={(e) => {
+              setTavilyValue(e.target.value)
+              setTavilyDirty(true)
+            }}
+            placeholder="tvly-..."
+            autoComplete="off"
+            className="flex-1 bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white placeholder:text-white/25 focus:outline-none focus:ring-1 focus:ring-cyan-500/70"
+          />
+          <button
+            type="button"
+            disabled={tavilyMutation.isPending}
+            onClick={() => tavilyMutation.mutate(tavilyValue)}
+            className="px-3 py-1.5 rounded bg-cyan-600 text-xs text-white disabled:opacity-40"
+          >
+            {tavilyMutation.isPending ? '保存中…' : '保存'}
+          </button>
+        </div>
+        {(!!tavilyConfig?.configValue?.trim() || !!tavilyValue.trim()) && (
+          <button
+            type="button"
+            disabled={tavilyMutation.isPending}
+            onClick={() => tavilyMutation.mutate('')}
+            className="text-[11px] text-white/40 hover:text-red-300"
+          >
+            清空 Key
+          </button>
+        )}
       </div>
 
       <div className="mb-4 rounded-lg border border-white/10 p-3 space-y-3">

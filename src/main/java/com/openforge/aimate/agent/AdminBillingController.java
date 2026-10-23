@@ -56,7 +56,12 @@ public class AdminBillingController {
 
     @PutMapping("/settings")
     public BillingSettingsService.BillingSettingsView updateSettings(@RequestBody BillingSettingsBody body) {
-        return billingSettingsService.update(body.markupMultiplier(), body.pointsPerYuan());
+        return billingSettingsService.update(
+                body.markupMultiplier(),
+                body.pointsPerYuan(),
+                body.webSearchCostCnyBasic(),
+                body.webSearchCostCnyAdvanced()
+        );
     }
 
     @GetMapping("/usage")
@@ -295,5 +300,10 @@ public class AdminBillingController {
 
     public record AdjustBody(long delta, String remark) {}
 
-    public record BillingSettingsBody(Double markupMultiplier, Double pointsPerYuan) {}
+    public record BillingSettingsBody(
+            Double markupMultiplier,
+            Double pointsPerYuan,
+            Double webSearchCostCnyBasic,
+            Double webSearchCostCnyAdvanced
+    ) {}
 }

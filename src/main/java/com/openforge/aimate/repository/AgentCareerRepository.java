@@ -10,4 +10,6 @@ public interface AgentCareerRepository extends JpaRepository<AgentCareer, Long> 
     Optional<AgentCareer> findByCodeIgnoreCase(String code);
     List<AgentCareer> findByEnabledTrueOrderBySortOrderAscIdAsc();
     List<AgentCareer> findAllByOrderBySortOrderAscIdAsc();
+    List<AgentCareer> findByIndustryIdAndEnabledTrueOrderBySortOrderAscIdAsc(Long industryId);
+    List<AgentCareer> findByIndustryIdIsNullAndEnabledTrueOrderBySortOrderAscIdAsc();
 }

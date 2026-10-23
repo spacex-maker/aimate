@@ -6,8 +6,10 @@ import { AdminLayout } from './components/admin/AdminLayout'
 import { AdminLoginPage } from './pages/admin/AdminLoginPage'
 import { AdminSsoPage } from './pages/admin/AdminSsoPage'
 import {
+  AdminAgentsPage,
   AdminBillingPage,
   AdminHostPage,
+  AdminKnowledgePage,
   AdminModelsPage,
   AdminSystemPage,
   AdminUsersPage,
@@ -64,6 +66,8 @@ export default function AdminApp() {
           }
         >
           <Route path="/admin" element={<AdminModelsPage />} />
+          <Route path="/admin/agents" element={<AdminAgentsPage />} />
+          <Route path="/admin/knowledge" element={<AdminKnowledgePage />} />
           <Route path="/admin/host" element={<AdminHostPage />} />
           <Route path="/admin/users" element={<AdminUsersPage />} />
           <Route path="/admin/billing" element={<AdminBillingPage />} />

@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { adminAgentApi } from '../../api/multiAgent'
 import { adminApi } from '../../api/admin'
+import { adminKnowledgeApi, type KnowledgeBaseBrief } from '../../api/adminKnowledge'
 import clsx from 'clsx'
 
 const TIERS = ['JUNIOR', 'MID', 'SENIOR', 'EXPERT'] as const
@@ -10,6 +11,9 @@ const TIERS = ['JUNIOR', 'MID', 'SENIOR', 'EXPERT'] as const
 export function AdminAgentsPanel() {
   const qc = useQueryClient()
   const [sub, setSub] = useState<'catalog' | 'tierModels' | 'prompt'>('catalog')
+  const [linkCatalogId, setLinkCatalogId] = useState<number | null>(null)
+  const [linkSelected, setLinkSelected] = useState<number[]>([])
+  const [kbPickQ, setKbPickQ] = useState('')
 
   const catalogQ = useQuery({
     queryKey: ['admin-agent-catalog'],
@@ -86,6 +90,38 @@ export function AdminAgentsPanel() {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  const kbPoolQ = useQuery({
+    queryKey: ['admin-kb-pick-pool', kbPickQ],
+    queryFn: () => adminKnowledgeApi.pageBases({ q: kbPickQ || undefined, enabled: true, page: 0, size: 100 }),
+    enabled: linkCatalogId != null,
+  })
+
+  const openLinkKb = async (catalogId: number) => {
+    try {
+      const linked = await adminKnowledgeApi.catalogBases(catalogId)
+      setLinkCatalogId(catalogId)
+      setLinkSelected(linked.map((x) => x.id))
+      setKbPickQ('')
+    } catch (e) {
+      toast.error((e as Error).message)
+    }
+  }
+
+  const saveLinkMut = useMutation({
+    mutationFn: () => {
+      if (linkCatalogId == null) throw new Error('未选择商品')
+      return adminKnowledgeApi.replaceCatalogBases(linkCatalogId, linkSelected)
+    },
+    onSuccess: () => {
+      toast.success('知识库关联已保存')
+      setLinkCatalogId(null)
+      qc.invalidateQueries({ queryKey: ['admin-agent-catalog'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const kbOptions = useMemo(() => kbPoolQ.data?.items ?? [], [kbPoolQ.data])
+
   return (
     <div className="space-y-4">
       <div className="flex gap-1 rounded-lg border border-white/10 p-0.5 w-fit">
@@ -116,20 +152,34 @@ export function AdminAgentsPanel() {
             <thead className="bg-white/[0.03] text-white/40">
               <tr>
                 <th className="px-3 py-2 font-medium">名称</th>
+                <th className="px-3 py-2 font-medium">行业</th>
                 <th className="px-3 py-2 font-medium">职业</th>
                 <th className="px-3 py-2 font-medium">等级</th>
                 <th className="px-3 py-2 font-medium">月价(Agent+Soul)</th>
+                <th className="px-3 py-2 font-medium">知识库</th>
                 <th className="px-3 py-2 font-medium">上架</th>
               </tr>
             </thead>
             <tbody>
-              {(catalogQ.data ?? []).map((row) => (
+              {(catalogQ.data ?? []).map((row) => {
+                const kbs = (row.knowledgeBases as KnowledgeBaseBrief[] | undefined) ?? []
+                return (
                 <tr key={String(row.id)} className="border-t border-white/5">
                   <td className="px-3 py-2 text-white/85">{String(row.name)}</td>
+                  <td className="px-3 py-2">{String(row.industryName ?? '—')}</td>
                   <td className="px-3 py-2">{String(row.careerName ?? '')}</td>
                   <td className="px-3 py-2">{String(row.tier)}</td>
                   <td className="px-3 py-2 font-mono">
                     {Number(row.priceMonthPoints) + Number(row.soulPriceMonthPoints)}
+                  </td>
+                  <td className="px-3 py-2">
+                    <button
+                      type="button"
+                      className="text-left text-blue-300/80 hover:text-blue-200"
+                      onClick={() => openLinkKb(Number(row.id))}
+                    >
+                      {kbs.length ? `${kbs.length} 个` : '关联'}
+                    </button>
                   </td>
                   <td className="px-3 py-2">
                     <button
@@ -141,9 +191,70 @@ export function AdminAgentsPanel() {
                     </button>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {linkCatalogId != null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl border border-white/15 bg-[#141414] p-4">
+            <h3 className="mb-2 text-sm font-semibold">关联官方知识库</h3>
+            <p className="mb-3 text-[11px] text-white/40">
+              用户招聘该 Agent 时，将同时获得勾选的领域知识库（不仅是提示词）。
+            </p>
+            <input
+              className="admin-input mb-2 w-full"
+              placeholder="筛选知识库…"
+              value={kbPickQ}
+              onChange={(e) => setKbPickQ(e.target.value)}
+            />
+            <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border border-white/10 p-2">
+              {kbOptions.map((kb) => (
+                <label
+                  key={kb.id}
+                  className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-white/[0.04]"
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={linkSelected.includes(kb.id)}
+                    onChange={(e) => {
+                      setLinkSelected((prev) =>
+                        e.target.checked ? [...prev, kb.id] : prev.filter((x) => x !== kb.id),
+                      )
+                    }}
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-white/80">{kb.name}</span>
+                    <span className="font-mono text-[10px] text-white/35">{kb.publicId}</span>
+                  </span>
+                </label>
+              ))}
+              {!kbOptions.length && (
+                <p className="py-4 text-center text-white/35">暂无知识库，请先在「官方知识库」创建</p>
+              )}
+            </div>
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-white/15 px-3 py-1.5 text-xs"
+                onClick={() => setLinkCatalogId(null)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="rounded-lg bg-blue-600/80 px-3 py-1.5 text-xs hover:bg-blue-600"
+                disabled={saveLinkMut.isPending}
+                onClick={() => saveLinkMut.mutate()}
+              >
+                保存（已选 {linkSelected.length}）
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

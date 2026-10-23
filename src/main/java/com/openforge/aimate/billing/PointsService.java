@@ -3,8 +3,10 @@ package com.openforge.aimate.billing;
 import com.openforge.aimate.config.SystemConfigService;
 import com.openforge.aimate.domain.PointLedger;
 import com.openforge.aimate.domain.User;
+import com.openforge.aimate.office.AgentDailyPointsService;
 import com.openforge.aimate.repository.PointLedgerRepository;
 import com.openforge.aimate.repository.UserRepository;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,15 +18,18 @@ public class PointsService {
     private final UserRepository userRepository;
     private final PointLedgerRepository ledgerRepository;
     private final SystemConfigService systemConfigService;
+    private final AgentDailyPointsService agentDailyPointsService;
 
     public PointsService(
             UserRepository userRepository,
             PointLedgerRepository ledgerRepository,
-            SystemConfigService systemConfigService
+            SystemConfigService systemConfigService,
+            @Lazy AgentDailyPointsService agentDailyPointsService
     ) {
         this.userRepository = userRepository;
         this.ledgerRepository = ledgerRepository;
         this.systemConfigService = systemConfigService;
+        this.agentDailyPointsService = agentDailyPointsService;
     }
 
     @Transactional(readOnly = true)
@@ -47,7 +52,14 @@ public class PointsService {
     @Transactional
     public long deduct(Long userId, long amount, String reason, String refType, String refId,
                        String sessionId, Long llmCallLogId, String remark) {
+        return deduct(userId, amount, reason, refType, refId, sessionId, llmCallLogId, remark, null);
+    }
+
+    @Transactional
+    public long deduct(Long userId, long amount, String reason, String refType, String refId,
+                       String sessionId, Long llmCallLogId, String remark, Long userAgentId) {
         if (userId == null || amount <= 0) return balance(userId);
+        agentDailyPointsService.assertWithinDailyLimit(userAgentId, amount);
         int updated = userRepository.deductPointsIfEnough(userId, amount);
         if (updated == 0) {
             throw new InsufficientPointsException("积分不足，本轮已中断");
@@ -64,6 +76,7 @@ public class PointsService {
         row.setLlmCallLogId(llmCallLogId);
         row.setRemark(remark);
         ledgerRepository.save(row);
+        agentDailyPointsService.recordSpend(userId, userAgentId, amount);
         return after;
     }
 

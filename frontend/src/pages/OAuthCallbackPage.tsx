@@ -20,6 +20,7 @@ export function OAuthCallbackPage() {
           userId: data.userId,
           username: data.username,
           displayName: data.displayName,
+          avatarUrl: data.avatarUrl ?? null,
           role: data.role,
           token: data.token,
         })

@@ -39,8 +39,12 @@ public abstract class BaseEntity {
      * Hard optimistic-lock counter.
      * JPA throws OptimisticLockException when two concurrent writers
      * try to flush the same row — critical during blue-green cut-over.
+     * <p>
+     * 必须保持 null 表示「新实体」：Spring Data {@code isNew()} 在存在 @Version 时
+     * 以 version==null 判断是否 persist；若默认写成 0 会误走 merge，调用方若仍用原引用
+     * 会看到 id 一直为 null（建群失败的根因）。
      */
     @Version
     @Column(nullable = false)
-    private Integer version = 0;
+    private Integer version;
 }

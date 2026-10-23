@@ -98,6 +98,8 @@ public class LlmCallLog extends BaseEntity {
         AGENT_LOOP,
         MEMORY_COMPRESS,
         DESKTOP_AGENT,
+        /** Tavily 联网搜索（按次计成本，无 token） */
+        WEB_SEARCH,
         OTHER
     }
 }

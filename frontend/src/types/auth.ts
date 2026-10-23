@@ -3,6 +3,8 @@ export interface AuthResponse {
   userId: number
   username: string
   displayName: string
+  /** 统一登录中心同步的头像 */
+  avatarUrl?: string | null
   role: 'USER' | 'ADMIN'
   token: string
 }
@@ -23,6 +25,7 @@ export interface AuthUser {
   userId: number
   username: string
   displayName: string
+  avatarUrl?: string | null
   role: 'USER' | 'ADMIN'
   token: string
 }

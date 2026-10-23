@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.openforge.aimate.agent.dto.ChatMessageDto;
+import com.openforge.aimate.agent.dto.SessionState;
 import com.openforge.aimate.agent.dto.StreamBlockDto;
 import com.openforge.aimate.agent.dto.ToolCallDisplayDto;
 
@@ -42,16 +43,12 @@ public class SessionMessageService {
     private final ObjectMapper objectMapper;
 
     /**
-     * 按会话顺序加载所有消息，转为 {@link Message} 列表。
+     * 加载送模用上下文：排除已压缩消息，并注入 session.contextSummary（结构化 SessionState）。
      */
     @Transactional(readOnly = true)
     public List<Message> load(AgentSession session) {
-        List<SessionMessage> rows = messageRepository.findByAgentSession_IdOrderBySeqAsc(session.getId());
-        List<Message> out = new ArrayList<>(rows.size());
-        for (SessionMessage row : rows) {
-            out.add(toMessage(row));
-        }
-        return out;
+        List<SessionMessage> rows = messageRepository.findActiveContextBySessionId(session.getId());
+        return withSummary(session, toMessages(rows));
     }
 
     /**
@@ -60,6 +57,21 @@ public class SessionMessageService {
     @Transactional(readOnly = true)
     public List<Message> loadContextUpToSeq(AgentSession session, int maxSeq) {
         List<SessionMessage> rows = messageRepository.findContextUpToSeq(session.getId(), maxSeq);
+        return withSummary(session, toMessages(rows));
+    }
+
+    /**
+     * 加载「某条回复」的上下文：主序消息 seq≤占位条 seq，或归属该占位条的消息（工具等），按 seq 升序。
+     * 用于单条消息独立 run、多轮并行。已压缩消息不送模；摘要插在系统提示后。
+     */
+    @Transactional(readOnly = true)
+    public List<Message> loadContextForReply(AgentSession session, SessionMessage placeholder) {
+        List<SessionMessage> rows = messageRepository.findContextForReply(
+                session.getId(), placeholder.getSeq(), placeholder.getId());
+        return withSummary(session, toMessages(rows));
+    }
+
+    private List<Message> toMessages(List<SessionMessage> rows) {
         List<Message> out = new ArrayList<>(rows.size());
         for (SessionMessage row : rows) {
             out.add(toMessage(row));
@@ -67,17 +79,22 @@ public class SessionMessageService {
         return out;
     }
 
-    /**
-     * 加载「某条回复」的上下文：主序消息 seq≤占位条 seq，或归属该占位条的消息（工具等），按 seq 升序。
-     * 用于单条消息独立 run、多轮并行。
-     */
-    @Transactional(readOnly = true)
-    public List<Message> loadContextForReply(AgentSession session, SessionMessage placeholder) {
-        List<SessionMessage> rows = messageRepository.findContextForReply(
-                session.getId(), placeholder.getSeq(), placeholder.getId());
-        List<Message> out = new ArrayList<>(rows.size());
-        for (SessionMessage row : rows) {
-            out.add(toMessage(row));
+    /** 系统提示之后插入结构化 SessionState（若有）。 */
+    private List<Message> withSummary(AgentSession session, List<Message> messages) {
+        String summary = session != null ? session.getContextSummary() : null;
+        if (summary == null || summary.isBlank()) {
+            return messages;
+        }
+        SessionState state = SessionState.parse(summary, objectMapper);
+        String block = state.toPromptBlock(objectMapper);
+        List<Message> out = new ArrayList<>(messages.size() + 1);
+        int i = 0;
+        while (i < messages.size() && "system".equalsIgnoreCase(messages.get(i).role())) {
+            out.add(messages.get(i++));
+        }
+        out.add(Message.system(block));
+        while (i < messages.size()) {
+            out.add(messages.get(i++));
         }
         return out;
     }
@@ -92,6 +109,22 @@ public class SessionMessageService {
             SessionMessage entity = toEntity(session, next++, m, placeholderId);
             messageRepository.save(entity);
         }
+    }
+
+    /** 钉住 / 取消钉住：压缩时 pin 消息保留原文送模。 */
+    @Transactional
+    public void setPinned(AgentSession session, long messageId, boolean pinned) {
+        SessionMessage m = messageRepository.findById(messageId)
+                .orElseThrow(() -> new IllegalArgumentException("消息不存在: " + messageId));
+        if (session == null || m.getAgentSession() == null
+                || !session.getId().equals(m.getAgentSession().getId())) {
+            throw new IllegalArgumentException("消息不属于该会话");
+        }
+        m.setPinned(pinned);
+        if (pinned) {
+            m.setExcludeFromContext(false);
+        }
+        messageRepository.save(m);
     }
 
     /**

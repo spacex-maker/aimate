@@ -4,167 +4,115 @@ import {
   ArrowRight,
   ArrowUpRight,
   Bot,
-  Boxes,
-  Brain,
-  Cable,
+  Briefcase,
   Eye,
   Globe2,
   KeyRound,
-  Layers,
-  Monitor,
-  Network,
-  Radio,
-  Shield,
+  Minimize2,
+  Pin,
   Sparkles,
   Terminal,
   Workflow,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 
-type Status = 'live' | 'building' | 'soon'
-
 const NAV = [
-  { href: '#loop', label: '思考循环' },
-  { href: '#memory', label: '记忆' },
-  { href: '#tools', label: '工具' },
-  { href: '#platforms', label: '多平台' },
+  { href: '#compress', label: '上下文压缩' },
+  { href: '#hire', label: 'Agent 招聘' },
+  { href: '#soul', label: 'Soul 记忆' },
+  { href: '#runtime', label: '运行时' },
   { href: '#observe', label: '可观测' },
-  { href: '#roadmap', label: '路线图' },
 ]
 
-const LOOP = [
+const COMPRESS_LAYERS = [
   {
-    id: 'RECALL',
-    title: '召回',
-    desc: '从向量记忆中检索相关上下文，注入当前推理窗口。',
+    id: 'L0',
+    title: '确定性裁剪',
+    lead: '零模型成本，先砍水分',
+    points: ['重复工具结果只留最新', '已解决错误自动收束', '超长 payload 摘要用稿截断'],
   },
   {
-    id: 'THINK',
-    title: '思考',
-    desc: '流式调用 LLM，产出回复意图或 tool_call 决策。',
+    id: 'L1',
+    title: '结构化状态',
+    lead: '滚动 SessionState，不是散文摘要',
+    points: ['intent / decisions / constraints', '实体只存 path 与引用', '再次压缩增量合并，少漂移'],
   },
   {
-    id: 'DECIDE',
-    title: '决策',
-    desc: '判断是否需要行动：继续工具链，或结束本轮。',
+    id: 'L2',
+    title: '写前外置 Soul',
+    lead: '耐久事实不靠摘要碰巧存活',
+    points: ['决策与偏好先写入 Soul', '跨会话可召回', '记忆开关关闭则跳过'],
   },
   {
-    id: 'ACT',
-    title: '执行',
-    desc: '调用工具、读写记忆、跑沙箱命令，再回写上下文。',
-  },
-]
-
-const MEMORY_LAYERS = [
-  {
-    tier: 'Working',
-    name: '工作记忆',
-    desc: '当前会话上下文窗口，支撑多步推理与工具结果回流。',
-    status: 'live' as Status,
-  },
-  {
-    tier: 'Episodic',
-    name: '情节记忆',
-    desc: '跨会话向量存储，按用户隔离；store / recall 主动读写。',
-    status: 'live' as Status,
-  },
-  {
-    tier: 'Semantic',
-    name: '语义索引',
-    desc: '可配置 Embedding（BGE / OpenAI 等），按维度检索长期知识。',
-    status: 'live' as Status,
-  },
-  {
-    tier: 'Procedural',
-    name: '程序性记忆',
-    desc: '把可复用流程沉淀为 Skills / Playbooks，跨任务复用。',
-    status: 'building' as Status,
+    id: 'L3',
+    title: '阈值与保留',
+    lead: '占用见底前主动建议',
+    points: ['≥72% 圆环提示压缩', '近期原文 + pin 永不丢', '聊天记录仍可完整回看'],
   },
 ]
 
-const TOOL_CAPS = [
+const HIRE_POINTS = [
+  {
+    title: '按职业招聘',
+    desc: '全栈、运营、研究等官方职业目录，选等级与租期，一键入职你的团队。',
+  },
+  {
+    title: '一人一座 Soul',
+    desc: '每位 Agent 绑定独立 Soul 席位：长期记忆跟 Agent 走，而不是散落在会话里。',
+  },
+  {
+    title: '积分清晰结算',
+    desc: '租用费与 Soul 席位分项计价，控制台可查流水；用多少、花多少一目了然。',
+  },
+]
+
+const SOUL_POINTS = [
+  {
+    k: '01',
+    title: '跨会话连续',
+    desc: '偏好、约束、已确认决策写入 Soul，下次对话无需从头交代。',
+  },
+  {
+    k: '02',
+    title: '按需召回',
+    desc: 'Agent 主动 recall；压缩时 write-before-compact，关键事实先外置再折叠。',
+  },
+  {
+    k: '03',
+    title: '人可审阅',
+    desc: '在「我的 Agent」预览 Soul 记忆，跳转 Soul 控制台深度管理。',
+  },
+]
+
+const RUNTIME = [
+  {
+    icon: Workflow,
+    title: '思考循环',
+    desc: '召回 → 思考 → 决策 → 执行，多轮工具链直到目标完成。',
+  },
   {
     icon: Terminal,
-    title: '沙箱执行',
-    desc: '每用户独立 Linux 容器，支持 Python / Node / Shell，装环境再跑脚本。',
-    status: 'live' as Status,
+    title: '工具行动面',
+    desc: '联网搜索、HTTP、沙箱脚本、自主编写工具——按开关精细授权。',
   },
   {
-    icon: Brain,
-    title: '记忆工具',
-    desc: 'store_memory / recall_memory，让 Agent 主动记住与回忆。',
-    status: 'live' as Status,
+    icon: KeyRound,
+    title: '模型自由',
+    desc: '系统模型或自带 Key；上下文窗口按模型上限估算，圆环实时可见。',
   },
-  {
-    icon: Cable,
-    title: 'MCP 工具网关',
-    desc: '以开放协议接入第三方工具与数据源，统一鉴权与审计。',
-    status: 'building' as Status,
-  },
-  {
-    icon: Boxes,
-    title: 'Skills 生态',
-    desc: 'OpenClaw 兼容 Skills，桌面端本地加载，云端逐步对齐。',
-    status: 'building' as Status,
-  },
-]
-
-const PLATFORMS = [
   {
     icon: Globe2,
-    title: 'Web Console',
-    desc: '浏览器即用：会话、思考流、记忆与工具管理。',
-    status: 'live' as Status,
-  },
-  {
-    icon: Monitor,
-    title: 'Desktop Client',
-    desc: '本地 RECALL→THINK→ACT，云端代理 LLM，适合长任务与本地 Skills。',
-    status: 'live' as Status,
-  },
-  {
-    icon: Radio,
-    title: 'API / Proxy',
-    desc: '认证与模型代理接口，便于嵌入自有产品与自动化流水线。',
-    status: 'live' as Status,
-  },
-  {
-    icon: Network,
-    title: '多通道接入',
-    desc: 'IM、机器人、企业协作入口——同一 Agent Runtime，多端触达。',
-    status: 'soon' as Status,
+    title: 'Web 即控制台',
+    desc: '浏览器打开就能聊、招聘、管记忆；桌面与 API 同源 Runtime。',
   },
 ]
 
 const OBSERVE = [
-  { t: 'ITERATION', d: '每一轮循环起点与状态变更实时推送。' },
-  { t: 'THINKING', d: 'Token 级流式思考，看见推理如何展开。' },
-  { t: 'TOOL_CALL', d: '工具入参、结果与错误完整可见。' },
-  { t: 'FINAL', d: '最终答案与轨迹落库，便于回放与审计。' },
+  { t: 'THINKING', d: 'Token 级流式思考，推理过程可折叠回放。' },
+  { t: 'TOOL', d: '工具入参、结果与耗时完整可见。' },
+  { t: 'CONTEXT', d: '占用圆环 + 分项拆解；建议压缩一键触发。' },
+  { t: 'LEDGER', d: '对话扣费与搜索成本入账，流水可查。' },
 ]
-
-const ROADMAP = [
-  { name: '自主思考循环', detail: 'RECALL → THINK → DECIDE → ACT', status: 'live' as Status },
-  { name: '长期向量记忆', detail: 'Milvus + 可配置 Embedding', status: 'live' as Status },
-  { name: '实时思考流', detail: 'WebSocket 事件流', status: 'live' as Status },
-  { name: 'BYO LLM / Key', detail: 'OpenAI / DeepSeek / 通义 / Kimi…', status: 'live' as Status },
-  { name: '容器工具沙箱', detail: '每用户隔离执行环境', status: 'live' as Status },
-  { name: 'Desktop Agent', detail: '本地循环 + 云端代理', status: 'live' as Status },
-  { name: 'MCP 工具协议', detail: '开放工具与数据接入', status: 'building' as Status },
-  { name: '多 Agent 编排', detail: '角色分工 / A2A 协作', status: 'soon' as Status },
-  { name: '程序性记忆', detail: 'Skills / Playbooks 沉淀', status: 'building' as Status },
-  { name: '多通道触达', detail: 'IM / 机器人 / 企业入口', status: 'soon' as Status },
-]
-
-const STATUS_LABEL: Record<Status, string> = {
-  live: '已上线',
-  building: '建设中',
-  soon: '规划中',
-}
-
-function StatusPill({ status }: { status: Status }) {
-  return <span className={`agent-land__status agent-land__status--${status}`}>{STATUS_LABEL[status]}</span>
-}
 
 function useReveal<T extends HTMLElement>() {
   const ref = useRef<T | null>(null)
@@ -181,7 +129,7 @@ function useReveal<T extends HTMLElement>() {
           io.disconnect()
         }
       },
-      { root, threshold: 0.14, rootMargin: '0px 0px -6% 0px' },
+      { root, threshold: 0.12, rootMargin: '0px 0px -6% 0px' },
     )
     io.observe(el)
     return () => io.disconnect()
@@ -227,11 +175,11 @@ function HeroCanvas() {
         <path d="M50 50 C 48 64, 52 78, 50 90" />
       </svg>
       {[
-        { x: 18, y: 28, l: 'PLAN' },
-        { x: 82, y: 24, l: 'TOOL' },
-        { x: 50, y: 50, l: 'CORE', hub: true },
-        { x: 20, y: 78, l: 'MEM' },
-        { x: 84, y: 76, l: 'RUN' },
+        { x: 18, y: 28, l: 'HIRE' },
+        { x: 82, y: 24, l: 'SOUL' },
+        { x: 50, y: 50, l: 'CHAT', hub: true },
+        { x: 20, y: 78, l: 'CTX' },
+        { x: 84, y: 76, l: 'TOOL' },
         { x: 50, y: 12, l: 'OBS' },
       ].map((n, i) => (
         <div
@@ -248,10 +196,10 @@ function HeroCanvas() {
   )
 }
 
-/** AIMATEX-AGENT 官网落地页（公开，不强制登录；已登录则入口直达控制台） */
+/** AIMATEX-AGENT 官网：产品亮点分板块介绍 */
 export function LandingPage() {
   const { user, isLoggedIn } = useAuth()
-  const [loopIdx, setLoopIdx] = useState(0)
+  const [layerIdx, setLayerIdx] = useState(0)
   const [navSolid, setNavSolid] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const displayName = user?.displayName || user?.username || ''
@@ -259,8 +207,8 @@ export function LandingPage() {
 
   useEffect(() => {
     const id = window.setInterval(() => {
-      setLoopIdx((i) => (i + 1) % LOOP.length)
-    }, 2800)
+      setLayerIdx((i) => (i + 1) % COMPRESS_LAYERS.length)
+    }, 3200)
     return () => window.clearInterval(id)
   }, [])
 
@@ -319,20 +267,20 @@ export function LandingPage() {
         </div>
       </header>
 
-      {/* —— Hero: brand + one line + CTA + full-bleed runtime visual —— */}
+      {/* Hero */}
       <section className="agent-land__hero">
         <HeroCanvas />
         <div className="agent-land__hero-inner">
           <p className="agent-land__kicker">
             <Sparkles className="w-3.5 h-3.5" />
-            Autonomous Agent Runtime
+            Hire · Remember · Compress
           </p>
           <h1 className="agent-land__brand">AIMATEX-AGENT</h1>
-          <p className="agent-land__headline">让 Agent 真正跑起来</p>
+          <p className="agent-land__headline">招聘会思考的同事，而不是多开一个聊天框</p>
           <p className="agent-land__lead">
             {isLoggedIn
-              ? `已登录为 ${displayName}。可直接进入控制台继续会话、记忆与工具编排。`
-              : '规划、记忆、工具调用与可观测执行——一套面向落地的自主 Agent 运行时。'}
+              ? `已登录为 ${displayName}。招聘 Agent、绑定 Soul、长会话压缩——都在控制台里。`
+              : '职业 Agent + 独立 Soul + 四层上下文压缩：长对话不糊、记忆跟岗位走、成本看得见。'}
           </p>
           <div className="agent-land__cta-row">
             {isLoggedIn ? (
@@ -346,221 +294,212 @@ export function LandingPage() {
                 <ArrowRight className="w-4 h-4" />
               </Link>
             )}
-            <a href="#loop" className="agent-land__btn-ghost">
-              了解能力架构
+            <a href="#compress" className="agent-land__btn-ghost">
+              看上下文如何压缩
             </a>
           </div>
         </div>
-        <a href="#loop" className="agent-land__scroll" aria-label="向下滚动">
+        <a href="#compress" className="agent-land__scroll" aria-label="向下滚动">
           <span />
         </a>
       </section>
 
-      {/* —— Thinking loop —— */}
-      <section id="loop" className="agent-land__section">
+      {/* Context compress */}
+      <section id="compress" className="agent-land__section">
         <Reveal>
           <div className="agent-land__section-head">
-            <p className="agent-land__eye">Thinking Loop</p>
-            <h2>不是一次问答，而是持续运转的循环</h2>
+            <p className="agent-land__eye">Context Fabric</p>
+            <h2>长会话不靠硬截断，靠可审计的压缩管线</h2>
             <p>
-              对标业界 Agent Runtime 的核心范式：召回上下文、流式思考、决定是否行动、执行工具，再持久化——直到目标完成。
+              对齐 Cursor / Claude Code compact 与 Session Memory 共识：系统提示保留、近期原文保留、更早轮次收成结构化状态；聊天记录永不删除。
             </p>
           </div>
         </Reveal>
-        <Reveal className="agent-land__loop">
-          <div className="agent-land__loop-rail" aria-hidden>
-            {LOOP.map((step, i) => (
+
+        <Reveal className="agent-land__pipe">
+          <div className="agent-land__pipe-rail" role="tablist" aria-label="压缩层级">
+            {COMPRESS_LAYERS.map((layer, i) => (
               <button
-                key={step.id}
+                key={layer.id}
                 type="button"
-                className={`agent-land__loop-step ${i === loopIdx ? 'is-active' : ''}`}
-                onClick={() => setLoopIdx(i)}
+                role="tab"
+                aria-selected={i === layerIdx}
+                className={`agent-land__pipe-step ${i === layerIdx ? 'is-active' : ''}`}
+                onClick={() => setLayerIdx(i)}
               >
-                <span className="n">{String(i + 1).padStart(2, '0')}</span>
-                <span className="id">{step.id}</span>
+                <span className="id">{layer.id}</span>
+                <span className="title">{layer.title}</span>
               </button>
             ))}
           </div>
-          <div className="agent-land__loop-stage" key={LOOP[loopIdx].id}>
-            <div className="agent-land__loop-badge">
-              <Workflow className="w-4 h-4" />
-              {LOOP[loopIdx].id}
+          <div className="agent-land__pipe-stage" key={COMPRESS_LAYERS[layerIdx].id}>
+            <div className="agent-land__pipe-badge">
+              <Minimize2 className="w-4 h-4" />
+              {COMPRESS_LAYERS[layerIdx].id}
             </div>
-            <h3>{LOOP[loopIdx].title}</h3>
-            <p>{LOOP[loopIdx].desc}</p>
+            <h3>{COMPRESS_LAYERS[layerIdx].title}</h3>
+            <p className="agent-land__pipe-lead">{COMPRESS_LAYERS[layerIdx].lead}</p>
+            <ul className="agent-land__pipe-list">
+              {COMPRESS_LAYERS[layerIdx].points.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+            </ul>
             <div className="agent-land__loop-meter" aria-hidden>
-              {LOOP.map((_, i) => (
-                <span key={i} className={i === loopIdx ? 'is-on' : ''} />
+              {COMPRESS_LAYERS.map((_, i) => (
+                <span key={i} className={i === layerIdx ? 'is-on' : ''} />
               ))}
             </div>
           </div>
         </Reveal>
-      </section>
 
-      {/* —— Memory —— */}
-      <section id="memory" className="agent-land__section agent-land__section--alt">
         <Reveal>
-          <div className="agent-land__section-head">
-            <p className="agent-land__eye">Memory Fabric</p>
-            <h2>分层记忆架构，跨会话记住该记住的</h2>
-            <p>
-              参考短时 / 情节 / 语义 / 程序性记忆的业界分层：先把工作上下文与向量长期记忆做扎实，再演进可复用流程沉淀。
+          <div className="agent-land__assemble">
+            <p className="agent-land__assemble-label">每次送模的固定顺序</p>
+            <div className="agent-land__assemble-flow">
+              <span>System / Persona</span>
+              <span className="arr" aria-hidden>
+                →
+              </span>
+              <span>SessionState</span>
+              <span className="arr" aria-hidden>
+                →
+              </span>
+              <span>近期原文 + Pin</span>
+              <span className="arr" aria-hidden>
+                →
+              </span>
+              <span>本轮 User</span>
+            </div>
+            <p className="agent-land__assemble-hint">
+              <Pin className="w-3.5 h-3.5" />
+              钉住的约束与关键 ID 永不进入压缩排除列表；代码细节用路径引用，需要时再重读原文。
             </p>
           </div>
         </Reveal>
-        <div className="agent-land__layers">
-          {MEMORY_LAYERS.map((layer, i) => (
-            <Reveal key={layer.tier} className="agent-land__layer" style={{ transitionDelay: `${i * 80}ms` } as CSSProperties}>
-              <div className="agent-land__layer-top">
-                <span className="agent-land__mono">{layer.tier}</span>
-                <StatusPill status={layer.status} />
+      </section>
+
+      {/* Hire */}
+      <section id="hire" className="agent-land__section agent-land__section--alt">
+        <Reveal>
+          <div className="agent-land__section-head">
+            <p className="agent-land__eye">Agent Hire</p>
+            <h2>把岗位招进来，而不是再注册一个账号</h2>
+            <p>
+              官方职业目录 × 等级 × 租期。入职即绑定 Soul：这位同事有记忆、有人格、可在会话里直接换班。
+            </p>
+          </div>
+        </Reveal>
+        <div className="agent-land__hire">
+          <Reveal className="agent-land__hire-visual" aria-hidden>
+            <div className="agent-land__hire-orb">
+              <Briefcase className="w-8 h-8" />
+            </div>
+            <div className="agent-land__hire-chip agent-land__hire-chip--a">全栈秘书</div>
+            <div className="agent-land__hire-chip agent-land__hire-chip--b">Soul 席位</div>
+            <div className="agent-land__hire-chip agent-land__hire-chip--c">包月 / 包年</div>
+          </Reveal>
+          <div className="agent-land__hire-list">
+            {HIRE_POINTS.map((item, i) => (
+              <Reveal key={item.title} style={{ transitionDelay: `${i * 70}ms` } as CSSProperties}>
+                <article className="agent-land__hire-item">
+                  <h3>{item.title}</h3>
+                  <p>{item.desc}</p>
+                </article>
+              </Reveal>
+            ))}
+            <Reveal>
+              <div className="agent-land__inline-cta">
+                {isLoggedIn ? (
+                  <Link to="/agents/hire" className="agent-land__btn agent-land__btn--sm">
+                    <span>去招聘大厅</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                ) : (
+                  <Link to="/login" className="agent-land__btn agent-land__btn--sm">
+                    <span>登录后招聘</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                )}
               </div>
-              <h3>{layer.name}</h3>
-              <p>{layer.desc}</p>
+            </Reveal>
+          </div>
+        </div>
+      </section>
+
+      {/* Soul */}
+      <section id="soul" className="agent-land__section">
+        <Reveal>
+          <div className="agent-land__section-head">
+            <p className="agent-land__eye">Soul Memory</p>
+            <h2>记忆跟着 Agent，而不是跟着某一个聊天窗口</h2>
+            <p>
+              Soul 是跨工具可延续的灵魂层：Chat 负责对话与行动，Soul 负责耐久偏好、决策与实体锚点。
+            </p>
+          </div>
+        </Reveal>
+        <div className="agent-land__soul-grid">
+          {SOUL_POINTS.map((s, i) => (
+            <Reveal key={s.k} className="agent-land__soul-cell" style={{ transitionDelay: `${i * 80}ms` } as CSSProperties}>
+              <span className="agent-land__mono">{s.k}</span>
+              <h3>{s.title}</h3>
+              <p>{s.desc}</p>
             </Reveal>
           ))}
         </div>
         <Reveal>
           <div className="agent-land__note">
-            <Layers className="w-4 h-4" />
+            <Sparkles className="w-4 h-4" />
             <span>
-              当前以 Milvus 向量库承载长期记忆，按用户与集合隔离；会话中可通过工具主动写入与召回。
+              压缩触发时会把新决策 / 约束 / 实体差集写入 Soul（需开启长期记忆），摘要只负责本会话连贯。
             </span>
           </div>
         </Reveal>
       </section>
 
-      {/* —— Tools —— */}
-      <section id="tools" className="agent-land__section">
+      {/* Runtime */}
+      <section id="runtime" className="agent-land__section agent-land__section--alt">
         <Reveal>
           <div className="agent-land__section-head">
-            <p className="agent-land__eye">Tool Calling</p>
-            <h2>工具不是插件列表，而是可执行的行动面</h2>
-            <p>
-              从沙箱命令、记忆读写，到面向 MCP 的开放工具协议——Agent 按需编排外部能力，而不是停在聊天框里。
-            </p>
+            <p className="agent-land__eye">Runtime</p>
+            <h2>能想、能做、能管边界</h2>
+            <p>同一套 Runtime 支撑控制台对话：工具开关、模型选择、沙箱与联网搜索均可按用户配置。</p>
           </div>
         </Reveal>
-        <div className="agent-land__grid4">
-          {TOOL_CAPS.map((cap, i) => {
-            const Icon = cap.icon
+        <div className="agent-land__runtime">
+          {RUNTIME.map((r, i) => {
+            const Icon = r.icon
             return (
-              <Reveal key={cap.title} className="agent-land__cap" style={{ transitionDelay: `${i * 70}ms` } as CSSProperties}>
-                <div className="agent-land__cap-icon">
+              <Reveal key={r.title} className="agent-land__runtime-row" style={{ transitionDelay: `${i * 60}ms` } as CSSProperties}>
+                <div className="agent-land__runtime-icon">
                   <Icon className="w-5 h-5" />
                 </div>
-                <div className="agent-land__cap-top">
-                  <h3>{cap.title}</h3>
-                  <StatusPill status={cap.status} />
-                </div>
-                <p>{cap.desc}</p>
-              </Reveal>
-            )
-          })}
-        </div>
-        <Reveal>
-          <div className="agent-land__safe">
-            <Shield className="w-5 h-5" />
-            <div>
-              <strong>隔离与安全默认开启</strong>
-              <p>容器采用 no-new-privileges、cap-drop 等加固选项，兼顾可执行性与边界隔离。</p>
-            </div>
-          </div>
-        </Reveal>
-      </section>
-
-      {/* —— Platforms —— */}
-      <section id="platforms" className="agent-land__section agent-land__section--alt">
-        <Reveal>
-          <div className="agent-land__section-head">
-            <p className="agent-land__eye">Multi-Platform</p>
-            <h2>同一 Runtime，多端接入</h2>
-            <p>
-              Web 控制台、桌面客户端与 API 代理已打通；后续扩展 IM / 机器人等通道，让 Agent 出现在工作真正发生的地方。
-            </p>
-          </div>
-        </Reveal>
-        <div className="agent-land__platforms">
-          {PLATFORMS.map((p, i) => {
-            const Icon = p.icon
-            return (
-              <Reveal key={p.title} className="agent-land__platform" style={{ transitionDelay: `${i * 70}ms` } as CSSProperties}>
-                <Icon className="w-6 h-6" />
-                <div className="agent-land__platform-body">
-                  <div className="agent-land__cap-top">
-                    <h3>{p.title}</h3>
-                    <StatusPill status={p.status} />
-                  </div>
-                  <p>{p.desc}</p>
-                </div>
-              </Reveal>
-            )
-          })}
-        </div>
-      </section>
-
-      {/* —— Observe + Models —— */}
-      <section id="observe" className="agent-land__section">
-        <div className="agent-land__split">
-          <Reveal>
-            <div className="agent-land__section-head agent-land__section-head--left">
-              <p className="agent-land__eye">Observability</p>
-              <h2>看得见它怎么想</h2>
-              <p>WebSocket 实时推送思考与工具事件，会话轨迹可回放——可观测是落地 Agent 的信任基础。</p>
-            </div>
-            <ul className="agent-land__obs">
-              {OBSERVE.map((o) => (
-                <li key={o.t}>
-                  <Eye className="w-4 h-4" />
-                  <div>
-                    <span className="agent-land__mono">{o.t}</span>
-                    <p>{o.d}</p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </Reveal>
-          <Reveal>
-            <div className="agent-land__section-head agent-land__section-head--left">
-              <p className="agent-land__eye">Model Freedom</p>
-              <h2>自带 Key，自选模型</h2>
-              <p>同一套系统里切换厂商与 Embedding，少改部署、多试策略。</p>
-            </div>
-            <div className="agent-land__models">
-              <div>
-                <KeyRound className="w-5 h-5" />
-                <h3>LLM BYO</h3>
-                <p>OpenAI、DeepSeek、通义、Kimi 等；用户 Key 优先于系统 Key。</p>
-              </div>
-              <div>
-                <Brain className="w-5 h-5" />
-                <h3>Embedding</h3>
-                <p>自选向量模型与维度，记忆检索按你的配置走。</p>
-              </div>
-            </div>
-          </Reveal>
-        </div>
-      </section>
-
-      {/* —— Roadmap —— */}
-      <section id="roadmap" className="agent-land__section agent-land__section--alt">
-        <Reveal>
-          <div className="agent-land__section-head">
-            <p className="agent-land__eye">Capability Map</p>
-            <h2>能力会持续兑现</h2>
-            <p>
-              对标主流 Agent 平台：编排、记忆、工具协议、多 Agent、多通道接入。功能按路线图逐步实现——先把已上线能力用扎实。
-            </p>
-          </div>
-        </Reveal>
-        <Reveal>
-          <ul className="agent-land__roadmap">
-            {ROADMAP.map((item) => (
-              <li key={item.name}>
-                <StatusPill status={item.status} />
                 <div>
-                  <strong>{item.name}</strong>
-                  <span>{item.detail}</span>
+                  <h3>{r.title}</h3>
+                  <p>{r.desc}</p>
+                </div>
+              </Reveal>
+            )
+          })}
+        </div>
+      </section>
+
+      {/* Observe */}
+      <section id="observe" className="agent-land__section">
+        <Reveal>
+          <div className="agent-land__section-head">
+            <p className="agent-land__eye">Observability</p>
+            <h2>看得见它怎么想、怎么花</h2>
+            <p>实时事件流 + 上下文占用 + 积分流水，让 Agent 落地时有信任、有账本。</p>
+          </div>
+        </Reveal>
+        <Reveal>
+          <ul className="agent-land__obs agent-land__obs--wide">
+            {OBSERVE.map((o) => (
+              <li key={o.t}>
+                <Eye className="w-4 h-4" />
+                <div>
+                  <span className="agent-land__mono">{o.t}</span>
+                  <p>{o.d}</p>
                 </div>
               </li>
             ))}
@@ -568,21 +507,26 @@ export function LandingPage() {
         </Reveal>
       </section>
 
-      {/* —— Closing CTA —— */}
+      {/* Closing */}
       <section className="agent-land__closing">
         <Reveal>
           <p className="agent-land__eye">Start</p>
           <h2 className="agent-land__closing-brand">AIMATEX-AGENT</h2>
           <p>
             {isLoggedIn
-              ? '会话、记忆与工具都在控制台里——点一下继续。'
-              : '用统一 AIMATEX Account 登录，创建会话，亲眼看 Agent 回忆、思考、调用工具。'}
+              ? '招聘一位同事，绑定 Soul，开一场不会糊掉的长会话。'
+              : '登录后即可招聘 Agent、开启 Soul，并在长对话里一键压缩上下文。'}
           </p>
           {isLoggedIn ? (
-            <Link to="/app" className="agent-land__btn">
-              <span>进入控制台</span>
-              <ArrowRight className="w-4 h-4" />
-            </Link>
+            <div className="agent-land__closing-actions">
+              <Link to="/app" className="agent-land__btn">
+                <span>进入控制台</span>
+                <ArrowRight className="w-4 h-4" />
+              </Link>
+              <Link to="/agents/hire" className="agent-land__btn-ghost">
+                去招聘大厅
+              </Link>
+            </div>
           ) : (
             <Link to="/login" className="agent-land__btn">
               <span>免费开始</span>

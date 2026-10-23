@@ -62,7 +62,7 @@ public class AuthService {
         log.info("[Auth] New user registered: id={}, username={}", saved.getId(), saved.getUsername());
 
         String token = jwtUtil.generate(saved.getId(), saved.getUsername(), saved.getRole().name());
-        return new AuthResponse(saved.getId(), saved.getUsername(), saved.getDisplayName(), saved.getRole().name(), token);
+        return toAuthResponse(saved, token);
     }
 
     @Transactional
@@ -86,7 +86,7 @@ public class AuthService {
         user.setLastLoginTime(LocalDateTime.now());
 
         String token = jwtUtil.generate(user.getId(), user.getUsername(), user.getRole().name());
-        return new AuthResponse(user.getId(), user.getUsername(), user.getDisplayName(), user.getRole().name(), token);
+        return toAuthResponse(user, token);
     }
 
     @Transactional
@@ -121,6 +121,9 @@ public class AuthService {
         if (StringUtils.hasText(principal.displayName())) {
             user.setDisplayName(principal.displayName().trim());
         }
+        if (StringUtils.hasText(principal.avatarUrl())) {
+            user.setAvatarUrl(trimUrl(principal.avatarUrl()));
+        }
         if (StringUtils.hasText(principal.email()) && !StringUtils.hasText(user.getEmail())) {
             user.setEmail(principal.email().trim().toLowerCase());
         }
@@ -129,7 +132,7 @@ public class AuthService {
         soulBindService.ensureSoulUser(user);
 
         String token = jwtUtil.generate(user.getId(), user.getUsername(), user.getRole().name());
-        return new AuthResponse(user.getId(), user.getUsername(), user.getDisplayName(), user.getRole().name(), token);
+        return toAuthResponse(user, token);
     }
 
     private User createOidcUser(AccountOidcService.AccountPrincipal principal) {
@@ -142,12 +145,31 @@ public class AuthService {
         user.setDisplayName(StringUtils.hasText(principal.displayName())
                 ? principal.displayName().trim()
                 : email);
+        if (StringUtils.hasText(principal.avatarUrl())) {
+            user.setAvatarUrl(trimUrl(principal.avatarUrl()));
+        }
         user.setStatus(User.Status.ACTIVE);
         user.setRole(User.Role.USER);
         User saved = userRepository.save(user);
         pointsService.grantRegisterGiftIfConfigured(saved.getId());
         soulBindService.ensureSoulUser(saved);
         return saved;
+    }
+
+    private static AuthResponse toAuthResponse(User user, String token) {
+        return new AuthResponse(
+                user.getId(),
+                user.getUsername(),
+                user.getDisplayName(),
+                user.getAvatarUrl(),
+                user.getRole().name(),
+                token
+        );
+    }
+
+    private static String trimUrl(String url) {
+        String t = url.trim();
+        return t.length() > 1024 ? t.substring(0, 1024) : t;
     }
 
     private String uniqueUsernameFromEmail(String email) {

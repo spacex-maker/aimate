@@ -41,7 +41,7 @@ public class TavilySearchService {
      */
     public String search(String apiKey, String query, int maxResults, String searchDepth, String topic) {
         if (apiKey == null || apiKey.isBlank()) {
-            return "[ToolError] Tavily API Key 未配置。请在系统配置表中设置 TAVILY_API_KEY。";
+            return "[ToolError] Tavily API Key 未配置。请在后台「系统配置」中填写 Tavily API Key。";
         }
         if (query == null || query.isBlank()) {
             return "[ToolError] tavily_search 需要非空的 query 参数。";

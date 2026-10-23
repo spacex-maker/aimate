@@ -34,6 +34,10 @@ public class User extends BaseEntity {
     @Column(name = "display_name", length = 128)
     private String displayName;
 
+    /** 统一登录中心同步的头像 URL（userinfo.picture）。 */
+    @Column(name = "avatar_url", length = 1024)
+    private String avatarUrl;
+
     /** AIMATEX Account OIDC subject（sub）。 */
     @Column(name = "aimatex_account_sub", length = 64, unique = true)
     private String aimatexAccountSub;

@@ -29,12 +29,20 @@ public record SessionResponse(
         @JsonProperty("errorMessage")   String        errorMessage,
         @JsonProperty("hidden")         boolean       hidden,
         @JsonProperty("userAgentId")    Long          userAgentId,
+        @JsonProperty("agentName")      String        agentName,
+        @JsonProperty("agentAvatarUrl") String        agentAvatarUrl,
+        @JsonProperty("pinned")         boolean       pinned,
+        @JsonProperty("pinnedAt")       LocalDateTime pinnedAt,
         @JsonProperty("wsSubscribePath")String        wsSubscribePath,   // e.g. /topic/agent/{sessionId}
         @JsonProperty("createTime")     LocalDateTime createTime,
         @JsonProperty("updateTime")     LocalDateTime updateTime
 ) {
 
     public static SessionResponse from(AgentSession session) {
+        return from(session, null, null);
+    }
+
+    public static SessionResponse from(AgentSession session, String agentName, String agentAvatarUrl) {
         return new SessionResponse(
                 session.getSessionId(),
                 session.getStatus().name(),
@@ -44,6 +52,10 @@ public record SessionResponse(
                 session.getErrorMessage(),
                 session.isHidden(),
                 session.getUserAgentId(),
+                agentName,
+                agentAvatarUrl,
+                session.getPinnedAt() != null,
+                session.getPinnedAt(),
                 "/topic/agent/" + session.getSessionId(),
                 session.getCreateTime(),
                 session.getUpdateTime()

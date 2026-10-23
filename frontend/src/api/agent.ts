@@ -53,11 +53,47 @@ export const agentApi = {
     return http<ContextUsageDto>(`${BASE}/${sessionId}/context-usage${q ? `?${q}` : ''}`)
   },
 
+  /** 手动压缩上下文（结构化 SessionState + 近期原文；聊天记录不删） */
+  compressContext: (sessionId: string, systemModelId?: number | null) => {
+    const params = new URLSearchParams()
+    if (systemModelId != null) params.set('systemModelId', String(systemModelId))
+    const q = params.toString()
+    return http<{
+      ok: boolean
+      compressedMessages: number
+      keptRecentMessages: number
+      summaryChars: number
+      usageBefore: ContextUsageDto
+      usageAfter: ContextUsageDto
+      message: string
+    }>(`${BASE}/${sessionId}/compress-context${q ? `?${q}` : ''}`, { method: 'POST' })
+  },
+
+  /** 钉住消息（压缩时保留原文送模） */
+  pinMessage: (sessionId: string, messageId: number, pinned: boolean) =>
+    http<void>(`${BASE}/${sessionId}/messages/${messageId}/pin`, {
+      method: 'PATCH',
+      body: JSON.stringify({ pinned }),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+
   pauseSession: (sessionId: string) =>
     http<SessionResponse>(`${BASE}/${sessionId}/pause`, { method: 'POST' }),
 
   resumeSession: (sessionId: string) =>
     http<SessionResponse>(`${BASE}/${sessionId}/resume`, { method: 'POST' }),
+
+  pinSession: (sessionId: string, pinned: boolean) =>
+    http<SessionResponse>(`${BASE}/${sessionId}/pin`, {
+      method: 'POST',
+      body: JSON.stringify({ pinned }),
+    }),
+
+  archiveSession: (sessionId: string, archived = true) =>
+    http<SessionResponse>(`${BASE}/${sessionId}/archive`, {
+      method: 'POST',
+      body: JSON.stringify({ archived }),
+    }),
 
   continueSession: (
     sessionId: string,
