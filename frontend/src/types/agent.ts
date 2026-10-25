@@ -16,11 +16,18 @@ export interface SessionResponse {
   userAgentId?: number | null
   agentName?: string | null
   agentAvatarUrl?: string | null
+  /** 招聘时的职业名 */
+  agentCareerName?: string | null
+  agentOriginalName?: string | null
+  /** 真名 · 职业 */
+  agentDisplayTitle?: string | null
   pinned?: boolean
   pinnedAt?: string | null
   wsSubscribePath: string
   createTime: string
   updateTime: string
+  /** 用户最近发消息时间；列表按此排序 */
+  lastUserMessageAt?: string | null
 }
 
 export interface StartSessionRequest {
@@ -101,7 +108,7 @@ export interface ContextUsageDto {
   toolsTokens: number
   systemTokens?: number
   conversationTokens?: number
-  /** 占用 ≥72% 或消息量足够时建议压缩 */
+  /** 占用 ≥72% 时建议压缩 */
   compressRecommended?: boolean
 }
 
@@ -128,12 +135,14 @@ export interface AvailableModelsDto {
   defaultModel: UserDefaultModelDto
 }
 
-/** 用户系统工具开关：长期记忆、联网搜索、AI 自主编写工具、用户系统脚本执行 */
+/** 系统工具开关：长期记忆、联网搜索、自主编写工具、办公室脚本 */
 export interface ToolSettingsDto {
   memoryEnabled: boolean
   webSearchEnabled: boolean
   createToolEnabled: boolean
   scriptExecEnabled: boolean
+  /** 单聊是否已在聊天框改过（未改则跟随 Agent 默认） */
+  overridden?: boolean
 }
 
 /** 脚本执行环境状态（会话页顶部展示 Docker 虚拟机状态） */

@@ -16,12 +16,13 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 
-const NAV = [
+const NAV: { label: string; href?: string; to?: string }[] = [
   { href: '#compress', label: '上下文压缩' },
   { href: '#hire', label: 'Agent 招聘' },
   { href: '#soul', label: 'Soul 记忆' },
   { href: '#runtime', label: '运行时' },
   { href: '#observe', label: '可观测' },
+  { to: '/emergence', label: '智能涌现' },
 ]
 
 const COMPRESS_LAYERS = [
@@ -234,11 +235,17 @@ export function LandingPage() {
           <span className="agent-land__brand-mini-text">AIMATEX-AGENT</span>
         </Link>
         <nav className="agent-land__nav-links" aria-label="页面导航">
-          {NAV.map((item) => (
-            <a key={item.href} href={item.href}>
-              {item.label}
-            </a>
-          ))}
+          {NAV.map((item) =>
+            item.to ? (
+              <Link key={item.to} to={item.to}>
+                {item.label}
+              </Link>
+            ) : (
+              <a key={item.href} href={item.href}>
+                {item.label}
+              </a>
+            ),
+          )}
         </nav>
         <div className="agent-land__nav-actions">
           <a
@@ -538,6 +545,7 @@ export function LandingPage() {
 
       <footer className="agent-land__footer">
         <span>© {new Date().getFullYear()} AIMATEX</span>
+        <Link to="/emergence">智能涌现</Link>
         <a href="https://aimatex.com" target="_blank" rel="noopener noreferrer">
           aimatex.com
         </a>

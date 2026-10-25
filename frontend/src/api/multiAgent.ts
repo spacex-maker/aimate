@@ -1,4 +1,5 @@
 import { http } from './httpClient'
+import type { SessionResponse } from '../types/agent'
 
 export type RentPeriod = 'DAY' | 'MONTH' | 'YEAR'
 export type AgentTier = 'JUNIOR' | 'MID' | 'SENIOR' | 'EXPERT'
@@ -63,16 +64,29 @@ export interface AgentCatalogItem {
   knowledgeBases?: AgentCatalogKnowledgeBrief[]
 }
 
+export type AgentGender = 'FEMALE' | 'MALE' | 'OTHER'
+
 export interface UserAgentBrief {
   id: number
   kind: 'SECRETARY' | 'HIRED'
   catalogId?: number
   tier?: AgentTier
+  /** 伙伴真名：招聘时取定，不可更改 */
   name: string
-  /** 招聘/创建时的原始名称；昵称改后仍可展示 */
   originalName?: string
+  /** 招聘时的职业名 */
+  careerName?: string
+  /** 真名 · 职业 */
+  displayTitle?: string
   avatarUrl?: string
   gender?: string
+  genderLabel?: string | null
+  /** ISO date YYYY-MM-DD */
+  birthday?: string | null
+  ageYears?: number | null
+  ageMonths?: number | null
+  ageDays?: number | null
+  createTime?: string | null
   status: string
   expiresAt?: string
   currentPromptVersion: number
@@ -85,8 +99,49 @@ export interface UserAgentBrief {
   dailyPointsLimit?: number | null
   executionMode?: AgentExecutionMode
   localBridge?: boolean
+  /** 单聊是否允许派发本机任务 */
+  localAssistDm?: boolean
+  /** 群聊是否允许派发本机任务 */
+  localAssistGroup?: boolean
+  /** Agent 默认：长期记忆 */
+  memoryEnabled?: boolean
+  /** Agent 默认：联网搜索 */
+  webSearchEnabled?: boolean
+  /** Agent 默认：自主编写工具 */
+  createToolEnabled?: boolean
+  /** Agent 默认：办公室脚本 */
+  scriptExecEnabled?: boolean
   localBridgeConfigured?: boolean
   localBridgeTokenPrefix?: string | null
+  /** 至少一台本机设备在心跳窗口内 */
+  localBridgeOnline?: boolean
+  localBridgeOnlineCount?: number
+  localBridgeLastSeenAt?: string | null
+  /** 多台本机设备（同一 Agent，如全局唯一 Cursor） */
+  localBridgeDevices?: LocalBridgeDeviceInfo[] | null
+  /** 最近一台设备摘要（兼容） */
+  localBridgeDevice?: LocalBridgeDeviceInfo | null
+}
+
+export type LocalBridgeLinkMode = 'CLIENT' | 'PROMPT'
+
+export interface LocalBridgeDeviceInfo {
+  id?: number
+  deviceKey?: string
+  /** CLIENT=桌面连接器；PROMPT=提示词/脚本 */
+  linkMode?: LocalBridgeLinkMode
+  hostname?: string
+  os?: string
+  arch?: string
+  connectorVersion?: string
+  appName?: string
+  appPath?: string
+  careerCode?: string
+  label?: string
+  lastSeenAt?: string | null
+  online?: boolean
+  /** 用户在网页端手动关闭连接 */
+  userDisconnected?: boolean
 }
 
 export interface LocalBridgeConnectBundle {
@@ -101,6 +156,17 @@ export interface LocalBridgeConnectBundle {
   token?: string
   prompt: string
   hint?: string
+  deviceKey?: string
+}
+
+export interface RegisterLocalDeviceResult {
+  ok: boolean
+  linkMode: LocalBridgeLinkMode
+  userAgentId: number
+  device?: LocalBridgeDeviceInfo | null
+  bridge?: LocalBridgeConnectBundle
+  clientHint?: string
+  connectorDownloadHint?: string
 }
 
 export interface OfficePlan {
@@ -205,10 +271,10 @@ export const multiAgentApi = {
   listCareers: () => http<AgentCareer[]>('/api/agents/careers'),
   quote: (catalogId: number, period: RentPeriod) =>
     http<HireQuote>(`/api/agents/quote?catalogId=${catalogId}&period=${period}`),
-  hire: (catalogId: number, period: RentPeriod) =>
+  hire: (catalogId: number, period: RentPeriod, identity: { name: string; gender: AgentGender }) =>
     http<{ orderNo: string; userAgentId: number; totalPoints: number }>('/api/agents/hire', {
       method: 'POST',
-      body: JSON.stringify({ catalogId, period }),
+      body: JSON.stringify({ catalogId, period, name: identity.name, gender: identity.gender }),
     }),
   renew: (id: number, period: RentPeriod) =>
     http<{ orderNo: string; totalPoints: number }>(`/api/agents/${id}/renew`, {
@@ -221,9 +287,24 @@ export const multiAgentApi = {
     http<UserAgentBrief & { promptVersions: PromptVersion[]; personality?: string; soulKeyId?: string }>(
       '/api/me/agents/' + id
     ),
+  /** 打开与该 Agent 的单聊（复用已有会话或新建空会话，一人一聊） */
+  openChat: (id: number) =>
+    http<SessionResponse>(`/api/me/agents/${id}/open-chat`, { method: 'POST' }),
   updatePersona: (
     id: number,
-    body: { name?: string; avatarUrl?: string; gender?: string; personality?: string; dailyPointsLimit?: number | null },
+    body: {
+      name?: string
+      avatarUrl?: string
+      gender?: string
+      personality?: string
+      dailyPointsLimit?: number | null
+      localAssistDm?: boolean
+      localAssistGroup?: boolean
+      memoryEnabled?: boolean
+      webSearchEnabled?: boolean
+      createToolEnabled?: boolean
+      scriptExecEnabled?: boolean
+    },
   ) => http<UserAgentBrief>(`/api/me/agents/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   uploadAvatar: (id: number, imageDataUrl: string) =>
     http<UserAgentBrief>(`/api/me/agents/${id}/avatar`, {
@@ -250,6 +331,29 @@ export const multiAgentApi = {
       method: 'POST',
       body: JSON.stringify({ rotate }),
     }),
+  /** 添加设备：CLIENT=客户端指引；PROMPT=登记并返回提示词 */
+  registerLocalDevice: (id: number, body: { linkMode: LocalBridgeLinkMode; label?: string }) =>
+    http<RegisterLocalDeviceResult>(`/api/me/agents/${id}/local-devices`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  removeLocalDevice: (id: number, deviceKey: string) =>
+    http<{ ok: boolean; deviceKey: string }>(
+      `/api/me/agents/${id}/local-devices?deviceKey=${encodeURIComponent(deviceKey)}`,
+      { method: 'DELETE' },
+    ),
+  /** 手动关闭设备连接（离线，直至允许重连） */
+  disconnectLocalDevice: (id: number, deviceKey: string) =>
+    http<{ ok: boolean; deviceKey: string; disconnected?: boolean; device?: LocalBridgeDeviceInfo }>(
+      `/api/me/agents/${id}/local-devices/disconnect`,
+      { method: 'POST', body: JSON.stringify({ deviceKey }) },
+    ),
+  /** 允许已关闭的设备再次上线 */
+  allowLocalDeviceReconnect: (id: number, deviceKey: string) =>
+    http<{ ok: boolean; deviceKey: string; disconnected?: boolean; device?: LocalBridgeDeviceInfo }>(
+      `/api/me/agents/${id}/local-devices/allow-reconnect`,
+      { method: 'POST', body: JSON.stringify({ deviceKey }) },
+    ),
 }
 
 export const adminAgentApi = {

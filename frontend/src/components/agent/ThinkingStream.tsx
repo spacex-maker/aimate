@@ -10,12 +10,21 @@ import type { AssistantVersionDto, ChatMessageDto, StreamBlock } from '../../typ
 export type StreamAgentInfo = {
   id?: number | null
   name?: string | null
+  originalName?: string | null
+  careerName?: string | null
+  displayTitle?: string | null
   avatarUrl?: string | null
   externalAgentKey?: string | null
 }
 
-/** 思考+工具调用区域固定高度，单区按事件顺序滚动（思考与工具调用穿插显示） */
-const BLOCKS_AREA_HEIGHT = 'min(70vh, 520px)'
+/**
+ * 思考+工具调用区域高度：需整卡落在底部固定输入框之上。
+ * 输入区约 8–11rem（含安全区 / Plan 槽），故用 100dvh-16rem 封顶，避免底边被挡住。
+ */
+const BLOCKS_AREA_HEIGHT = 'min(calc(100dvh - 16rem), 340px)'
+
+/** 外层滚动底部留白，对应 AgentInputBox fixed 占用高度 */
+const STREAM_BOTTOM_PAD = 'pb-52 sm:pb-56'
 
 function BlocksArea({ blocks, isRunning }: { blocks: StreamBlock[]; isRunning: boolean }) {
   const lastBlock = blocks[blocks.length - 1]
@@ -253,8 +262,11 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
   }
 
   return (
-    <div ref={outerScrollRef} className="flex-1 min-w-0 overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-4 pt-6 pb-40 space-y-6 min-w-0">
+    <div
+      ref={outerScrollRef}
+      className="flex-1 min-w-0 overflow-y-auto scroll-pb-52 sm:scroll-pb-56"
+    >
+      <div className={`max-w-3xl mx-auto px-4 pt-6 ${STREAM_BOTTOM_PAD} space-y-6 min-w-0`}>
         {topSlot}
         {/* 历史消息：按条展示；重试时流式内容插到被重试用户消息下方或下一条 assistant 位置 */}
         {hasHistory && (
@@ -498,6 +510,8 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
             </div>
           </div>
         )}
+        {/* 与 STREAM_BOTTOM_PAD 配合：保证最后一块思考区完整滚出输入框遮挡带 */}
+        <div className="h-2 shrink-0" aria-hidden />
       </div>
     </div>
   )

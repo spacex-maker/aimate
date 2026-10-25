@@ -39,7 +39,8 @@ def main() -> int:
     deadline = time.time() + MAX_WAIT
     while time.time() < deadline:
         try:
-            body = req("POST", "/api/local-bridge/tasks/claim", {})
+            # 长轮询：服务端最多挂 25s，有任务立刻返回（仍兼容短轮询）
+            body = req("POST", "/api/local-bridge/tasks/claim?waitSeconds=25", {})
             task = body.get("task")
             if task:
                 tid = task.get("id") or task.get("publicId")

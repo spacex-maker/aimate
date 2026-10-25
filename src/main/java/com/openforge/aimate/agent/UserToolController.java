@@ -16,11 +16,13 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
- * 用户查看「系统工具 + 自有工具」、编辑/删除自有工具。
+ * 用户查看「官方工具库 + Agent 工具箱」、编辑/删除自有工具。
  * 路径 /api/users/{userId}/tools，仅允许操作当前登录用户（path userId 需等于当前用户）。
  */
 @RestController
@@ -29,8 +31,13 @@ import java.util.Set;
 public class UserToolController {
 
     private static final Set<String> RESERVED_TOOL_NAMES = Set.of(
-            "recall_memory", "store_memory", "tavily_search", "http_request", "create_tool",
+            "recall_memory", "store_memory", "find_tools", "tavily_search", "http_request", "create_tool",
             "install_container_package", "run_container_cmd", "write_container_file"
+    );
+
+    /** 官方工具库展示顺序（办公室重活工具不入此列表，由开通状态在运行时注入）。 */
+    private static final List<String> OFFICIAL_TOOL_ORDER = List.of(
+            "recall_memory", "store_memory", "find_tools", "tavily_search", "http_request", "create_tool"
     );
 
     private final AgentToolRepository toolRepository;
@@ -119,11 +126,21 @@ public class UserToolController {
     @GetMapping
     public ResponseEntity<List<UserToolDto>> list(@PathVariable Long userId) {
         ensureCurrentUser(userId);
-        List<AgentTool> systemTools = toolRepository.findByUserIdIsNullAndIsActiveTrue();
-        List<AgentTool> userTools = toolRepository.findByUserIdOrderByIdAsc(userId);
-        List<UserToolDto> systemDtos = systemTools.stream().map(UserToolDto::from).toList();
-        List<UserToolDto> userDtos = userTools.stream().map(UserToolDto::from).toList();
-        List<UserToolDto> all = new ArrayList<>(systemDtos);
+        // 官方工具按名去重（兼容历史 seed 重复插入）；仅保留官方四件套
+        Map<String, AgentTool> officialByName = new LinkedHashMap<>();
+        for (AgentTool t : toolRepository.findByUserIdIsNullAndIsActiveTrue()) {
+            if (t.getToolName() == null || !OFFICIAL_TOOL_ORDER.contains(t.getToolName())) continue;
+            officialByName.merge(t.getToolName(), t, (a, b) -> a.getId() <= b.getId() ? a : b);
+        }
+        List<UserToolDto> officialDtos = new ArrayList<>();
+        for (String name : OFFICIAL_TOOL_ORDER) {
+            AgentTool t = officialByName.get(name);
+            if (t != null) officialDtos.add(UserToolDto.from(t));
+        }
+        List<UserToolDto> userDtos = toolRepository.findByUserIdOrderByIdAsc(userId).stream()
+                .map(UserToolDto::from)
+                .toList();
+        List<UserToolDto> all = new ArrayList<>(officialDtos);
         all.addAll(userDtos);
         return ResponseEntity.ok(all);
     }

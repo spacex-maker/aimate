@@ -31,18 +31,36 @@ public record SessionResponse(
         @JsonProperty("userAgentId")    Long          userAgentId,
         @JsonProperty("agentName")      String        agentName,
         @JsonProperty("agentAvatarUrl") String        agentAvatarUrl,
+        /** 招聘时的职业名 */
+        @JsonProperty("agentCareerName") String      agentCareerName,
+        /** 招聘锁定的原始商品名 */
+        @JsonProperty("agentOriginalName") String    agentOriginalName,
+        /** 紧凑标题：真名 · 职业 */
+        @JsonProperty("agentDisplayTitle") String    agentDisplayTitle,
         @JsonProperty("pinned")         boolean       pinned,
         @JsonProperty("pinnedAt")       LocalDateTime pinnedAt,
         @JsonProperty("wsSubscribePath")String        wsSubscribePath,   // e.g. /topic/agent/{sessionId}
         @JsonProperty("createTime")     LocalDateTime createTime,
-        @JsonProperty("updateTime")     LocalDateTime updateTime
+        @JsonProperty("updateTime")     LocalDateTime updateTime,
+        @JsonProperty("lastUserMessageAt") LocalDateTime lastUserMessageAt
 ) {
 
     public static SessionResponse from(AgentSession session) {
-        return from(session, null, null);
+        return from(session, null, null, null, null, null);
     }
 
     public static SessionResponse from(AgentSession session, String agentName, String agentAvatarUrl) {
+        return from(session, agentName, agentAvatarUrl, null, null, null);
+    }
+
+    public static SessionResponse from(
+            AgentSession session,
+            String agentName,
+            String agentAvatarUrl,
+            String agentCareerName,
+            String agentOriginalName,
+            String agentDisplayTitle
+    ) {
         return new SessionResponse(
                 session.getSessionId(),
                 session.getStatus().name(),
@@ -54,11 +72,15 @@ public record SessionResponse(
                 session.getUserAgentId(),
                 agentName,
                 agentAvatarUrl,
+                agentCareerName,
+                agentOriginalName,
+                agentDisplayTitle,
                 session.getPinnedAt() != null,
                 session.getPinnedAt(),
                 "/topic/agent/" + session.getSessionId(),
                 session.getCreateTime(),
-                session.getUpdateTime()
+                session.getUpdateTime(),
+                session.getLastUserMessageAt()
         );
     }
 }

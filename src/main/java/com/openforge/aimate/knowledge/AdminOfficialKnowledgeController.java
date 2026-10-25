@@ -45,10 +45,12 @@ public class AdminOfficialKnowledgeController {
             @RequestParam(required = false) Long categoryId,
             @RequestParam(required = false) Boolean enabled,
             @RequestParam(required = false) String q,
+            @RequestParam(required = false) String tag,
+            @RequestParam(required = false) String code,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
-        return knowledgeService.pageKnowledge(categoryId, enabled, q, page, size);
+        return knowledgeService.pageKnowledge(categoryId, enabled, q, tag, code, page, size);
     }
 
     @GetMapping("/bases/{id}")

@@ -32,12 +32,14 @@ public class AgentCatalogBootstrap implements ApplicationRunner {
         seedIndustry("DESIGN", "设计创意", "UI/UX、视觉与品牌体验", 30);
         seedIndustry("DATA", "数据智能", "数据分析、商业智能与机器学习", 40);
         seedIndustry("CROSS_BORDER", "跨境电商", "跨境平台运营、独立站、选品供应链与投放增长", 50);
+        seedIndustry("INVESTMENT", "金融投资", "风险投资、私募股权、投融资顾问与投后管理", 55);
         seedIndustry("AI", "人工智能", "本机 Cursor / Codex 等 AI 编程助手，经 Local Bridge 拉群聊任务执行", 5);
 
         seedCareer("JAVA_ENGINEER", "Java 开发工程师", "后端与服务端开发", "TECH", 20, false);
         seedCareer("PRODUCT_MANAGER", "产品经理", "需求与产品规划", "PRODUCT", 30, false);
         seedCareer("UI_DESIGNER", "UI 设计师", "界面与体验设计", "DESIGN", 10, false);
         seedCareer("DATA_ANALYST", "数据分析师", "数据洞察与报表", "DATA", 40, false);
+        seedCareer("VC_EXPERT", "风投专家", "项目尽调、估值条款、投决材料与投后赋能", "INVESTMENT", 10, false);
 
         seedCareer("CB_OPS", "跨境运营专员", "多平台店铺日常运营、Listing 与转化优化", "CROSS_BORDER", 10, false);
         seedCareer("AMAZON_OPS", "亚马逊运营", "Amazon 店铺、广告、库存与品牌旗舰", "CROSS_BORDER", 20, false);
@@ -50,6 +52,7 @@ public class AgentCatalogBootstrap implements ApplicationRunner {
 
         seedCareer("CURSOR", "Cursor", "本机 Cursor Agent，群聊 @ 后领取任务改代码/跑命令", "AI", 10, true);
         seedCareer("CODEX", "Codex", "本机 OpenAI Codex / ChatGPT 远程控，领取群聊任务执行", "AI", 20, true);
+        seedCareer("WORKBUDDY", "Workbuddy", "本机 Workbuddy 桌面助手，可视驱动聊天框执行群聊任务", "AI", 25, true);
         seedCareer("CLAUDE_CODE", "Claude Code", "本机 Claude Code CLI，领取群聊任务执行", "AI", 30, true);
         seedCareer("WINDSURF", "Windsurf", "本机 Windsurf / Cascade，领取群聊任务执行", "AI", 40, true);
         seedCareer("GITHUB_COPILOT", "GitHub Copilot", "本机 Copilot / Copilot CLI 工作流", "AI", 50, true);

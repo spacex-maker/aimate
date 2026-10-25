@@ -131,6 +131,7 @@ public class LlmClient {
                 .toolChoice(request.toolChoice())
                 .temperature(request.temperature())
                 .maxTokens(request.maxTokens())
+                .thinking(request.thinking())
                 .build();
 
         String requestBody = serializeWithStream(effectiveRequest);

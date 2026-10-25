@@ -79,6 +79,7 @@ public class AgentController {
     private final PointsService              pointsService;
     private final UserAgentService           userAgentService;
     private final UserAgentRepository        userAgentRepository;
+    private final UserAgentIdentityService   identityService;
 
     public AgentController(
             AgentLoopService agentLoopService,
@@ -94,7 +95,8 @@ public class AgentController {
             ChatCosStorageService chatCosStorageService,
             PointsService pointsService,
             UserAgentService userAgentService,
-            UserAgentRepository userAgentRepository
+            UserAgentRepository userAgentRepository,
+            UserAgentIdentityService identityService
     ) {
         this.agentLoopService = agentLoopService;
         this.sessionMessageService = sessionMessageService;
@@ -106,6 +108,7 @@ public class AgentController {
         this.userDefaultModelRepository = userDefaultModelRepository;
         this.userAgentService = userAgentService;
         this.userAgentRepository = userAgentRepository;
+        this.identityService = identityService;
         this.systemModelRepository = systemModelRepository;
         this.userApiKeyRepository = userApiKeyRepository;
         this.chatCosStorageService = chatCosStorageService;
@@ -205,6 +208,7 @@ public class AgentController {
         List<String> images = normalizeImages(request.images(), userId);
         String task = textOrImagePrompt(request.task(), images);
 
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
         AgentSession session = AgentSession.builder()
                 .userId(userId)
                 .userAgentId(boundAgentId)
@@ -212,6 +216,7 @@ public class AgentController {
                 .taskDescription(task)
                 .status(AgentSession.SessionStatus.IDLE)
                 .iterationCount(0)
+                .lastUserMessageAt(now)
                 .build();
         session = sessionRepository.save(session);
 
@@ -247,8 +252,9 @@ public class AgentController {
         if (auth != null && auth.getPrincipal() instanceof Long id) userId = id;
         if (userId == null) return ResponseEntity.ok(Collections.emptyList());
         limit = Math.min(Math.max(1, limit), 50);
-        List<AgentSession> sessions = sessionRepository.findByUserIdAndHiddenFalseOrderByCreateTimeDesc(
-                userId, PageRequest.of(0, Math.max(limit * 2, 40)));
+        List<AgentSession> sessions =
+                sessionRepository.findByUserIdAndHiddenFalseOrderByLastUserMessageAtDescUpdateTimeDesc(
+                        userId, PageRequest.of(0, Math.max(limit * 2, 40)));
         List<SessionResponse> list = sessions.stream()
                 .map(this::toSessionResponse)
                 .sorted((a, b) -> {
@@ -259,9 +265,11 @@ public class AgentController {
                         var bp = b.pinnedAt();
                         if (ap != null && bp != null) return bp.compareTo(ap);
                     }
-                    var au = a.updateTime();
-                    var bu = b.updateTime();
+                    var au = a.lastUserMessageAt() != null ? a.lastUserMessageAt() : a.updateTime();
+                    var bu = b.lastUserMessageAt() != null ? b.lastUserMessageAt() : b.updateTime();
                     if (au != null && bu != null) return bu.compareTo(au);
+                    if (au != null) return -1;
+                    if (bu != null) return 1;
                     return 0;
                 })
                 .limit(limit)
@@ -290,6 +298,26 @@ public class AgentController {
         boolean archived = body == null || body.get("archived") == null || Boolean.TRUE.equals(body.get("archived"));
         session.setHidden(archived);
         if (archived) session.setPinnedAt(null);
+        sessionRepository.save(session);
+        return ResponseEntity.ok(toSessionResponse(session));
+    }
+
+    /** 重命名会话标题（列表展示用 taskDescription）。 */
+    @PatchMapping("/{sessionId}/title")
+    public ResponseEntity<SessionResponse> renameSession(
+            @PathVariable String sessionId,
+            @RequestBody Map<String, String> body) {
+        AgentSession session = findOrThrow(sessionId);
+        ensureSessionOwner(session);
+        String title = body != null ? body.get("title") : null;
+        if (title == null || title.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "标题不能为空");
+        }
+        String trimmed = title.trim();
+        if (trimmed.length() > 200) {
+            trimmed = trimmed.substring(0, 200);
+        }
+        session.setTaskDescription(trimmed);
         sessionRepository.save(session);
         return ResponseEntity.ok(toSessionResponse(session));
     }
@@ -543,6 +571,7 @@ public class AgentController {
         sessionMessageService.append(session, Message.user(text, images.isEmpty() ? null : images));
         com.openforge.aimate.domain.SessionMessage placeholder = sessionMessageService.createPlaceholderAssistant(session);
         session.setErrorMessage(null);
+        session.setLastUserMessageAt(java.time.LocalDateTime.now());
         sessionRepository.save(session);
 
         final AgentSession finalSession = sessionRepository.findBySessionId(sessionId).orElseThrow();
@@ -722,16 +751,21 @@ public class AgentController {
     }
 
     private SessionResponse toSessionResponse(AgentSession session) {
-        String agentName = null;
-        String agentAvatar = null;
-        if (session.getUserAgentId() != null) {
-            UserAgent ua = userAgentRepository.findById(session.getUserAgentId()).orElse(null);
-            if (ua != null) {
-                agentName = ua.getName();
-                agentAvatar = ua.getAvatarUrl();
-            }
+        if (session.getUserAgentId() == null) {
+            return SessionResponse.from(session);
         }
-        return SessionResponse.from(session, agentName, agentAvatar);
+        UserAgent ua = userAgentRepository.findById(session.getUserAgentId()).orElse(null);
+        if (ua == null) {
+            return SessionResponse.from(session);
+        }
+        return SessionResponse.from(
+                session,
+                ua.getName(),
+                ua.getAvatarUrl(),
+                identityService.careerName(ua),
+                identityService.originalName(ua),
+                identityService.displayTitle(ua)
+        );
     }
 
     private Long getCurrentUserId() {

@@ -7,6 +7,9 @@ export type MentionCandidate = {
   label: string
   kind: 'USER' | 'AGENT'
   sublabel?: string
+  /** MALE / FEMALE / … */
+  gender?: string | null
+  genderLabel?: string | null
   avatarUrl?: string | null
 }
 
@@ -16,6 +19,14 @@ type Props = {
   onHover: (index: number) => void
   onSelect: (item: MentionCandidate) => void
   query: string
+}
+
+function genderGlyph(gender?: string | null, label?: string | null): string | null {
+  const g = (gender || '').trim().toUpperCase()
+  const l = (label || '').trim()
+  if (g === 'FEMALE' || g === 'F' || l === '女') return '♀'
+  if (g === 'MALE' || g === 'M' || l === '男') return '♂'
+  return null
 }
 
 /** 输入 @ 后浮在输入框上方的快捷选择气泡 */
@@ -65,9 +76,20 @@ export function MentionPicker({ items, activeIndex, onHover, onSelect, query }: 
                     )}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm truncate">
-                      <span className="text-white/40">@</span>
-                      {item.label}
+                    <div className="text-sm truncate flex items-center gap-1.5">
+                      <span className="min-w-0 truncate">
+                        <span className="text-white/40">@</span>
+                        {item.label}
+                      </span>
+                      {genderGlyph(item.gender, item.genderLabel) ? (
+                        <span
+                          className="text-[11px] text-white/45 flex-shrink-0"
+                          title={item.genderLabel || item.gender || undefined}
+                          aria-label={item.genderLabel || item.gender || 'gender'}
+                        >
+                          {genderGlyph(item.gender, item.genderLabel)}
+                        </span>
+                      ) : null}
                     </div>
                     <div className="text-[11px] text-white/35 truncate">
                       {item.sublabel || (item.kind === 'AGENT' ? 'Agent' : '成员')}
@@ -124,6 +146,7 @@ export function filterMentions(
   return candidates.filter((c) => {
     const label = c.label.toLowerCase()
     const sub = (c.sublabel || '').toLowerCase()
-    return label.includes(q) || label.startsWith(q) || sub.includes(q)
+    const gl = (c.genderLabel || '').toLowerCase()
+    return label.includes(q) || label.startsWith(q) || sub.includes(q) || gl.includes(q)
   })
 }

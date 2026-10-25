@@ -18,14 +18,13 @@ public record ContextUsageDto(
         @JsonProperty("toolsTokens") int toolsTokens,
         @JsonProperty("systemTokens") int systemTokens,
         @JsonProperty("conversationTokens") int conversationTokens,
-        /** 占用 ≥72% 或消息量足够时建议用户压缩 */
+        /** 仅当占用 ≥72% 时建议压缩（与圆环百分比一致，不因消息条数误报） */
         @JsonProperty("compressRecommended") boolean compressRecommended
 ) {
     /** 与 ContextCompressService / 前端徽章一致 */
     public static final double COMPRESS_SUGGEST_RATIO = 0.72;
 
-    public static ContextUsageDto of(int systemTokens, int conversationTokens, int toolsTokens, int limitTokens,
-                                     boolean compressRecommended) {
+    public static ContextUsageDto of(int systemTokens, int conversationTokens, int toolsTokens, int limitTokens) {
         int system = Math.max(0, systemTokens);
         int conversation = Math.max(0, conversationTokens);
         int tools = Math.max(0, toolsTokens);
@@ -33,13 +32,14 @@ public record ContextUsageDto(
         int used = messages + tools;
         int limit = Math.max(1, limitTokens);
         double percent = Math.min(100.0, Math.round(used * 1000.0 / limit) / 10.0);
-        boolean suggest = compressRecommended
-                || used >= (int) (limit * COMPRESS_SUGGEST_RATIO);
+        boolean suggest = used >= (int) (limit * COMPRESS_SUGGEST_RATIO);
         return new ContextUsageDto(used, limit, percent, messages, tools, system, conversation, suggest);
     }
 
-    /** 兼容旧调用 */
-    public static ContextUsageDto of(int systemTokens, int conversationTokens, int toolsTokens, int limitTokens) {
-        return of(systemTokens, conversationTokens, toolsTokens, limitTokens, false);
+    /** @deprecated 忽略 messageVolume 开关；建议压缩只看占用比例 */
+    @Deprecated
+    public static ContextUsageDto of(int systemTokens, int conversationTokens, int toolsTokens, int limitTokens,
+                                     boolean ignoredCompressHint) {
+        return of(systemTokens, conversationTokens, toolsTokens, limitTokens);
     }
 }

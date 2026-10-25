@@ -17,7 +17,7 @@ import { CreateConversationModal } from '../components/chat/CreateConversationMo
 import { generateAgentAvatarDataUrl } from '../lib/agentAvatar'
 
 const QUICK = [
-  { to: '/app/new', label: '新建会话', desc: '选 Agent 开聊', icon: SquarePen, accent: 'text-blue-300 bg-blue-600/15 border-blue-500/25', action: 'session' as const },
+  { to: '#create-dm', label: '找伙伴聊天', desc: '一人一聊，继续同一窗口', icon: SquarePen, accent: 'text-blue-300 bg-blue-600/15 border-blue-500/25', action: 'session' as const },
   { to: '#create-group', label: '新建群组', desc: '多用户多 Agent', icon: Users, accent: 'text-cyan-300 bg-cyan-600/15 border-cyan-500/25', action: 'group' as const },
   { to: '/agents/hire', label: '招聘 Agent', desc: '按行业岗位雇佣', icon: Briefcase, accent: 'text-violet-300 bg-violet-600/15 border-violet-500/25', action: 'link' as const },
   { to: '/agents/mine', label: '我的 Agent', desc: '人设与 Soul', icon: Users, accent: 'text-emerald-300 bg-emerald-600/15 border-emerald-500/25', action: 'link' as const },
@@ -26,7 +26,7 @@ const QUICK = [
 
 export function DashboardPage() {
   const { user } = useAuth()
-  const [createStep, setCreateStep] = useState<'choose' | 'group' | null>(null)
+  const [createStep, setCreateStep] = useState<'choose' | 'dm' | 'group' | null>(null)
 
   const { data: agents = [] } = useQuery({
     queryKey: ['my-agents', user?.userId],
@@ -59,11 +59,11 @@ export function DashboardPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {QUICK.map((q) =>
-            q.action === 'group' ? (
+            q.action === 'group' || q.action === 'session' ? (
               <button
                 key={q.to}
                 type="button"
-                onClick={() => setCreateStep('group')}
+                onClick={() => setCreateStep(q.action === 'group' ? 'group' : 'dm')}
                 className={`rounded-xl border px-4 py-4 flex items-start gap-3 hover:bg-white/[0.04] transition-colors text-left ${q.accent}`}
               >
                 <q.icon className="w-5 h-5 flex-shrink-0 mt-0.5" />
@@ -111,17 +111,21 @@ export function DashboardPage() {
 
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-medium text-white/70">最近会话</h2>
-            <Link to="/app/new" className="text-xs text-blue-300/80 hover:text-blue-200">
-              新建会话
-            </Link>
+            <h2 className="text-sm font-medium text-white/70">最近聊天</h2>
+            <button
+              type="button"
+              onClick={() => setCreateStep('dm')}
+              className="text-xs text-blue-300/80 hover:text-blue-200"
+            >
+              找伙伴
+            </button>
           </div>
           {conversations.length === 0 ? (
             <div className="rounded-xl border border-dashed border-white/15 px-4 py-10 text-center text-sm text-white/35">
-              还没有会话，
-              <Link to="/app/new" className="text-blue-300 ml-1">
+              还没有聊天，
+              <button type="button" onClick={() => setCreateStep('dm')} className="text-blue-300 ml-1">
                 去开聊
-              </Link>
+              </button>
             </div>
           ) : (
             <ul className="space-y-1.5">
@@ -138,18 +142,24 @@ export function DashboardPage() {
                       : c.kind === 'SESSION'
                         ? [generateAgentAvatarDataUrl(String(c.userAgentId || c.id))]
                         : []
+                const title =
+                  c.kind === 'SESSION'
+                    ? c.agentDisplayTitle || c.title || c.agentName || '伙伴'
+                    : c.title || '群聊'
                 return (
                   <li key={`${c.kind}:${c.id}`}>
                     <Link
                       to={href}
                       className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.02] hover:bg-white/[0.05] px-3 py-2.5 transition-colors"
                     >
-                      <CompositeAvatar urls={urls} size={36} />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm text-white/85 truncate">{c.title}</div>
-                        <div className="text-[11px] text-white/35">
-                          {c.kind === 'GROUP' ? '群聊' : c.agentName || 'Agent'}
-                          {c.pinned ? ' · 置顶' : ''}
+                      <CompositeAvatar urls={urls} size={40} />
+                      <div className="min-w-0 flex-1 py-0.5">
+                        <div className="text-[15px] font-medium text-white truncate leading-snug">
+                          {title}
+                          {c.pinned ? <span className="ml-1 text-[10px] text-amber-300/70">置顶</span> : null}
+                        </div>
+                        <div className="mt-0.5 text-[12px] text-white/55 truncate leading-snug">
+                          {c.lastMessagePreview?.trim() || '暂无消息'}
                         </div>
                       </div>
                     </Link>

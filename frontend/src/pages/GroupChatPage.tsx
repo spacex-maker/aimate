@@ -16,6 +16,9 @@ import {
   FileText,
   Video,
   X,
+  Brain,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
@@ -29,7 +32,8 @@ import { multiAgentApi } from '../api/multiAgent'
 import { useAuth } from '../hooks/useAuth'
 import { useGroupSocket, type GroupWsEvent } from '../hooks/useGroupSocket'
 import { AgentInputBox, type MentionCandidate } from '../components/agent/AgentInputBox'
-import { AgentBubbleHeader } from '../components/agent/AgentAvatar'
+import { AgentAvatar, AgentBubbleHeader } from '../components/agent/AgentAvatar'
+import { GroupAgentContextRing } from '../components/group/GroupAgentContextRing'
 import { GroupMembersPanel } from '../components/group/GroupMembersPanel'
 
 const MEDIA_TABS: { kind: MediaKind; label: string; icon: typeof ImageIcon }[] = [
@@ -39,6 +43,21 @@ const MEDIA_TABS: { kind: MediaKind; label: string; icon: typeof ImageIcon }[] =
   { kind: 'LINK', label: '链接', icon: Link2 },
   { kind: 'AUDIO', label: '音频', icon: Volume2 },
 ]
+
+function formatMessageTime(raw?: string | null): string {
+  if (!raw) return ''
+  const d = new Date(raw.includes('T') ? raw : raw.replace(' ', 'T'))
+  if (Number.isNaN(d.getTime())) return ''
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  const now = new Date()
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  if (sameDay) return `${hh}:${mm}`
+  return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`
+}
 
 export function GroupChatPage() {
   const { publicId = '' } = useParams()
@@ -51,6 +70,10 @@ export function GroupChatPage() {
   const [highlightId, setHighlightId] = useState<number | null>(null)
   const [panel, setPanel] = useState<'none' | 'settings' | 'invite' | 'media' | 'calendar'>('none')
   const [agentStatus, setAgentStatus] = useState<Record<number, string>>({})
+  /** live 思考过程（.partial / CDP 统一一条） */
+  const [liveThinking, setLiveThinking] = useState<
+    Record<number, { content?: string; taskId?: string }>
+  >({})
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -85,14 +108,19 @@ export function GroupChatPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length])
+  }, [messages.length, liveThinking])
 
   const onWs = useCallback(
     (ev: GroupWsEvent) => {
       if (ev.type === 'MESSAGE') {
         const msg = ev.payload as GroupMessage
         setMessages((prev) => {
-          if (prev.some((m) => m.id === msg.id)) return prev
+          const idx = prev.findIndex((m) => m.id === msg.id)
+          if (idx >= 0) {
+            const next = [...prev]
+            next[idx] = { ...prev[idx], ...msg }
+            return next
+          }
           return [...prev, msg]
         })
       } else if (ev.type === 'READ') {
@@ -124,6 +152,37 @@ export function GroupChatPage() {
       } else if (ev.type === 'AGENT_STATUS') {
         const p = ev.payload as { memberId: number; status: string }
         setAgentStatus((s) => ({ ...s, [p.memberId]: p.status }))
+      } else if (ev.type === 'AGENT_THINKING') {
+        const p = ev.payload as {
+          memberId?: number
+          content?: string
+          taskId?: string
+          messageId?: number
+          done?: boolean
+        }
+        const memberId = p.memberId
+        if (memberId == null) return
+        if (p.done) {
+          setLiveThinking((prev) => {
+            const next = { ...prev }
+            delete next[memberId]
+            return next
+          })
+          if (p.messageId != null && p.content) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === p.messageId ? { ...m, thinking: p.content } : m,
+              ),
+            )
+          }
+          return
+        }
+        if (p.content != null) {
+          setLiveThinking((prev) => ({
+            ...prev,
+            [memberId]: { content: p.content || '', taskId: p.taskId },
+          }))
+        }
       }
     },
     [refetchDetail],
@@ -174,13 +233,24 @@ export function GroupChatPage() {
     // Agent 优先，便于点名触发回复；再列其他用户（不含自己）
     const agents = detail.members
       .filter((m) => m.memberType === 'AGENT' && m.name)
-      .map((m) => ({
-        id: `agent-${m.id}`,
-        label: m.name!,
-        kind: 'AGENT' as const,
-        sublabel: m.agentKind === 'SECRETARY' ? '秘书' : 'Agent',
-        avatarUrl: m.avatarUrl,
-      }))
+      .map((m) => {
+        const career = (m.careerName || '').trim()
+        const kindHint = m.agentKind === 'SECRETARY' ? '秘书' : null
+        const sub =
+          career ||
+          (m.displayTitle && m.displayTitle !== m.name ? m.displayTitle : null) ||
+          kindHint ||
+          'Agent'
+        return {
+          id: `agent-${m.id}`,
+          label: m.name!,
+          kind: 'AGENT' as const,
+          sublabel: sub,
+          gender: m.gender,
+          genderLabel: m.genderLabel,
+          avatarUrl: m.avatarUrl,
+        }
+      })
     const users = detail.members
       .filter((m) => m.memberType === 'USER' && m.userId !== user?.userId && m.name)
       .map((m) => ({
@@ -250,6 +320,7 @@ export function GroupChatPage() {
               <MessageBubble
                 key={m.id}
                 msg={m}
+                publicId={publicId}
                 myUserId={user?.userId}
                 highlighted={highlightId === m.id}
                 onQuote={() => setQuoting(m)}
@@ -257,6 +328,16 @@ export function GroupChatPage() {
               />
             ))
           )}
+          {Object.entries(liveThinking).map(([memberId, th]) => {
+            const mem = detail.members?.find((x) => x.id === Number(memberId))
+            return (
+              <LiveThinkingPanel
+                key={`think-${memberId}`}
+                title={mem?.displayTitle || mem?.name || 'Agent'}
+                content={th.content}
+              />
+            )
+          })}
           <div ref={bottomRef} />
         </div>
       </div>
@@ -401,14 +482,73 @@ function QuoteComposerBar({
   )
 }
 
+
+/** 列表底部：统一「思考过程」实时区 */
+function LiveThinkingPanel({ title, content }: { title: string; content?: string }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [content])
+  if (!content) return null
+  return (
+    <div className="w-full min-w-0 rounded-xl border border-amber-400/20 bg-amber-500/[0.06] overflow-hidden animate-fade-in">
+      <div className="px-3 py-2 flex items-center gap-2 border-b border-white/5 bg-white/[0.03]">
+        <Brain className="w-4 h-4 shrink-0 text-amber-200/70" />
+        <span className="text-xs font-medium text-amber-100/80 truncate">{title} · 思考中</span>
+        <span className="inline-block w-1.5 h-3 bg-amber-300/70 ml-auto animate-pulse rounded-sm" />
+      </div>
+      <div
+        ref={scrollRef}
+        className="max-h-48 overflow-y-auto px-3 py-2 text-[13px] text-white/65 leading-relaxed whitespace-pre-wrap break-words"
+      >
+        {content}
+      </div>
+    </div>
+  )
+}
+
+/** Settled bubble: Cursor thinking only (never duplicate final reply) */
+function MessageThinkingBlock({ label, text }: { label: string; text: string }) {
+  const [open, setOpen] = useState(false)
+  const preview = text.length > 120 ? `${text.slice(0, 120)}…` : text
+  return (
+    <div className="w-full min-w-0 mb-1 rounded-xl border border-white/10 bg-white/[0.04] overflow-hidden">
+      <button
+        type="button"
+        className="w-full px-3 py-1.5 flex items-center gap-2 text-left hover:bg-white/[0.04] transition-colors"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Brain className="w-3.5 h-3.5 shrink-0 text-white/45" />
+        <span className="text-[11px] font-medium text-white/50">{label}</span>
+        <span className="text-[11px] text-white/30 truncate flex-1">{open ? '' : preview}</span>
+        {open ? (
+          <ChevronUp className="w-3.5 h-3.5 text-white/30 shrink-0" />
+        ) : (
+          <ChevronDown className="w-3.5 h-3.5 text-white/30 shrink-0" />
+        )}
+      </button>
+      {open && (
+        <div className="px-3 pb-2.5 text-[12px] text-white/55 leading-relaxed whitespace-pre-wrap break-words max-h-56 overflow-y-auto border-t border-white/5 pt-2">
+          {text}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 function MessageBubble({
   msg,
+  publicId,
   myUserId,
   highlighted,
   onQuote,
   onJumpTo,
 }: {
   msg: GroupMessage
+  publicId: string
   myUserId?: number
   highlighted?: boolean
   onQuote: () => void
@@ -468,9 +608,34 @@ function MessageBubble({
               agent={{
                 id: msg.senderAgentId,
                 name: msg.senderName,
+                originalName: msg.senderOriginalName,
+                careerName: msg.senderCareerName,
                 avatarUrl: msg.senderAvatarUrl,
                 externalAgentKey: msg.senderName,
               }}
+              timeLabel={formatMessageTime(msg.createTime) || null}
+              avatar={
+                msg.senderAgentId != null && publicId ? (
+                  <GroupAgentContextRing
+                    publicId={publicId}
+                    userAgentId={msg.senderAgentId}
+                    size={40}
+                  >
+                    <AgentAvatar
+                      agent={{
+                        id: msg.senderAgentId,
+                        name: msg.senderName,
+                        originalName: msg.senderOriginalName,
+                        careerName: msg.senderCareerName,
+                        avatarUrl: msg.senderAvatarUrl,
+                        externalAgentKey: msg.senderName,
+                      }}
+                      size={32}
+                      className="h-full w-full"
+                    />
+                  </GroupAgentContextRing>
+                ) : undefined
+              }
             />
           ) : (
             <div className="flex items-center gap-2 px-0.5 mb-1">
@@ -489,6 +654,9 @@ function MessageBubble({
             </div>
           )
         )}
+        {!mine && isAgent && msg.thinking ? (
+          <MessageThinkingBlock label="思考过程" text={msg.thinking} />
+        ) : null}
         <div
           className={clsx(
             'relative min-w-0 max-w-full rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words',

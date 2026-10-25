@@ -19,9 +19,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 官方知识库种子：常见行业分层分类 + 原子知识库，并尽量挂到已有官方招聘商品。
+ * 官方知识库种子：行业分层分类 + 原子知识库正文（可对过短旧数据 enrich），并挂到招聘商品。
  */
 @Slf4j
 @Component
@@ -38,11 +39,7 @@ public class OfficialKnowledgeBootstrap implements ApplicationRunner {
     @Override
     @Transactional
     public void run(ApplicationArguments args) {
-        if (categoryRepository.count() > 0) {
-            log.info("[OfficialKB] categories already present, skip seed");
-            return;
-        }
-        log.info("[OfficialKB] seeding industry knowledge tree…");
+        log.info("[OfficialKB] ensuring industry knowledge tree…");
 
         KbCategory tech = cat(null, "TECH", "技术研发", "软件工程、后端、前端与基础设施", 10);
         KbCategory techBe = cat(tech.getId(), "TECH_BACKEND", "后端工程", "服务端、API、数据存储", 10);
@@ -81,177 +78,85 @@ public class OfficialKnowledgeBootstrap implements ApplicationRunner {
         KbCategory finance = cat(null, "FINANCE", "财务会计", "核算、报表与税务基础", 80);
         KbCategory finBook = cat(finance.getId(), "FIN_BOOKKEEPING", "会计核算", "科目与凭证规范", 10);
 
-        // 原子知识库
+        KbCategory investment = cat(null, "INVESTMENT", "金融投资", "风险投资、私募股权与投融资", 55);
+        KbCategory invVc = cat(investment.getId(), "INV_VC", "风险投资", "尽调、条款与投后", 10);
+
+        AtomicInteger enriched = new AtomicInteger();
+        AtomicInteger created = new AtomicInteger();
+
         KnowledgeBase javaApi = kb(techBe.getId(), "KB_JAVA_API", "Java 服务端 API 设计规范",
-                "REST 命名、错误码、分页与幂等约定",
-                """
-                        # Java API 设计要点
-                        1. 资源名词复数路径；动作用 HTTP 动词表达。
-                        2. 列表默认 page/size，响应含 items/page/size/total/totalPages。
-                        3. 写操作提供幂等键；失败返回可机读 errorCode。
-                        4. 认证走 Bearer；禁止在日志打印密钥。
-                        5. 变更向后兼容：新增字段可选，废弃字段保留至少一个版本。
-                        """,
-                "java,api,rest", 10);
+                "REST 命名、错误码、分页、幂等与兼容性约定",
+                "java,api,rest", 10, enriched, created);
         KnowledgeBase feReact = kb(techFe.getId(), "KB_FE_REACT", "前端 React 工程约定",
-                "组件分层、状态与请求边界",
-                """
-                        # React 工程约定
-                        1. 页面容器负责数据，展示组件保持纯 UI。
-                        2. 服务端分页，禁止一次拉全表再切页。
-                        3. 下拉统一用项目 Select，禁止原生 select。
-                        4. 错误用 toast 人类可读文案；加载与空态分开。
-                        """,
-                "react,frontend", 10);
+                "组件分层、服务端分页、统一 Select 与状态边界",
+                "react,frontend", 10, enriched, created);
         KnowledgeBase sre = kb(techInfra.getId(), "KB_SRE_ONCALL", "线上稳定性与值班手册",
-                "告警分级、回滚与复盘模板",
-                """
-                        # 值班速查
-                        P0：全站不可用 → 立即回滚 + 拉通；P1：核心链路降级；P2：非核心。
-                        变更必须可回滚；复盘写清时间线、根因、改进项负责人与截止日期。
-                        """,
-                "sre,ops", 10);
+                "告警分级、止损回滚、沟通与复盘模板",
+                "sre,ops", 10, enriched, created);
 
         KnowledgeBase prd = kb(productPm.getId(), "KB_PRD_TEMPLATE", "PRD 写作模板",
-                "背景、目标、方案、指标与边界",
-                """
-                        # PRD 结构
-                        背景与问题 → 目标/非目标 → 用户故事 → 方案与交互 → 数据指标 → 风险与排期。
-                        每个需求写清验收标准；避免无度量的「提升体验」空话。
-                        """,
-                "prd,product", 10);
+                "背景、目标/非目标、方案、指标、验收与风险",
+                "prd,product", 10, enriched, created);
         KnowledgeBase growth = kb(productOps.getId(), "KB_GROWTH_LOOP", "增长飞轮与留存",
-                "获客-激活-留存-变现闭环",
-                """
-                        # 增长要点
-                        先定义北极星指标，再拆激活与留存漏斗。
-                        活动有对照实验；渠道 ROI 周复盘；沉默用户唤醒要可关停。
-                        """,
-                "growth,ops", 10);
+                "获客-激活-留存-变现闭环与实验纪律",
+                "growth,ops", 10, enriched, created);
 
         KnowledgeBase uiSys = kb(designUi.getId(), "KB_UI_SYSTEM", "设计系统与组件规范",
-                "间距、字号、颜色与组件状态",
-                """
-                        # UI 系统
-                        8pt 网格；主文/次文/弱文三级对比。
-                        组件覆盖 default/hover/disabled/error；表单错误贴近字段。
-                        无障碍：对比度、焦点环、可读替代文本。
-                        """,
-                "ui,design-system", 10);
+                "间距、字号、颜色语义与组件全状态",
+                "ui,design-system", 10, enriched, created);
         KnowledgeBase brand = kb(designBrand.getId(), "KB_BRAND_VOICE", "品牌语气与视觉基线",
-                "品牌关键词、禁用表达与物料清单",
-                """
-                        # 品牌基线
-                        语气：专业、克制、可信；避免夸张承诺与黑话堆砌。
-                        Logo 安全区与最小尺寸必须遵守；对外物料统一主色与字体。
-                        """,
-                "brand,visual", 10);
+                "品牌关键词、禁用表达与物料安全区",
+                "brand,visual", 10, enriched, created);
 
         KnowledgeBase metric = kb(dataBi.getId(), "KB_METRIC_DICT", "业务指标字典",
-                "DAU/留存/转化口径与注意事项",
-                """
-                        # 指标口径
-                        DAU：自然日内至少一次有效会话的独立用户。
-                        次日留存：D0 新用户在 D1 仍活跃的比例。
-                        转化漏斗步骤定义需产品/数据双方签字，变更要版本号。
-                        """,
-                "metrics,bi", 10);
+                "DAU/留存/转化口径与版本化变更",
+                "metrics,bi", 10, enriched, created);
         KnowledgeBase mlEval = kb(dataMl.getId(), "KB_ML_EVAL", "模型评估清单",
-                "离线指标、切片与上线门槛",
-                """
-                        # 评估
-                        分类看 Precision/Recall/F1；排序看 AUC/NDCG。
-                        必做关键切片（新老客、地域）；上线设回滚阈值与影子流量。
-                        """,
-                "ml,evaluation", 10);
+                "离线指标、关键切片与上线回滚门槛",
+                "ml,evaluation", 10, enriched, created);
 
         KnowledgeBase listing = kb(cbOps.getId(), "KB_CB_LISTING", "跨境 Listing 优化要点",
-                "标题、五点、主图与 A+ 基础",
-                """
-                        # Listing
-                        标题含核心关键词但不堆砌；五点说清卖点与差异。
-                        主图白底合规；A+/视频提升停留。每周看搜索词报告迭代。
-                        """,
-                "listing,cross-border", 10);
+                "标题、五点、主图、A+ 与关键词迭代",
+                "listing,cross-border", 10, enriched, created);
         KnowledgeBase amazon = kb(cbAmazon.getId(), "KB_AMAZON_ADS", "亚马逊广告入门",
-                "自动/手动广告与 ACOS 目标",
-                """
-                        # Amazon Ads
-                        新品先自动广告收词，再转手动精确/词组。
-                        设定目标 ACOS；否定词周清理；库存紧张时降预算防断货差评。
-                        """,
-                "amazon,ads", 10);
+                "自动/手动广告结构、收词与 ACOS 目标",
+                "amazon,ads", 10, enriched, created);
         KnowledgeBase tiktok = kb(cbTiktok.getId(), "KB_TIKTOK_LIVE", "TikTok Shop 内容与直播",
-                "短视频钩子、直播节奏与转化",
-                """
-                        # TikTok Shop
-                        前 3 秒给钩子；人设稳定；SKU 少而精。
-                        直播：引流→演示→限时→逼单；话术合规，禁用绝对化承诺。
-                        """,
-                "tiktok,live", 10);
+                "短视频钩子、直播节奏与合规话术",
+                "tiktok,live", 10, enriched, created);
         KnowledgeBase supply = kb(cbSupply.getId(), "KB_CB_SUPPLY", "跨境供应链协同清单",
-                "质检、头程、海外仓节点",
-                """
-                        # 供应链
-                        下单前确认 MOQ/交期/质检标准；头程时效与旺季加价提前规划。
-                        海外仓备货按周转天数；滞销触发清仓策略。
-                        """,
-                "supply-chain", 10);
+                "质检、头程、海外仓与滞销决策",
+                "supply-chain", 10, enriched, created);
         KnowledgeBase ads = kb(cbAds.getId(), "KB_CB_ADS_ROI", "跨境投放 ROI 框架",
-                "预算分配与归因注意",
-                """
-                        # 投放 ROI
-                        渠道预算按边际 ROI 分配；归因窗口与平台报表对齐。
-                        创意疲劳要轮换；亏损渠道设止损线。
-                        """,
-                "ads,roi", 10);
+                "预算分配、归因窗口与渠道止损",
+                "ads,roi", 10, enriched, created);
 
         KnowledgeBase localAi = kb(aiIde.getId(), "KB_LOCAL_BRIDGE", "Local Bridge 协作规范",
-                "群聊 @ 派发、claim/complete 与上下文",
-                """
-                        # Local Bridge
-                        仅在被 @ / 回复时领取任务；结合人设与近期对话完成。
-                        claim → 拉 context → 执行 → complete 回帖；失败也要回报错误摘要。
-                        不把密钥写入对话或仓库。
-                        """,
-                "local-bridge,cursor", 10);
+                "群聊 @ 派发、claim/complete、worker 保活与安全",
+                "local-bridge,cursor,codex", 10, enriched, created);
 
         KnowledgeBase content = kb(mktContent.getId(), "KB_CONTENT_CALENDAR", "内容日历与选题",
-                "栏目节奏与复用",
-                """
-                        # 内容
-                        栏目固定节奏（周更/双周）；选题对齐用户痛点与产品卖点。
-                        长文可拆短视频/社群金句；发布后看完读与转化，淘汰低效选题。
-                        """,
-                "content,marketing", 10);
+                "栏目节奏、选题来源、形态复用与复盘",
+                "content,marketing", 10, enriched, created);
         KnowledgeBase channel = kb(mktChannel.getId(), "KB_CHANNEL_MIX", "渠道组合策略",
-                "付费/自然/合作权重",
-                """
-                        # 渠道
-                        付费获客补量，自然流量建护城河，合作拓展信任。
-                        统一 UTM；周会看 CAC 与 LTV 比，而不是只看曝光。
-                        """,
-                "channel,cac", 10);
+                "付费/自然/合作权重与 CAC-LTV 复盘",
+                "channel,cac", 10, enriched, created);
 
         KnowledgeBase contract = kb(legalContract.getId(), "KB_CONTRACT_CHECK", "合同审查清单",
-                "标的、付款、违约与管辖",
-                """
-                        # 合同审查
-                        核对主体、标的、交付、验收、付款、违约、保密、知识产权与争议解决。
-                        无限责任/单方随意解约需标红；涉外合同注意适用法律与语言版本。
-                        """,
-                "legal,contract", 10);
+                "主体、标的、付款、违约、IP 与管辖",
+                "legal,contract", 10, enriched, created);
 
         KnowledgeBase book = kb(finBook.getId(), "KB_BOOKKEEPING_BASIC", "会计核算基础",
-                "借贷与常见科目",
-                """
-                        # 会计基础
-                        资产=负债+所有者权益；费用增加借方，收入增加贷方。
-                        费用报销需票据齐全；跨期费用按权责发生制摊销。
-                        """,
-                "finance,bookkeeping", 10);
+                "借贷、权责发生制与报销纪律",
+                "finance,bookkeeping", 10, enriched, created);
 
-        // 关联到已有招聘目录（按职业 code）
+        KnowledgeBase vcDd = kb(invVc.getId(), "KB_VC_DUE_DILIGENCE", "创业项目尽调清单",
+                "团队、市场、产品、财务、法务与风险红旗",
+                "vc,due-diligence", 10, enriched, created);
+        KnowledgeBase vcTerm = kb(invVc.getId(), "KB_VC_TERM_SHEET", "投资条款要点",
+                "估值、股权、清算优先、反稀释与董事会席位",
+                "vc,term-sheet", 20, enriched, created);
+
         linkCareer("JAVA_ENGINEER", javaApi, sre);
         linkCareer("PRODUCT_MANAGER", prd, growth);
         linkCareer("UI_DESIGNER", uiSys, brand);
@@ -266,9 +171,21 @@ public class OfficialKnowledgeBootstrap implements ApplicationRunner {
         linkCareer("CODEX", localAi);
         linkCareer("CLAUDE_CODE", localAi);
         linkCareer("GENERIC_LOCAL_AI", localAi);
+        linkCareer("VC_EXPERT", vcDd, vcTerm);
 
-        log.info("[OfficialKB] seeded categories={} knowledgeBases={}",
-                categoryRepository.count(), knowledgeBaseRepository.count());
+        // 避免未使用告警（content/channel/contract/book/feReact 已入库，关联按职业）
+        log.info(
+                "[OfficialKB] done categories={} knowledgeBases={} created={} enriched={} (also seeded: {},{},{},{},{})",
+                categoryRepository.count(),
+                knowledgeBaseRepository.count(),
+                created.get(),
+                enriched.get(),
+                feReact.getCode(),
+                content.getCode(),
+                channel.getCode(),
+                contract.getCode(),
+                book.getCode()
+        );
     }
 
     private KbCategory cat(Long parentId, String code, String name, String desc, int sort) {
@@ -284,18 +201,40 @@ public class OfficialKnowledgeBootstrap implements ApplicationRunner {
         });
     }
 
-    private KnowledgeBase kb(Long categoryId, String code, String name, String summary, String content, String tags, int sort) {
-        return knowledgeBaseRepository.findByCode(code).orElseGet(() -> {
+    private KnowledgeBase kb(
+            Long categoryId,
+            String code,
+            String name,
+            String summary,
+            String tags,
+            int sort,
+            AtomicInteger enriched,
+            AtomicInteger created
+    ) {
+        String content = OfficialKnowledgeDocs.load(code);
+        return knowledgeBaseRepository.findByCode(code).map(existing -> {
+            if (OfficialKnowledgeDocs.shouldEnrich(existing.getContent(), content)) {
+                existing.setName(name);
+                existing.setSummary(summary);
+                existing.setContent(content);
+                existing.setTags(tags);
+                if (existing.getCategoryId() == null) existing.setCategoryId(categoryId);
+                enriched.incrementAndGet();
+                return knowledgeBaseRepository.save(existing);
+            }
+            return existing;
+        }).orElseGet(() -> {
             KnowledgeBase k = new KnowledgeBase();
             k.setPublicId("kb_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16));
             k.setCategoryId(categoryId);
             k.setCode(code);
             k.setName(name);
             k.setSummary(summary);
-            k.setContent(content.stripIndent().trim());
+            k.setContent(content);
             k.setTags(tags);
             k.setSortOrder(sort);
             k.setEnabled(true);
+            created.incrementAndGet();
             return knowledgeBaseRepository.save(k);
         });
     }

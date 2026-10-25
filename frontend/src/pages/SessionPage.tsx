@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { agentApi } from '../api/agent'
-import { multiAgentApi } from '../api/multiAgent'
+import { multiAgentApi, officeApi } from '../api/multiAgent'
 import { useAgentSocket } from '../hooks/useAgentSocket'
 import { ThinkingStream } from '../components/agent/ThinkingStream'
 import { AgentInputBox } from '../components/agent/AgentInputBox'
@@ -190,6 +190,14 @@ export function SessionPage() {
     refetchInterval: 30_000,
   })
 
+  const { data: officeMe } = useQuery({
+    queryKey: ['office-me'],
+    queryFn: () => officeApi.me(),
+    enabled: !!effectiveSessionId,
+    staleTime: 30_000,
+  })
+  const hasOffice = !!(officeMe && (officeMe.status === 'ACTIVE' || officeMe.ready))
+
   const refreshDockerMutation = useMutation({
     mutationFn: () => agentApi.refreshScriptStatus(),
     onSuccess: () => {
@@ -258,6 +266,9 @@ export function SessionPage() {
       // 立即拉取消息列表，否则「回答中」占位条可能不显示（后端已写入，前端仅 invalidate 不会马上请求）
       queryClient.refetchQueries({ queryKey: ['session-messages', sessionId] })
       queryClient.invalidateQueries({ queryKey: ['context-usage', sessionId] })
+      // 用户发消息后会话按 lastUserMessageAt 上浮
+      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['recent-sessions'] })
       // 发消息会触发后端预创建/启动脚本容器，延迟刷新脚本状态以便 UI 显示「容器已就绪」
       setTimeout(() => refetchScriptStatus(), 2000)
       toast.success('已发送后续问题')
@@ -451,6 +462,7 @@ export function SessionPage() {
         refreshPending={refreshDockerMutation.isPending}
         onRefreshDocker={() => refreshDockerMutation.mutate()}
         onOpenDockerInstall={() => setDockerInstallModalOpen(true)}
+        hasOffice={hasOffice}
       />
 
       <DockerInstallModal
@@ -500,10 +512,21 @@ export function SessionPage() {
               ? {
                   id: sessionAgent.id,
                   name: sessionAgent.name,
+                  originalName: sessionAgent.originalName,
+                  careerName: sessionAgent.careerName,
+                  displayTitle: sessionAgent.displayTitle,
                   avatarUrl: sessionAgent.avatarUrl,
                   externalAgentKey: sessionAgent.externalAgentKey,
                 }
-              : null
+              : session
+                ? {
+                    name: session.agentName,
+                    originalName: session.agentOriginalName,
+                    careerName: session.agentCareerName,
+                    displayTitle: session.agentDisplayTitle,
+                    avatarUrl: session.agentAvatarUrl,
+                  }
+                : null
           }
         />
       </div>
@@ -512,6 +535,7 @@ export function SessionPage() {
       {session && (
         <AgentInputBox
           sessionId={effectiveSessionId}
+          userAgentId={sessionAgentId}
           value={followup}
           onChange={setFollowup}
           onSubmit={(opts) => {

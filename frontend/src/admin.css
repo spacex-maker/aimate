@@ -520,6 +520,123 @@
   color: var(--admin-accent);
 }
 
+.admin-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--admin-line);
+  font-size: 0.72rem;
+  color: var(--admin-dim);
+  flex-shrink: 0;
+}
+
+.admin-pager__btn {
+  border: 1px solid var(--admin-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--admin-ink);
+  padding: 0.35rem 0.7rem;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.admin-pager__btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.admin-pager__btn:not(:disabled):hover {
+  border-color: rgba(94, 200, 255, 0.4);
+}
+
+.admin-kb-layout {
+  margin-top: 1rem;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  min-height: calc(100vh - 11rem);
+  align-items: stretch;
+}
+
+.admin-kb-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--admin-line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 0.75rem;
+}
+
+.admin-kb-panel__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.admin-kb-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
+}
+
+.admin-kb-filters .admin-input,
+.admin-kb-filters .admin-kb-filter-select {
+  min-width: 0;
+}
+
+.admin-kb-table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--admin-line);
+  border-radius: 10px;
+}
+
+.admin-kb-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #0e141c;
+}
+
+.admin-kb-modal {
+  max-height: 92vh;
+  width: min(920px, 100%);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.admin-kb-modal__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.admin-kb-content-hint {
+  margin-top: 0.35rem;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--admin-dim);
+}
+
+.admin-kb-content-meta {
+  margin-top: 0.35rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.68rem;
+  color: var(--admin-dim);
+}
+
 @media (max-width: 860px) {
   .admin-shell {
     flex-direction: column;
@@ -532,5 +649,9 @@
   .admin-shell__nav {
     flex-direction: row;
     flex-wrap: wrap;
+  }
+  .admin-kb-layout {
+    grid-template-columns: 1fr;
+    min-height: auto;
   }
 }

@@ -28,7 +28,7 @@ import lombok.*;
 @Entity
 @Table(
     name = "agent_tools",
-    uniqueConstraints = @UniqueConstraint(name = "uq_tool_name_user", columnNames = { "tool_name", "user_id" })
+    uniqueConstraints = @UniqueConstraint(name = "uq_tool_name_scope", columnNames = { "tool_name", "user_scope_key" })
 )
 public class AgentTool extends BaseEntity {
 
@@ -81,12 +81,19 @@ public class AgentTool extends BaseEntity {
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
 
-    /** 系统工具（如 recall_memory/store_memory/tavily_search 等）：仅本机执行，不走 Docker。 */
+    /** 官方工具库（如 recall_memory/store_memory/tavily_search/http_request）：平台侧执行。 */
     @Builder.Default
     @Column(name = "is_system", nullable = false)
     private Boolean isSystem = false;
 
-    /** 所属用户 ID：null 表示系统工具（不可被用户修改/删除），非空表示用户创建的工具。 */
+    /** 所属用户 ID：null 表示官方工具（不可被用户修改/删除），非空表示 Agent/用户工具箱。 */
     @Column(name = "user_id")
     private Long userId;
+
+    /**
+     * IFNULL(user_id,0) 生成列，配合 uq_tool_name_scope 防止官方工具（user_id NULL）重复插入。
+     * 只读，由数据库维护。
+     */
+    @Column(name = "user_scope_key", insertable = false, updatable = false)
+    private Long userScopeKey;
 }

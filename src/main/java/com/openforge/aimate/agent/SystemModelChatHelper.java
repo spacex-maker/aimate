@@ -24,20 +24,35 @@ public class SystemModelChatHelper {
     private final SystemConfigService systemConfigService;
 
     public String chatText(SystemModel m, String system, String user) {
-        return chatMessages(m, List.of(Message.system(system), Message.user(user)), 0.3, 1024);
+        return chatMessages(m, List.of(Message.system(system), Message.user(user)), 0.3, 1024, false);
     }
 
     /** 多轮消息（群聊 Agent 等）；temperature/maxTokens 可按场景覆盖。 */
     public String chatMessages(SystemModel m, List<Message> messages, double temperature, int maxTokens) {
+        return chatMessages(m, messages, temperature, maxTokens, false);
+    }
+
+    /**
+     * @param disableThinking true 时关闭思考链（群聊短回复 / YES-NO 投票必须开，否则 reasoning 占满额度 content 为空）
+     */
+    public String chatMessages(
+            SystemModel m,
+            List<Message> messages,
+            double temperature,
+            int maxTokens,
+            boolean disableThinking
+    ) {
         LlmProperties.ProviderConfig config = buildConfig(m);
         LlmClient client = new LlmClient(httpClient, objectMapper, config);
-        ChatRequest req = ChatRequest.builder()
+        ChatRequest.ChatRequestBuilder b = ChatRequest.builder()
                 .model(config.model())
                 .messages(messages)
                 .temperature(temperature)
-                .maxTokens(maxTokens)
-                .build();
-        ChatResponse resp = client.chat(req);
+                .maxTokens(maxTokens);
+        if (disableThinking) {
+            b.thinking(ChatRequest.Thinking.disabled());
+        }
+        ChatResponse resp = client.chat(b.build());
         Message msg = resp.firstMessage();
         return msg != null && StringUtils.hasText(msg.content()) ? msg.content().trim() : "";
     }

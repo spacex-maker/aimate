@@ -126,4 +126,29 @@ public class AgentSession extends BaseEntity {
     /** 置顶时间；非空表示置顶，越新越靠前 */
     @Column(name = "pinned_at")
     private java.time.LocalDateTime pinnedAt;
+
+    /** 用户最近一次发消息时间；会话列表按此倒序（发消息后置顶） */
+    @Column(name = "last_user_message_at")
+    private java.time.LocalDateTime lastUserMessageAt;
+
+    /**
+     * 单聊是否已在聊天框改过系统工具开关。
+     * false/null → 跟随 UserAgent 默认；true → 使用下方四列。
+     * Agent 默认变更时会清回 false，使所有单聊重新跟随。
+     */
+    @Builder.Default
+    @Column(name = "tool_settings_overridden", nullable = false)
+    private boolean toolSettingsOverridden = false;
+
+    @Column(name = "tool_memory_enabled")
+    private Boolean toolMemoryEnabled;
+
+    @Column(name = "tool_web_search_enabled")
+    private Boolean toolWebSearchEnabled;
+
+    @Column(name = "tool_create_tool_enabled")
+    private Boolean toolCreateToolEnabled;
+
+    @Column(name = "tool_script_exec_enabled")
+    private Boolean toolScriptExecEnabled;
 }

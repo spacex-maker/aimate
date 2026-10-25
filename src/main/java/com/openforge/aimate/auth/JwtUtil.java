@@ -4,6 +4,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -19,15 +20,22 @@ public class JwtUtil {
     public static final String TYP_USER = "user";
     public static final String TYP_ADMIN = "admin";
     public static final String AUD_ADMIN = "chat-admin";
+    /** 滑动续期：前端读取并替换本地 token */
+    public static final String HEADER_NEW_TOKEN = "X-New-Token";
 
     private final SecretKey key;
-    private final long      expirationMs;
+    @Getter
+    private final long expirationMs;
+    @Getter
+    private final long renewalThresholdMs;
 
     public JwtUtil(
             @Value("${app.jwt.secret}") String secret,
-            @Value("${app.jwt.expiration-ms}") long expirationMs) {
-        this.key          = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+            @Value("${app.jwt.expiration-ms:2592000000}") long expirationMs,
+            @Value("${app.jwt.renewal-threshold-ms:604800000}") long renewalThresholdMs) {
+        this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
         this.expirationMs = expirationMs;
+        this.renewalThresholdMs = Math.min(Math.max(60_000L, renewalThresholdMs), expirationMs);
     }
 
     /** Generate a signed JWT containing userId, username and role as claims. */
@@ -66,6 +74,28 @@ public class JwtUtil {
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
+    }
+
+    /** 剩余有效期是否低于阈值（应下发新 token）。 */
+    public boolean shouldRenew(Claims claims) {
+        Date exp = claims.getExpiration();
+        if (exp == null) return true;
+        long remaining = exp.getTime() - System.currentTimeMillis();
+        return remaining > 0 && remaining < renewalThresholdMs;
+    }
+
+    /** 用既有 claims 重新签发完整有效期的 token（滑动续期）。 */
+    public String renewFromClaims(Claims claims) {
+        String typ = claims.get("typ", String.class);
+        if (TYP_ADMIN.equals(typ)) {
+            Long adminId = Long.valueOf(claims.getSubject());
+            String email = claims.get("email", String.class);
+            return generateAdmin(adminId, email != null ? email : "");
+        }
+        Long userId = Long.valueOf(claims.getSubject());
+        String username = claims.get("username", String.class);
+        String role = claims.get("role", String.class);
+        return generate(userId, username != null ? username : "", role != null ? role : "USER");
     }
 
     /** Returns userId if the token is valid, else null. */

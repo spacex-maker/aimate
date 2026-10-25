@@ -50,10 +50,19 @@ export interface GroupMember {
   userId?: number
   userAgentId?: number
   name?: string
+  originalName?: string | null
+  careerName?: string | null
+  displayTitle?: string | null
+  gender?: string | null
+  genderLabel?: string | null
   username?: string
   nickname?: string | null
   avatarUrl?: string | null
   agentReplyMode?: AgentReplyMode
+  /** 是否允许非主人其他成员 @ 触发；默认 true */
+  othersMayMention?: boolean
+  /** 被他人 @ 时是否先请示所属人类；默认 false */
+  requireOwnerApprovalOnMention?: boolean
   agentKind?: string
   ownerUserId?: number
   ownerName?: string
@@ -109,9 +118,27 @@ export interface GroupMessageReplyTo {
   deleted?: boolean
   senderType?: 'USER' | 'AGENT' | 'SYSTEM'
   senderName?: string
+  senderOriginalName?: string | null
+  senderCareerName?: string | null
   senderAvatarUrl?: string | null
   contentPreview?: string
   imageUrl?: string | null
+}
+
+export interface GroupMentionApproval {
+  id: number
+  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  triggerMessageId?: number
+  targetMemberId?: number
+  targetUserAgentId?: number
+  targetAgentName?: string
+  targetAgentAvatarUrl?: string | null
+  ownerUserId?: number
+  requesterLabel?: string
+  triggerPreview?: string
+  canDecide?: boolean
+  decidedByUserId?: number
+  decidedAt?: string
 }
 
 export interface GroupMessage {
@@ -121,12 +148,23 @@ export interface GroupMessage {
   senderUserId?: number
   senderAgentId?: number
   senderName?: string
+  /** Agent 招聘原始名；与 senderName 不同表示已设昵称 */
+  senderOriginalName?: string | null
+  /** Agent 原始职业名称（气泡副标题） */
+  senderCareerName?: string | null
   senderAvatarUrl?: string | null
   content?: string | null
+  /** 气泡上方思考/本机执行过程（可空） */
+  thinking?: string | null
+  /** 本机执行中间输出（.partial / 工具日志；可空） */
+  execution?: string | null
   replyToId?: number | null
   /** 引用快照（服务端组装；原消息删除时 deleted=true） */
   replyTo?: GroupMessageReplyTo | null
   clientMsgId?: string | null
+  /** CHAT | MENTION_APPROVAL */
+  messageKind?: 'CHAT' | 'MENTION_APPROVAL'
+  mentionApproval?: GroupMentionApproval | null
   createTime?: string
   attachments?: GroupAttachment[]
   reads?: GroupRead[]
@@ -260,6 +298,55 @@ export const groupsApi = {
       body: JSON.stringify(body),
     }),
 
+  patchAgentSettings: (
+    publicId: string,
+    memberId: number,
+    body: {
+      replyMode?: AgentReplyMode
+      othersMayMention?: boolean
+      requireOwnerApprovalOnMention?: boolean
+    },
+  ) =>
+    http<GroupMember>(`/api/groups/${publicId}/members/${memberId}/agent-settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  decideMentionApproval: (
+    publicId: string,
+    approvalId: number,
+    decision: 'APPROVE' | 'REJECT',
+  ) =>
+    http<{ ok: boolean; status: string; approvalId: number }>(
+      `/api/groups/${publicId}/mention-approvals/${approvalId}/decide`,
+      { method: 'POST', body: JSON.stringify({ decision }) },
+    ),
+
+  /** 群内全部 Agent 上下文占用（头像旁圆环） */
+  agentsContextUsage: (publicId: string, systemModelId?: number | null) => {
+    const q = systemModelId != null ? `?systemModelId=${systemModelId}` : ''
+    return http<{
+      items: {
+        userAgentId: number
+        memberId: number
+        usage: import('../types/agent').ContextUsageDto
+      }[]
+    }>(`/api/groups/${publicId}/agents/context-usage${q}`)
+  },
+
+  compressAgentContext: (publicId: string, userAgentId: number, systemModelId?: number | null) => {
+    const q = systemModelId != null ? `?systemModelId=${systemModelId}` : ''
+    return http<{
+      ok: boolean
+      compressedMessages: number
+      keptRecentMessages: number
+      summaryChars: number
+      usageBefore: import('../types/agent').ContextUsageDto
+      usageAfter: import('../types/agent').ContextUsageDto
+      message: string
+    }>(`/api/groups/${publicId}/agents/${userAgentId}/compress-context${q}`, { method: 'POST' })
+  },
+
   messages: (publicId: string, params?: { beforeId?: number; on?: string; limit?: number }) => {
     const q = new URLSearchParams()
     if (params?.beforeId) q.set('beforeId', String(params.beforeId))
@@ -296,6 +383,26 @@ export const groupsApi = {
       method: 'POST',
       body: JSON.stringify({ upToMessageId }),
     }),
+
+  /** 快照当前聊天记录并生成公开分享码 */
+  createShare: (publicId: string) =>
+    http<{ ok: boolean; code: string; path: string; messageCount: number }>(
+      `/api/groups/${publicId}/shares`,
+      { method: 'POST', body: '{}' },
+    ),
+
+  /** 公开只读分享（可不登录） */
+  getPublicShare: (code: string) =>
+    http<{
+      ok: boolean
+      code: string
+      groupTitle?: string
+      groupPublicId?: string
+      messageCount?: number
+      createTime?: string
+      snapshotAt?: string
+      messages: GroupMessage[]
+    }>(`/api/public/group-shares/${encodeURIComponent(code)}`),
 
   searchUsers: (q: string, page = 0, size = 20) =>
     http<PageResult<UserSearchItem>>(

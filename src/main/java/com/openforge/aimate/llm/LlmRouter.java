@@ -215,6 +215,7 @@ public class LlmRouter {
                 .toolChoice(original.toolChoice())
                 .temperature(original.temperature())
                 .maxTokens(original.maxTokens())
+                .thinking(original.thinking())
                 .build();
     }
 }

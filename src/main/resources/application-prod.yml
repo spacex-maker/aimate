@@ -72,7 +72,7 @@ aimatex:
     userinfo-url: ${AIMATEX_OIDC_USERINFO_URL:https://account-api.aimatex.com/oauth/userinfo}
     jwks-url: ${AIMATEX_OIDC_JWKS_URL:https://account-api.aimatex.com/oauth/jwks}
     redirect-uri: ${AIMATEX_OIDC_REDIRECT_URI:https://chat.aimatex.com/oauth/callback}
-    redirect-uris: ${AIMATEX_OIDC_REDIRECT_URIS:https://chat.aimatex.com/oauth/callback,http://127.0.0.1:5173/oauth/callback,http://localhost:5173/oauth/callback}
+    redirect-uris: ${AIMATEX_OIDC_REDIRECT_URIS:https://chat.aimatex.com/oauth/callback,http://127.0.0.1:5173/oauth/callback,http://localhost:5173/oauth/callback,http://127.0.0.1:19299/oauth/callback}
     scopes: ${AIMATEX_OIDC_SCOPES:openid profile email membership}
 
 # 产线必须通过环境变量设置 JWT 密钥

@@ -14,6 +14,7 @@ import {
   AdminSystemPage,
   AdminUsersPage,
 } from './pages/admin/AdminPages'
+import { SessionExpiredGate } from './auth/SessionExpiredGate'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -86,6 +87,7 @@ export default function AdminApp() {
           },
         }}
       />
+      <SessionExpiredGate />
     </QueryClientProvider>
   )
 }

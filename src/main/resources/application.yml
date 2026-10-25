@@ -61,7 +61,11 @@ management:
 
 app:
   jwt:
-    expiration-ms: 86400000
+    # 用户 / 后台 JWT 有效期：30 天；活跃请求会滑动续期（见 renewal-threshold-ms）
+    expiration-ms: 2592000000
+    # 剩余有效期低于该阈值时，响应头 X-New-Token 下发新的 30 天令牌
+    # 25 天：活跃用户大约每 5 天自动续满一个月
+    renewal-threshold-ms: 2160000000
 
 # 运营后台 bootstrap（仅 admin_users 为空时创建）；产线用环境变量覆盖
 aimate:
@@ -81,6 +85,9 @@ aimate:
   local-bridge:
     public-api-base: ${AIMATE_PUBLIC_API_BASE:https://chat-api.aimatex.com}
     poll-interval-seconds: ${AIMATE_LOCAL_BRIDGE_POLL_SECONDS:8}
+    # CLAIMED 租约（秒）；到期未 complete 回收为 PENDING
+    claim-lease-seconds: ${AIMATE_LOCAL_BRIDGE_CLAIM_LEASE_SECONDS:900}
+    lease-reclaim-interval-ms: ${AIMATE_LOCAL_BRIDGE_LEASE_RECLAIM_MS:60000}
   # 办公室 CVM（同 VPC 无公网；未配齐时 mockProvision=true 本地可租用）
   office:
     mock-provision: ${AIMATE_OFFICE_MOCK:true}

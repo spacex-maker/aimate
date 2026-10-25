@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { MessagesSquare, SquarePen, Users, X } from 'lucide-react'
+import { ChevronLeft, MessagesSquare, SquarePen, Users, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { groupsApi } from '../../api/groups'
 import { multiAgentApi, type UserAgentBrief } from '../../api/multiAgent'
 import { useAuth } from '../../hooks/useAuth'
-import { AgentAvatar } from '../agent/AgentAvatar'
+import { AgentAvatar, formatAgentDisplayTitle } from '../agent/AgentAvatar'
 import { fileToChatImage } from '../../lib/chatImage'
 
-type Step = 'choose' | 'group'
+type Step = 'choose' | 'dm' | 'group'
 
 type Props = {
   onClose: () => void
@@ -22,17 +22,18 @@ export function CreateConversationModal({ onClose, initialStep = 'choose' }: Pro
   const { user } = useAuth()
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const [step, setStep] = useState<Step>(initialStep)
+  const [step, setStep] = useState<Step>(initialStep === 'dm' ? 'dm' : initialStep)
   const [title, setTitle] = useState('')
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [pickedAgents, setPickedAgents] = useState<number[]>([])
   const [includeSecretary, setIncludeSecretary] = useState(true)
   const fileRef = useRef<HTMLInputElement>(null)
 
+  const needAgents = step === 'group' || step === 'dm'
   const { data: agents = [], isLoading: agentsLoading } = useQuery({
     queryKey: ['my-agents', user?.userId],
     queryFn: () => multiAgentApi.listMine(),
-    enabled: !!user?.userId && step === 'group',
+    enabled: !!user?.userId && needAgents,
   })
 
   const activeAgents = useMemo(
@@ -53,14 +54,22 @@ export function CreateConversationModal({ onClose, initialStep = 'choose' }: Pro
     })
   }, [step, secretary, includeSecretary])
 
+  const openDmMut = useMutation({
+    mutationFn: (agentId: number) => multiAgentApi.openChat(agentId),
+    onSuccess: (session) => {
+      qc.invalidateQueries({ queryKey: ['conversations'] })
+      onClose()
+      navigate(`/session/${session.sessionId}`)
+    },
+    onError: (e: Error) => toast.error(e.message || '打开会话失败'),
+  })
+
   const createMut = useMutation({
     mutationFn: async () => {
       const agentIds = pickedAgents.filter((id) => !secretary || id !== secretary.id || includeSecretary)
-      // includeSecretary 单独传；同时避免重复传秘书 id
       const withoutSec = secretary
         ? agentIds.filter((id) => id !== secretary.id)
         : agentIds
-      // 先建群（不带超大 data URL，避免拖垮请求）；头像成功后再 PATCH
       const g = await groupsApi.create({
         title: title.trim(),
         agentIds: withoutSec,
@@ -98,14 +107,27 @@ export function CreateConversationModal({ onClose, initialStep = 'choose' }: Pro
     }
   }
 
+  const headerTitle =
+    step === 'choose' ? '新建' : step === 'dm' ? '选择伙伴' : '新建群组'
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <button type="button" className="absolute inset-0 bg-black/60" aria-label="关闭" onClick={onClose} />
       <div className="relative w-full max-w-md rounded-2xl border border-white/10 bg-[#161616] shadow-2xl overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-          <h2 className="text-sm font-semibold text-white">
-            {step === 'choose' ? '新建' : '新建群组'}
-          </h2>
+          <div className="flex items-center gap-1 min-w-0">
+            {step !== 'choose' && initialStep === 'choose' && (
+              <button
+                type="button"
+                onClick={() => setStep('choose')}
+                className="p-1 rounded-lg text-white/40 hover:text-white hover:bg-white/5 mr-1"
+                aria-label="返回"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+            )}
+            <h2 className="text-sm font-semibold text-white">{headerTitle}</h2>
+          </div>
           <button type="button" onClick={onClose} className="p-1 rounded-lg text-white/40 hover:text-white hover:bg-white/5">
             <X className="w-4 h-4" />
           </button>
@@ -115,18 +137,15 @@ export function CreateConversationModal({ onClose, initialStep = 'choose' }: Pro
           <div className="p-4 space-y-2">
             <button
               type="button"
-              onClick={() => {
-                onClose()
-                navigate('/app/new')
-              }}
+              onClick={() => setStep('dm')}
               className="w-full flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] px-4 py-3.5 text-left transition-colors"
             >
               <div className="w-10 h-10 rounded-xl bg-blue-600/20 text-blue-300 flex items-center justify-center">
                 <SquarePen className="w-5 h-5" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium text-white">新建会话</div>
-                <div className="text-xs text-white/40 mt-0.5">与单个 Agent 一对一对话</div>
+                <div className="text-sm font-medium text-white">和伙伴聊天</div>
+                <div className="text-xs text-white/40 mt-0.5">选一位 Agent，进入你们唯一的会话（像微信联系人）</div>
               </div>
             </button>
             <button
@@ -142,6 +161,54 @@ export function CreateConversationModal({ onClose, initialStep = 'choose' }: Pro
                 <div className="text-xs text-white/40 mt-0.5">拉入多个 Agent / 用户一起聊</div>
               </div>
             </button>
+          </div>
+        ) : step === 'dm' ? (
+          <div className="p-4 max-h-[70vh] overflow-y-auto">
+            <p className="text-[11px] text-white/40 mb-3 leading-relaxed">
+              每位伙伴只有一个会话窗口。若已聊过，将直接打开最近对话。
+            </p>
+            {agentsLoading ? (
+              <div className="text-xs text-white/30 py-6 text-center">加载中…</div>
+            ) : activeAgents.length === 0 ? (
+              <div className="text-xs text-white/35 py-4 text-center space-y-2">
+                <p>暂无可用伙伴</p>
+                <button
+                  type="button"
+                  className="text-sky-400 hover:underline"
+                  onClick={() => {
+                    onClose()
+                    navigate('/agents/hire')
+                  }}
+                >
+                  去招聘 Agent
+                </button>
+              </div>
+            ) : (
+              <ul className="space-y-1">
+                {activeAgents.map((a) => (
+                  <li key={a.id}>
+                    <button
+                      type="button"
+                      disabled={openDmMut.isPending}
+                      onClick={() => openDmMut.mutate(a.id)}
+                      className="w-full flex items-center gap-3 rounded-xl px-2.5 py-2.5 text-left hover:bg-white/[0.06] transition-colors disabled:opacity-50"
+                    >
+                      <AgentAvatar agent={a} size={40} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-white truncate">
+                          {formatAgentDisplayTitle(a)}
+                        </div>
+                        <div className="text-[11px] text-white/40 truncate">
+                          {[a.genderLabel || null, a.birthday ? `生日 ${a.birthday}` : null]
+                            .filter(Boolean)
+                            .join(' · ') || '伙伴'}
+                        </div>
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         ) : (
           <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
@@ -228,8 +295,7 @@ export function CreateConversationModal({ onClose, initialStep = 'choose' }: Pro
                           />
                           <AgentAvatar agent={a} size={28} />
                           <span className="text-sm text-white/80 truncate">
-                            {a.name}
-                            {isSec && <span className="text-white/35 text-xs ml-1">秘书</span>}
+                            {formatAgentDisplayTitle(a)}
                           </span>
                         </label>
                       </li>

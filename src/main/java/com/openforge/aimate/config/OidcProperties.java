@@ -14,7 +14,7 @@ public class OidcProperties {
     private String jwksUrl = "https://account-api.aimatex.com/oauth/jwks";
     private String redirectUri = "https://chat.aimatex.com/oauth/callback";
     private String redirectUris =
-            "https://chat.aimatex.com/oauth/callback,http://127.0.0.1:5173/oauth/callback,http://localhost:5173/oauth/callback";
+            "https://chat.aimatex.com/oauth/callback,http://127.0.0.1:5173/oauth/callback,http://localhost:5173/oauth/callback,http://127.0.0.1:19299/oauth/callback";
     private String scopes = "openid profile email membership";
 
     public boolean isEnabled() {

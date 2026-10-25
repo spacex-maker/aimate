@@ -115,6 +115,7 @@ public class SecretaryAgentService {
         ua.setName(secName);
         ua.setOriginalName(secName);
         ua.setGender(profile.getGender());
+        ua.setBirthday(java.time.LocalDate.now());
         ua.setPersonality("贴合用户职业与生活的专属秘书");
         ua.setExternalAgentKey(EXT_KEY_SECRETARY);
         ua.setSoulSeatId(seatId);

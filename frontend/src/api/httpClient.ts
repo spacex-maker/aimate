@@ -2,8 +2,7 @@
  * Central HTTP client.
  * Automatically attaches the JWT from localStorage to every request.
  *
- * 401 策略：只抛错 + console.error，绝不清会话、绝不跳转登录页。
- * 真正要登出由用户点退出或 RequireAuth（本地无 token）处理。
+ * 401（已携带 token）：清空会话并弹出「登录已过期」专业弹窗。
  *
  * 后端地址规则（按前端访问方式）：
  * - 前端通过本地访问（localhost / 127.0.0.1）→ 请求本地后端（默认 http://localhost:9299，可用 VITE_API_BASE 覆盖）
@@ -11,9 +10,12 @@
  */
 
 import { isAdminHost } from '../lib/host'
+import { isAuthApiUrl, notifySessionExpired } from '../auth/sessionExpired'
+import { setAuthUser } from '../hooks/useAuth'
 
 const AUTH_KEY = 'ofx_auth_user'
 const ADMIN_TOKEN_KEY = 'chat_admin_jwt'
+const NEW_TOKEN_HEADER = 'X-New-Token'
 const DEFAULT_LOCAL_BACKEND = 'http://localhost:9299'
 
 function isLocalHost(): boolean {
@@ -56,6 +58,26 @@ function getToken(): string | null {
   }
 }
 
+/** 后端滑动续期：把 X-New-Token 写回本地会话 */
+function acceptRenewedToken(res: Response) {
+  const next = res.headers.get(NEW_TOKEN_HEADER)
+  if (!next) return
+  if (isAdminHost()) {
+    localStorage.setItem(ADMIN_TOKEN_KEY, next)
+    return
+  }
+  try {
+    const raw = localStorage.getItem(AUTH_KEY)
+    if (!raw) return
+    const user = JSON.parse(raw) as { token?: string }
+    if (!user || typeof user !== 'object') return
+    user.token = next
+    localStorage.setItem(AUTH_KEY, JSON.stringify(user))
+  } catch {
+    /* ignore */
+  }
+}
+
 function parseErrorMessage(text: string, status: number): string {
   let message = `HTTP ${status}`
   if (!text) return message
@@ -82,10 +104,20 @@ export async function http<T>(url: string, init: RequestInit = {}): Promise<T> {
   }
 
   const res = await fetch(resolved, { ...init, headers })
+  acceptRenewedToken(res)
 
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     const message = parseErrorMessage(text, res.status)
+    if (res.status === 401 && token && !isAuthApiUrl(url)) {
+      notifySessionExpired({
+        loginPath: '/login',
+        clearSession: () => {
+          if (isAdminHost()) localStorage.removeItem(ADMIN_TOKEN_KEY)
+          else setAuthUser(null)
+        },
+      })
+    }
     console.error('[http]', method, resolved, res.status, {
       message,
       body: text.slice(0, 2000),

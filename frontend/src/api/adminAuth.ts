@@ -1,4 +1,5 @@
 import { fullUrl } from './httpClient'
+import { isAuthApiUrl, notifySessionExpired } from '../auth/sessionExpired'
 
 const ADMIN_TOKEN_KEY = 'chat_admin_jwt'
 
@@ -38,6 +39,8 @@ async function adminRequest<T>(url: string, init: RequestInit = {}): Promise<T> 
     headers.Authorization = `Bearer ${token}`
   }
   const res = await fetch(fullUrl(url), { ...init, headers })
+  const renewed = res.headers.get('X-New-Token')
+  if (renewed) adminPersistSession(renewed)
   if (!res.ok) {
     const text = await res.text()
     let message = `HTTP ${res.status}`
@@ -46,6 +49,12 @@ async function adminRequest<T>(url: string, init: RequestInit = {}): Promise<T> 
       message = json.message ?? json.error ?? message
     } catch {
       /* not JSON */
+    }
+    if (res.status === 401 && token && !isAuthApiUrl(url)) {
+      notifySessionExpired({
+        loginPath: '/login',
+        clearSession: () => adminClearSession(),
+      })
     }
     throw new Error(message)
   }

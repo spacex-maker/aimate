@@ -1,7 +1,30 @@
 import { useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, Bot, Briefcase, Building2, Cog, Cpu, KeyRound, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Pin, Plus, SquarePen, Users, Wrench } from 'lucide-react'
+import {
+  Archive,
+  ArchiveRestore,
+  Bot,
+  Briefcase,
+  Building2,
+  Cog,
+  Copy,
+  Cpu,
+  KeyRound,
+  LayoutDashboard,
+  LogOut,
+  MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pencil,
+  Pin,
+  Plus,
+  Share2,
+  SquarePen,
+  Trash2,
+  Users,
+  Wrench,
+} from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../hooks/useAuth'
@@ -10,7 +33,10 @@ import { SystemSettingsModal } from '../settings/SystemSettingsModal'
 import { conversationsApi, type ConversationItem } from '../../api/conversations'
 import { CompositeAvatar } from '../chat/CompositeAvatar'
 import { CreateConversationModal } from '../chat/CreateConversationModal'
+import { ConversationRenameModal } from '../chat/ConversationRenameModal'
+import { DeleteSessionModal } from '../agent/DeleteSessionModal'
 import { generateAgentAvatarDataUrl } from '../../lib/agentAvatar'
+import type { SessionResponse } from '../../types/agent'
 
 const baseLinks = [
   { to: '/app', label: '控制台', icon: LayoutDashboard },
@@ -19,12 +45,34 @@ const baseLinks = [
   { to: '/agents/mine', label: '我的 Agent', icon: Users },
   { to: '/api-keys', label: 'API 密钥', icon: KeyRound },
   { to: '/embedding-models', label: '向量模型', icon: Cpu },
-  { to: '/tools', label: '我的工具', icon: Wrench },
+  { to: '/tools', label: '工具', icon: Wrench },
 ]
 
 interface NavbarProps {
   collapsed: boolean
   onToggle: () => void
+}
+
+function sessionStub(item: ConversationItem): SessionResponse {
+  return {
+    sessionId: item.sessionId || item.id,
+    status: 'IDLE',
+    taskDescription: item.title || '会话',
+    iterationCount: 0,
+    result: null,
+    errorMessage: null,
+    hidden: !!item.archived,
+    userAgentId: item.userAgentId,
+    agentName: item.agentName,
+    agentCareerName: item.agentCareerName,
+    agentOriginalName: item.agentOriginalName,
+    agentDisplayTitle: item.agentDisplayTitle,
+    pinned: item.pinned,
+    pinnedAt: item.pinnedAt,
+    wsSubscribePath: '',
+    createTime: item.createTime || '',
+    updateTime: item.updateTime || '',
+  }
 }
 
 export function Navbar({ collapsed, onToggle }: NavbarProps) {
@@ -36,13 +84,20 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
   const [userCenterOpen, setUserCenterOpen] = useState(false)
   const [menuId, setMenuId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
+  const [renameTarget, setRenameTarget] = useState<ConversationItem | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ConversationItem | null>(null)
 
   const { data: conversations = [], isLoading: recentLoading } = useQuery({
-    queryKey: ['conversations', user?.userId],
-    queryFn: () => conversationsApi.list(24),
+    queryKey: ['conversations', user?.userId, showArchived ? 'archived' : 'active'],
+    queryFn: () => conversationsApi.list(24, { archived: showArchived }),
     enabled: !!user?.userId,
     refetchInterval: 30_000,
   })
+
+  const invalidateInbox = () => {
+    qc.invalidateQueries({ queryKey: ['conversations'] })
+  }
 
   const pinMut = useMutation({
     mutationFn: async (item: ConversationItem) => {
@@ -51,21 +106,81 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
       else await conversationsApi.pinGroup(item.publicId || item.id, next)
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['conversations'] })
+      invalidateInbox()
       setMenuId(null)
     },
     onError: (e: Error) => toast.error(e.message),
   })
 
   const archiveMut = useMutation({
-    mutationFn: async (item: ConversationItem) => {
-      if (item.kind === 'SESSION') await conversationsApi.archiveSession(item.sessionId || item.id, true)
-      else await conversationsApi.archiveGroup(item.publicId || item.id, true)
+    mutationFn: async ({ item, archived }: { item: ConversationItem; archived: boolean }) => {
+      if (item.kind === 'SESSION') await conversationsApi.archiveSession(item.sessionId || item.id, archived)
+      else await conversationsApi.archiveGroup(item.publicId || item.id, archived)
+    },
+    onSuccess: (_d, { archived }) => {
+      toast.success(archived ? '已归档' : '已取消归档')
+      invalidateInbox()
+      setMenuId(null)
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const renameMut = useMutation({
+    mutationFn: async ({ item, title }: { item: ConversationItem; title: string }) => {
+      if (item.kind === 'SESSION') {
+        await conversationsApi.renameSession(item.sessionId || item.id, title)
+      } else {
+        await conversationsApi.renameGroupRemark(item.publicId || item.id, title)
+      }
     },
     onSuccess: () => {
-      toast.success('已归档')
-      qc.invalidateQueries({ queryKey: ['conversations'] })
+      toast.success('已重命名')
+      invalidateInbox()
+      setRenameTarget(null)
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const shareMut = useMutation({
+    mutationFn: async (item: ConversationItem) => {
+      if (item.kind === 'GROUP') {
+        const r = await conversationsApi.shareGroup(item.publicId || item.id)
+        return `${window.location.origin}${r.path}`
+      }
+      const sid = item.sessionId || item.id
+      return `${window.location.origin}/session/${sid}`
+    },
+    onSuccess: async (url, item) => {
+      try {
+        await navigator.clipboard.writeText(url)
+        toast.success(item.kind === 'GROUP' ? '分享链接已复制' : '会话链接已复制')
+      } catch {
+        toast.success(url)
+      }
       setMenuId(null)
+    },
+    onError: (e: Error) => toast.error(e.message || '分享失败'),
+  })
+
+  const deleteMut = useMutation({
+    mutationFn: (opts: {
+      sessionId: string
+      deleteMessages: boolean
+      deleteMemories: boolean
+      hideOnly: boolean
+    }) =>
+      conversationsApi.deleteSession(opts.sessionId, {
+        deleteMessages: opts.deleteMessages,
+        deleteMemories: opts.deleteMemories,
+        hideOnly: opts.hideOnly,
+      }),
+    onSuccess: (_d, vars) => {
+      toast.success('已处理')
+      invalidateInbox()
+      setDeleteTarget(null)
+      if (location.pathname === `/session/${vars.sessionId}`) {
+        navigate('/app', { replace: true })
+      }
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -112,7 +227,6 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
 
   return (
     <nav className="h-full flex flex-col min-w-0">
-      {/* Logo + 收起按钮 */}
       <NavLink
         to="/app"
         end
@@ -133,7 +247,6 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
         )}
       </NavLink>
 
-      {/* 收起/展开 */}
       <div className="px-2 pt-2 flex-shrink-0">
         <button
           type="button"
@@ -149,12 +262,11 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
         </button>
       </div>
 
-      {/* Nav links + 最近会话 */}
       <div className="flex-1 py-3 px-2 space-y-2 overflow-y-auto">
         <button
           type="button"
           onClick={() => setCreateOpen(true)}
-          title="新建会话或群组"
+          title="找伙伴或建群"
           className={clsx(
             'flex items-center w-full rounded-lg text-sm font-medium transition-colors',
             'bg-blue-600/15 text-blue-300 border border-blue-500/25 hover:bg-blue-600/25 hover:text-blue-200',
@@ -162,7 +274,7 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
           )}
         >
           <SquarePen className="w-4 h-4 flex-shrink-0" />
-          {!collapsed && <span>新建</span>}
+          {!collapsed && <span>发起聊天</span>}
         </button>
 
         <div className="space-y-1">
@@ -180,19 +292,36 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
           ))}
         </div>
 
-        {/* 会话区：Agent 单聊 + 群聊统一列表 */}
         {!collapsed && (
           <div className="mt-4 space-y-1">
             <div className="px-1 flex items-center justify-between text-[11px] text-white/35 uppercase tracking-wide">
-              <span>会话</span>
-              <button
-                type="button"
-                onClick={() => setCreateOpen(true)}
-                title="新建会话或群组"
-                className="p-0.5 rounded text-white/35 hover:text-blue-300 hover:bg-white/5 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
+              <span>{showArchived ? '已归档' : '聊天'}</span>
+              <div className="flex items-center gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowArchived((v) => !v)
+                    setMenuId(null)
+                  }}
+                  title={showArchived ? '返回会话' : '查看已归档'}
+                  className={clsx(
+                    'p-0.5 rounded transition-colors',
+                    showArchived
+                      ? 'text-amber-300/90 hover:bg-white/5'
+                      : 'text-white/35 hover:text-amber-300/80 hover:bg-white/5',
+                  )}
+                >
+                  <Archive className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreateOpen(true)}
+                  title="找伙伴或建群"
+                  className="p-0.5 rounded text-white/35 hover:text-blue-300 hover:bg-white/5 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
             <div className="space-y-0.5">
               {recentLoading && conversations.length === 0 ? (
@@ -200,49 +329,72 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
               ) : conversations.length === 0 ? (
                 <button
                   type="button"
-                  onClick={() => setCreateOpen(true)}
+                  onClick={() => (showArchived ? setShowArchived(false) : setCreateOpen(true))}
                   className="w-full px-2 py-2 text-[11px] text-white/40 hover:text-blue-300 text-left transition-colors"
                 >
-                  暂无会话，点击新建
+                  {showArchived ? '暂无归档，返回聊天' : '暂无聊天，点击发起'}
                 </button>
               ) : (
                 conversations.map((item) => {
                   const key = `${item.kind}:${item.id}`
                   return (
                     <div key={key} className="relative group/conv">
-                      <button
-                        type="button"
-                        onClick={() => openConversation(item)}
-                        onContextMenu={(e) => {
-                          e.preventDefault()
-                          setMenuId(key)
-                        }}
+                      <div
                         className={clsx(
-                          'w-full px-2 py-1.5 rounded-lg text-left flex items-center gap-2 transition-colors',
+                          'w-full px-2 py-2 rounded-lg flex items-center gap-2.5 transition-colors',
                           isConversationActive(item)
                             ? 'bg-blue-600/20 text-blue-100'
                             : 'hover:bg-white/5',
                         )}
                       >
-                        <div className="relative flex-shrink-0">
-                          <CompositeAvatar
-                            urls={avatarUrlsFor(item)}
-                            size={32}
-                            title={item.title}
-                          />
-                          {item.pinned && (
-                            <Pin className="w-2.5 h-2.5 text-amber-300 absolute -top-0.5 -right-0.5" />
+                        <button
+                          type="button"
+                          onClick={() => openConversation(item)}
+                          onContextMenu={(e) => {
+                            e.preventDefault()
+                            setMenuId(key)
+                          }}
+                          className="flex-1 min-w-0 flex items-center gap-2.5 text-left"
+                        >
+                          <div className="relative flex-shrink-0">
+                            <CompositeAvatar
+                              urls={avatarUrlsFor(item)}
+                              size={40}
+                              title={item.title}
+                            />
+                            {item.pinned && (
+                              <Pin className="w-2.5 h-2.5 text-amber-300 absolute -top-0.5 -right-0.5" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0 py-0.5">
+                            <div className="truncate text-[14px] font-medium leading-snug text-white">
+                              {item.kind === 'SESSION'
+                                ? item.agentDisplayTitle ||
+                                  item.title ||
+                                  item.agentName ||
+                                  '伙伴'
+                                : item.title || '群聊'}
+                            </div>
+                            <div className="mt-0.5 truncate text-[12px] leading-snug text-white/55">
+                              {item.lastMessagePreview?.trim() || '暂无消息'}
+                            </div>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          title="更多"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setMenuId((cur) => (cur === key ? null : key))
+                          }}
+                          className={clsx(
+                            'flex-shrink-0 p-1 rounded text-white/25 hover:text-white/70 hover:bg-white/10 transition-opacity',
+                            menuId === key ? 'opacity-100 text-white/70' : 'opacity-0 group-hover/conv:opacity-100',
                           )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="truncate text-xs text-white/85">
-                            {item.title || (item.kind === 'GROUP' ? '群聊' : '会话')}
-                          </div>
-                          <div className="text-[10px] text-white/35 truncate">
-                            {item.kind === 'GROUP' ? '群聊' : item.agentName || 'Agent'}
-                          </div>
-                        </div>
-                      </button>
+                        >
+                          <MoreHorizontal className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                       {menuId === key && (
                         <>
                           <button
@@ -251,23 +403,72 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
                             aria-label="关闭菜单"
                             onClick={() => setMenuId(null)}
                           />
-                          <div className="absolute right-1 top-8 z-50 w-32 rounded-lg border border-white/15 bg-[#1a1a1a] shadow-xl py-1 text-xs">
+                          <div className="absolute right-1 top-8 z-50 w-40 rounded-lg border border-white/15 bg-[#1a1a1a] shadow-xl py-1 text-xs">
+                            {!showArchived && (
+                              <button
+                                type="button"
+                                className="w-full px-3 py-1.5 text-left hover:bg-white/10 flex items-center gap-2"
+                                onClick={() => pinMut.mutate(item)}
+                              >
+                                <Pin className="w-3 h-3" />
+                                {item.pinned ? '取消置顶' : '置顶'}
+                              </button>
+                            )}
                             <button
                               type="button"
-                              className="w-full px-3 py-1.5 text-left hover:bg-white/10 flex items-center gap-2"
-                              onClick={() => pinMut.mutate(item)}
+                              className="w-full px-3 py-1.5 text-left hover:bg-white/10 flex items-center gap-2 text-white/70"
+                              onClick={() => {
+                                setRenameTarget(item)
+                                setMenuId(null)
+                              }}
                             >
-                              <Pin className="w-3 h-3" />
-                              {item.pinned ? '取消置顶' : '置顶'}
+                              <Pencil className="w-3 h-3" />
+                              {item.kind === 'GROUP' ? '设置备注' : '会话备注'}
                             </button>
                             <button
                               type="button"
                               className="w-full px-3 py-1.5 text-left hover:bg-white/10 flex items-center gap-2 text-white/70"
-                              onClick={() => archiveMut.mutate(item)}
+                              onClick={() => shareMut.mutate(item)}
                             >
-                              <Archive className="w-3 h-3" />
-                              归档
+                              {item.kind === 'GROUP' ? (
+                                <Share2 className="w-3 h-3" />
+                              ) : (
+                                <Copy className="w-3 h-3" />
+                              )}
+                              {item.kind === 'GROUP' ? '分享记录' : '复制链接'}
                             </button>
+                            <button
+                              type="button"
+                              className="w-full px-3 py-1.5 text-left hover:bg-white/10 flex items-center gap-2 text-white/70"
+                              onClick={() =>
+                                archiveMut.mutate({ item, archived: !showArchived })
+                              }
+                            >
+                              {showArchived ? (
+                                <>
+                                  <ArchiveRestore className="w-3 h-3" />
+                                  取消归档
+                                </>
+                              ) : (
+                                <>
+                                  <Archive className="w-3 h-3" />
+                                  归档
+                                </>
+                              )}
+                            </button>
+                            {item.kind === 'SESSION' && (
+                              <button
+                                type="button"
+                                className="w-full px-3 py-1.5 text-left hover:bg-white/10 flex items-center gap-2 text-red-300/90"
+                                onClick={() => {
+                                  setDeleteTarget(item)
+                                  setMenuId(null)
+                                }}
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                删除…
+                              </button>
+                            )}
                           </div>
                         </>
                       )}
@@ -280,9 +481,7 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
         )}
       </div>
 
-      {/* 系统设置 + 个人信息 */}
       <div className={clsx('border-t border-white/10 space-y-2 flex-shrink-0', collapsed ? 'px-0 py-3 flex flex-col items-center' : 'px-3 py-3')}>
-        {/* 系统设置：个人信息上方 */}
         <button
           type="button"
           onClick={() => setSystemSettingsOpen(true)}
@@ -341,6 +540,33 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
       {systemSettingsOpen && <SystemSettingsModal onClose={() => setSystemSettingsOpen(false)} />}
       {userCenterOpen && <UserCenterModal onClose={() => setUserCenterOpen(false)} />}
       {createOpen && <CreateConversationModal onClose={() => setCreateOpen(false)} />}
+      {renameTarget && (
+        <ConversationRenameModal
+          title={renameTarget.kind === 'GROUP' ? '设置群备注' : '会话备注'}
+          hint={
+            renameTarget.kind === 'GROUP'
+              ? '备注仅自己可见，会话列表优先显示备注'
+              : '单聊列表大标题始终为伙伴姓名；备注仅作内部说明'
+          }
+          initialValue={renameTarget.title || ''}
+          loading={renameMut.isPending}
+          onClose={() => setRenameTarget(null)}
+          onConfirm={(title) => renameMut.mutate({ item: renameTarget, title })}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteSessionModal
+          session={sessionStub(deleteTarget)}
+          loading={deleteMut.isPending}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={(opts) =>
+            deleteMut.mutate({
+              sessionId: deleteTarget.sessionId || deleteTarget.id,
+              ...opts,
+            })
+          }
+        />
+      )}
     </nav>
   )
 }

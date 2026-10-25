@@ -167,10 +167,22 @@ public class SoulMemoryBridge {
     }
 
     public void store(String content, String kind, float importance, Long userId) {
-        store(content, kind, importance, userId, null);
+        store(content, kind, importance, userId, null, null);
     }
 
     public void store(String content, String kind, float importance, Long userId, Long userAgentId) {
+        store(content, kind, importance, userId, userAgentId, null);
+    }
+
+    /** @param project 可选项目锚点，如 group:g_xxx，便于按群召回 */
+    public void store(
+            String content,
+            String kind,
+            float importance,
+            Long userId,
+            Long userAgentId,
+            String project
+    ) {
         if (!isEnabled() || userId == null || !StringUtils.hasText(content)) {
             return;
         }
@@ -183,6 +195,9 @@ public class SoulMemoryBridge {
             body.put("content", content.trim());
             body.put("kind", mapToSoulKind(kind));
             body.put("importance", Math.max(0, Math.min(1, importance)));
+            if (StringUtils.hasText(project)) {
+                body.put("project", project.trim());
+            }
             body.put("client", Map.of(
                     "app", "aimatex-chat",
                     "device", hostname()
@@ -332,8 +347,8 @@ public class SoulMemoryBridge {
     private static String mapToSoulKind(String chatType) {
         if (chatType == null) return "FACT";
         return switch (chatType.toUpperCase()) {
-            case "SEMANTIC", "PROCEDURAL" -> "FACT";
-            case "EPISODIC" -> "EPISODE";
+            case "SEMANTIC", "PROCEDURAL", "FACT" -> "FACT";
+            case "EPISODIC", "EPISODE" -> "EPISODE";
             case "PROFILE" -> "PROFILE";
             case "PREFERENCE" -> "PREFERENCE";
             case "DECISION" -> "DECISION";

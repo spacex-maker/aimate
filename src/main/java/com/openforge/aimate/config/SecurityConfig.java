@@ -52,6 +52,8 @@ public class SecurityConfig {
                 ).permitAll()
                 // 群邀请预览（扫码落地页未登录也可看群名）
                 .requestMatchers(HttpMethod.GET, "/api/groups/join/**").permitAll()
+                // 群聊分享快照（只读公开页）
+                .requestMatchers(HttpMethod.GET, "/api/public/group-shares/**").permitAll()
                 // Admin-only APIs（含 /api/admin/auth/me）
                 .requestMatchers("/api/admin/**").hasAuthority("ADMIN")
                 // 本机 AI worker：专属 lba_ 令牌
@@ -94,6 +96,7 @@ public class SecurityConfig {
         ));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
+        config.setExposedHeaders(List.of("X-New-Token"));
         config.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);

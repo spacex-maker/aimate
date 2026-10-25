@@ -21,8 +21,10 @@ public class ConversationController {
     private final ConversationInboxService inboxService;
 
     @GetMapping
-    public List<Map<String, Object>> inbox(@RequestParam(defaultValue = "30") int limit) {
-        return inboxService.listInbox(requireUserId(), limit);
+    public List<Map<String, Object>> inbox(
+            @RequestParam(defaultValue = "30") int limit,
+            @RequestParam(defaultValue = "false") boolean archived) {
+        return inboxService.listInbox(requireUserId(), limit, archived);
     }
 
     private Long requireUserId() {

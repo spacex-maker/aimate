@@ -20,9 +20,9 @@ import java.util.function.Consumer;
  * Executes script tools (PYTHON_SCRIPT, NODE_SCRIPT, SHELL_CMD) by writing script to a temp file,
  * passing tool arguments as JSON on stdin, and capturing stdout as the result.
  * <p>
- * When the default interpreter is not found (e.g. "python" not in PATH on Windows), tries fallback
- * commands (e.g. "py", "python3") and/or the path from agent.script.python-path. On failure, returns
- * an error message that includes resolution advice (解决建议).
+ * Agent 工具箱（简单/安全脚本，如调三方 API 查天气）由<strong>平台宿主</strong>保存并执行，不依赖办公室。
+ * 装 JDK、任意 shell、写沙箱文件等重活走办公室工具（install/run/write），不经本执行器。
+ * 旧每用户 Docker 仅在 docker.enabled=true 时作为可选隔离回退。
  */
 @Slf4j
 @Component
@@ -32,9 +32,9 @@ public class ScriptToolExecutor {
     private static final int TIMEOUT_SECONDS = 30;
     private static final int MAX_OUTPUT_CHARS = 50_000;
 
-    /** 系统级工具仅本机执行，不走 Docker。 */
+    /** 官方内置名：不走脚本执行器业务分支。 */
     private static final Set<String> SYSTEM_TOOL_NAMES = Set.of(
-            "recall_memory", "store_memory", "tavily_search", "http_request", "create_tool",
+            "recall_memory", "store_memory", "find_tools", "tavily_search", "http_request", "create_tool",
             "install_container_package", "run_container_cmd", "write_container_file");
 
     private final ScriptToolProperties scriptToolProperties;
@@ -49,25 +49,26 @@ public class ScriptToolExecutor {
 
     /**
      * Execute the tool script with the given arguments JSON (from LLM tool call).
-     * When agent.script.docker.enabled is true and userId is set, runs in the user's Docker container (created on first use, recycled after idle).
-     * When outputChunkConsumer is non-null, container stdout/stderr are streamed to it in real time.
+     * Agent 工具箱默认在平台宿主执行；仅当 docker.enabled 时可选进用户容器隔离。
+     * When outputChunkConsumer is non-null, Docker 路径可流式推送输出。
      */
     public String execute(AgentTool tool, String argumentsJson, @Nullable Long userId, @Nullable Consumer<String> outputChunkConsumer) {
         boolean isSystemTool = Boolean.TRUE.equals(tool.getIsSystem())
                 || SYSTEM_TOOL_NAMES.contains(tool.getToolName());
-        if (!isSystemTool && scriptDockerProperties.enabled() && userId != null) {
+        // Agent 工具箱：可选遗留 Docker 隔离；否则平台宿主直接跑（不要求办公室）
+        if (!isSystemTool && userId != null && scriptDockerProperties.enabled()) {
             String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
             if (containerIdOrName != null) {
                 if (!userContainerManager.ensureContainerRunning(containerIdOrName)) {
                     return "[ToolError] 用户容器已停止且无法重新启动，请刷新页面或联系管理员检查 Docker。";
                 }
-                log.debug("[ScriptTool] Executing in Docker container: {}", containerIdOrName);
+                log.debug("[ScriptTool] legacy Docker isolation for userId={}", userId);
                 return dockerScriptRunner.runInContainer(containerIdOrName, tool, argumentsJson, outputChunkConsumer);
             }
-            return "[ToolError] Docker 模式已开启但无法创建/获取用户容器。请确认 Docker 已启动且可访问（例如在终端执行 docker ps）。";
+            log.warn("[ScriptTool] docker enabled but no container; falling back to host for {}", tool.getToolName());
         }
 
-        log.debug("[ScriptTool] Executing on host (Docker disabled, no userId, or system tool)");
+        log.debug("[ScriptTool] Executing on platform host tool={} userId={}", tool.getToolName(), userId);
         String content = tool.getScriptContent();
         if (content == null || content.isBlank()) {
             return errorWithAdvice("[ToolError] Script content is empty for tool: " + tool.getToolName(),

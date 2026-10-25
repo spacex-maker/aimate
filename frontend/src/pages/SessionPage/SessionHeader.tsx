@@ -1,4 +1,4 @@
-import { Pause, Play, StopCircle, ArrowLeft, Copy, SquarePen } from 'lucide-react'
+import { Pause, Play, StopCircle, ArrowLeft, Copy, Users } from 'lucide-react'
 import type { SessionResponse } from '../../types/agent'
 
 interface SessionHeaderProps {
@@ -21,11 +21,9 @@ interface SessionHeaderProps {
 
 export function SessionHeader({
   session,
-  sessionId,
   effectiveSessionId,
   isRunning,
   isPaused,
-  isTerminal,
   pausePending,
   resumePending,
   abortPending,
@@ -36,82 +34,93 @@ export function SessionHeader({
   onResume,
   onAbort,
 }: SessionHeaderProps) {
+  const title =
+    session?.agentDisplayTitle ||
+    (session?.agentName && session?.agentCareerName && session.agentName !== session.agentCareerName
+      ? `${session.agentName} · ${session.agentCareerName}`
+      : null) ||
+    session?.agentName ||
+    session?.taskDescription ||
+    '对话'
+
   return (
-    <div className="flex-shrink-0 border-b border-white/10 px-6 py-4 flex items-center gap-4">
+    <div className="flex-shrink-0 border-b border-white/10 px-4 sm:px-6 py-3 flex items-center gap-3">
       <button
         onClick={onBack}
-        className="text-white/30 hover:text-white/70 transition-colors"
-        title="返回控制台"
+        className="text-white/30 hover:text-white/70 transition-colors p-1"
+        title="返回"
       >
         <ArrowLeft className="w-4 h-4" />
       </button>
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-3">
-          {session && <span className="inline-flex"><span className="sr-only">{session.status}</span></span>}
-          {/* StatusBadge 由外层负责展示，这里仅展示 ID 与迭代信息 */}
-          <span className="text-xs font-mono text-white/25">
-            {sessionId?.slice(0, 8)}…
-          </span>
+        {/* 微信式：对方名字 · 招聘职业 */}
+        <h1 className="text-base font-semibold text-white truncate leading-tight">{title}</h1>
+        <div className="mt-0.5 flex items-center gap-2 text-[11px] text-white/35">
           {session && (
-            <span className="text-xs text-white/30">
-              {session.iterationCount} 轮迭代
+            <span>
+              {isRunning ? '对方正在输入…' : isPaused ? '已暂停' : '点击输入框继续对话'}
             </span>
           )}
+          {session && session.iterationCount > 0 && (
+            <span className="text-white/25">· {session.iterationCount} 轮</span>
+          )}
         </div>
-        {session && (
-          <p className="text-sm text-white/70 mt-0.5 truncate">{session.taskDescription}</p>
-        )}
       </div>
 
-      <div className="flex items-center gap-2 flex-shrink-0">
+      <div className="flex items-center gap-1.5 flex-shrink-0">
         <button
           type="button"
           onClick={onNewSession}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-blue-300 border border-blue-500/30 hover:bg-blue-500/10 rounded-lg transition-colors"
-          title="新建会话"
+          className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] text-white/45 hover:text-white/75 hover:bg-white/5 rounded-lg transition-colors"
+          title="换一位伙伴"
         >
-          <SquarePen className="w-3.5 h-3.5" /> 新建会话
+          <Users className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">换伙伴</span>
         </button>
         <button
           onClick={onCopyId}
           disabled={!effectiveSessionId}
-          className="p-2 text-white/30 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="p-2 text-white/25 hover:text-white/55 hover:bg-white/5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          title="复制会话 ID"
         >
-          <Copy className="w-4 h-4" />
+          <Copy className="w-3.5 h-3.5" />
         </button>
 
-        {isRunning && (
+        {isRunning && !isPaused && (
           <button
+            type="button"
+            disabled={pausePending}
             onClick={onPause}
-            disabled={pausePending || !effectiveSessionId}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-orange-400 border border-orange-400/30 hover:bg-orange-400/10 rounded-lg transition-colors disabled:opacity-50"
+            className="p-2 text-amber-300/80 hover:bg-amber-500/10 rounded-lg disabled:opacity-40"
+            title="暂停"
           >
-            <Pause className="w-3.5 h-3.5" /> 暂停
+            <Pause className="w-3.5 h-3.5" />
           </button>
         )}
-
         {isPaused && (
           <button
+            type="button"
+            disabled={resumePending}
             onClick={onResume}
-            disabled={resumePending || !effectiveSessionId}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-green-400 border border-green-400/30 hover:bg-green-400/10 rounded-lg transition-colors disabled:opacity-50"
+            className="p-2 text-emerald-300/80 hover:bg-emerald-500/10 rounded-lg disabled:opacity-40"
+            title="继续"
           >
-            <Play className="w-3.5 h-3.5" /> 恢复
+            <Play className="w-3.5 h-3.5" />
           </button>
         )}
-
-        {!isTerminal && (
+        {(isRunning || isPaused) && (
           <button
+            type="button"
+            disabled={abortPending}
             onClick={onAbort}
-            disabled={abortPending || !effectiveSessionId}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-400 border border-red-400/30 hover:bg-red-400/10 rounded-lg transition-colors disabled:opacity-50"
+            className="p-2 text-rose-300/80 hover:bg-rose-500/10 rounded-lg disabled:opacity-40"
+            title="停止"
           >
-            <StopCircle className="w-3.5 h-3.5" /> 中止
+            <StopCircle className="w-3.5 h-3.5" />
           </button>
         )}
       </div>
     </div>
   )
 }
-

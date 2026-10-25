@@ -24,9 +24,12 @@ public interface KnowledgeBaseRepository extends JpaRepository<KnowledgeBase, Lo
             SELECT k FROM KnowledgeBase k
             WHERE (:categoryId IS NULL OR k.categoryId = :categoryId)
               AND (:enabled IS NULL OR k.enabled = :enabled)
+              AND (:tag IS NULL OR :tag = '' OR LOWER(COALESCE(k.tags, '')) LIKE LOWER(CONCAT('%', :tag, '%')))
+              AND (:code IS NULL OR :code = '' OR LOWER(COALESCE(k.code, '')) LIKE LOWER(CONCAT('%', :code, '%')))
               AND (:q IS NULL OR :q = '' OR LOWER(k.name) LIKE LOWER(CONCAT('%', :q, '%'))
                    OR LOWER(COALESCE(k.summary, '')) LIKE LOWER(CONCAT('%', :q, '%'))
                    OR LOWER(COALESCE(k.tags, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(COALESCE(k.code, '')) LIKE LOWER(CONCAT('%', :q, '%'))
                    OR LOWER(k.publicId) LIKE LOWER(CONCAT('%', :q, '%')))
             ORDER BY k.sortOrder ASC, k.id ASC
             """)
@@ -34,6 +37,8 @@ public interface KnowledgeBaseRepository extends JpaRepository<KnowledgeBase, Lo
             @Param("categoryId") Long categoryId,
             @Param("enabled") Boolean enabled,
             @Param("q") String q,
+            @Param("tag") String tag,
+            @Param("code") String code,
             Pageable pageable
     );
 }

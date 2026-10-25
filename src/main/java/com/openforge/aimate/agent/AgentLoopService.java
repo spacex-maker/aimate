@@ -25,7 +25,9 @@ import com.openforge.aimate.llm.model.ToolCall;
 import com.openforge.aimate.llm.model.ToolFunction;
 import com.openforge.aimate.billing.InsufficientPointsException;
 import com.openforge.aimate.config.SystemConfigService;
+import com.openforge.aimate.domain.UserAgent;
 import com.openforge.aimate.domain.UserOffice;
+import com.openforge.aimate.localbridge.LocalBridgeService;
 import com.openforge.aimate.office.OfficeRemoteExecutor;
 import com.openforge.aimate.office.OfficeRentalService;
 import com.openforge.aimate.storage.ChatCosStorageService;
@@ -33,15 +35,16 @@ import com.openforge.aimate.memory.LongTermMemoryService;
 import com.openforge.aimate.memory.MemoryRecord;
 import com.openforge.aimate.memory.MemoryType;
 import com.openforge.aimate.memory.SoulMemoryBridge;
-import com.openforge.aimate.domain.UserToolSettings;
 import com.openforge.aimate.repository.AgentSessionRepository;
 import com.openforge.aimate.repository.AgentToolRepository;
+import com.openforge.aimate.repository.UserAgentRepository;
 import com.openforge.aimate.repository.UserApiKeyRepository;
 import com.openforge.aimate.repository.UserDefaultModelRepository;
 import com.openforge.aimate.websocket.AgentEventPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
@@ -98,21 +101,20 @@ public class AgentLoopService {
             Tools (use only when you judge it helps):
             - recall_memory: search long-term memory by query (e.g. user name, preferences, past facts). Use when the user's question might be answered from something you stored before.
             - store_memory: save a fact for future sessions. Use at most once per distinct, important fact; then reply in natural language.
+            - find_tools: search the official + Agent toolbox catalog by natural language (like recall_memory for tools). Use when you are unsure which tool exists, or the toolbox may be large. Returns ranked matches with scores—prefer high-score tools; do not invent tool names.
             - tavily_search: web search via Tavily (only when the user enabled 联网搜索). Use for current events, news, or facts you need to look up. Do NOT use http_request as a substitute for search engines.
-            - http_request: call a specific public http/https URL from the server (GET/POST/PUT/PATCH/DELETE). Prefer this for REST/Soul/OAuth/health checks. It is NOT a web search tool. Do NOT use curl via run_container_cmd for HTTP—http_request works without Docker.
-            - create_tool: register a new tool (script-based: PYTHON_SCRIPT, NODE_SCRIPT, SHELL_CMD). Use when the user asks you to create a tool, add a capability, or write a reusable script/function that the agent can call later. Provide tool_name, tool_description, input_schema (JSON string), tool_type, and optionally script_content and entry_point.
-            - install_container_package / run_container_cmd / write_container_file: ONLY available when the user has rented an Office (private CVM). If these tools are missing, the user has no Office—use http_request for HTTP; do not invent curl/shell.
+            - http_request: call a specific public http/https URL from the server (GET/POST/PUT/PATCH/DELETE). Prefer this for REST/Soul/OAuth/health checks. It is NOT a web search tool. Do NOT use curl via run_container_cmd for HTTP—http_request works without an Office.
+            - create_tool: register a simple Agent-toolbox tool (PYTHON_SCRIPT / NODE_SCRIPT / SHELL_CMD) that the PLATFORM stores and runs (no Office required). Use after a third-party API call succeeds (e.g. weather) so you can reuse it next time. Prefer http_request for one-off HTTP; use create_tool to crystallize a reusable wrapper. Provide tool_name, tool_description, input_schema (JSON string), tool_type, and optionally script_content and entry_point.
+            - install_container_package / run_container_cmd / write_container_file: Office toolbox — ONLY for hard VM-like work (install JDK, apt packages, long shell, write sandbox files). Available only when the user has rented an Office. If missing, do NOT invent curl/shell on the shared host; tell the user to rent an Office for that kind of task. Simple API/memory tools never need Office.
             
-            Creating script files in the container (only when container tools are available):
-            - NEVER use run_container_cmd with cat/heredoc to write script content—it will be truncated and fail. NEVER suggest the user to "manually paste" or "run in terminal" to create the script; you MUST complete the task yourself.
-            - To create any script file: use write_container_file only. For small/medium scripts, a single call with full content is fine. For extremely large scripts, you MAY split into multiple calls: first call with path+initial content, then same path+next content with append=true, until the whole script is written. Then run_container_cmd("chmod +x " + path). You must actually perform these calls until the file is complete—do not give up and ask the user to do it.
+            Creating files in the Office (only when Office tools are listed):
+            - NEVER use run_container_cmd with cat/heredoc to write script content—it will be truncated and fail. NEVER suggest the user to "manually paste" or "run in terminal"; you MUST complete the task yourself.
+            - To create any Office-side script file: use write_container_file only. Split large content with append=true. Then run_container_cmd("chmod +x " + path).
             
-            Script execution environment (IMPORTANT — only when Docker tools are listed):
-            - 每个用户都有一个独立的 Linux 容器，视为该用户的“专属虚拟机环境”，不同用户的容器彼此完全隔离。
-            - To run ANY command inside the user's container, you MUST use run_container_cmd only.
-            - When writing scripts that run long-running commands (npm install, apt-get, pip install, etc.): do NOT capture the subprocess stdout/stderr; let output stream to stdout.
-            - Non-system script tools run inside the user container. Install runtimes with install_container_package before calling them.
-            - When a script tool returns exit 127 / command not found, install the package then retry before reporting failure.
+            Agent toolbox vs Office (IMPORTANT):
+            - Simple/safe tools (API wrappers, weather, calc): create_tool + platform execution. No Office.
+            - Heavy/isolated work (deploy backend JDK, apt-get, arbitrary shell): Office tools only.
+            - When a platform script tool fails for missing interpreter, prefer fixing the script or using http_request; do not demand Office unless the task truly needs a private VM.
             
             Memory writing rules (VERY IMPORTANT):
             - When calling store_memory, ALWAYS rewrite the fact into a clear, third-person sentence with an explicit subject.
@@ -151,6 +153,8 @@ public class AgentLoopService {
     private final AgentPromptService         agentPromptService;
     private final OfficeRentalService        officeRentalService;
     private final OfficeRemoteExecutor       officeRemoteExecutor;
+    private final LocalBridgeService         localBridgeService;
+    private final UserAgentRepository        userAgentRepository;
 
     // Tracks which exact contents have already been stored via store_memory
     // in this JVM, per sessionId, to avoid spamming duplicate memories.
@@ -652,7 +656,7 @@ public class AgentLoopService {
                 context = context.stream().map(Message::withoutImages).toList();
             }
             String        queryForTools = lastUserMessageFrom(context, session.getTaskDescription());
-            List<Tool>    tools   = loadRelevantTools(queryForTools, TOP_K_TOOLS, userId);
+            List<Tool>    tools   = loadRelevantTools(queryForTools, TOP_K_TOOLS, userId, session);
             ChatRequest   request = ChatRequest.withTools("", context, tools.isEmpty() ? null : tools);
             final AgentSession finalSession = session;
             final int          finalIter   = iteration;
@@ -748,7 +752,7 @@ public class AgentLoopService {
                 context = context.stream().map(Message::withoutImages).toList();
             }
             String queryForTools = lastUserMessageFrom(context, session.getTaskDescription());
-            List<Tool> tools = loadRelevantTools(queryForTools, TOP_K_TOOLS, userId);
+            List<Tool> tools = loadRelevantTools(queryForTools, TOP_K_TOOLS, userId, session);
             java.util.Set<String> haveNames = new java.util.HashSet<>();
             for (Tool t : tools) haveNames.add(t.function().name());
             for (String name : toolsCreatedThisRun) {
@@ -913,11 +917,82 @@ public class AgentLoopService {
         String persona = "";
         if (session != null && session.getUserAgentId() != null) {
             persona = agentPromptService.activePersonaPrompt(session.getUserAgentId());
+            UserAgent ua = userAgentRepository.findById(session.getUserAgentId()).orElse(null);
+            if (LocalBridgeService.isDmLocalAssistEnabled(ua)) {
+                tools = tools + """
+                        
+                        Local device (DM):
+                        - You chat normally in the cloud first (greet, clarify, explain).
+                        - Only when the user wants you to operate their local machine (edit code, run commands, open projects, local files), call dispatch_local_task with a clear instruction.
+                        - Pure chat / knowledge Q&A → do NOT call dispatch_local_task.
+                        - After dispatch, tell the user the task was sent to their local client or prompt-linked worker.
+                        """.stripIndent();
+            }
         }
         if (persona != null && !persona.isBlank()) {
             return persona.trim() + "\n\n---\n\n" + tools;
         }
         return tools;
+    }
+
+    private String executeDispatchLocalTask(String arguments, String sessionId, Long userId) {
+        try {
+            JsonNode args = objectMapper.readTree(arguments == null || arguments.isBlank() ? "{}" : arguments);
+            String instruction = args.path("instruction").asText("").trim();
+            if (instruction.isEmpty()) {
+                return "[ToolError] dispatch_local_task 需要 instruction（给本机执行的任务说明）";
+            }
+            String idem = args.path("idempotency_key").asText("").trim();
+            if (idem.isEmpty()) idem = args.path("idempotencyKey").asText("").trim();
+            AgentSession session = sessionRepository.findBySessionId(sessionId).orElse(null);
+            if (session == null || session.getUserAgentId() == null) {
+                return "[ToolError] 当前会话未绑定本机 Agent";
+            }
+            if (userId != null && session.getUserId() != null && !userId.equals(session.getUserId())) {
+                return "[ToolError] 会话归属不匹配";
+            }
+            UserAgent ua = userAgentRepository.findById(session.getUserAgentId()).orElse(null);
+            if (ua == null) return "[ToolError] Agent 不存在";
+            Map<String, Object> r = localBridgeService.enqueueFromSession(
+                    ua, session, instruction, StringUtils.hasText(idem) ? idem : null);
+            if (!Boolean.TRUE.equals(r.get("ok"))) {
+                return "[ToolError] " + String.valueOf(r.getOrDefault("error", "派发失败"));
+            }
+            String idemNote = Boolean.TRUE.equals(r.get("idempotent")) ? "（幂等：已有进行中任务）" : "";
+            return "本机任务已入队 taskId=" + r.get("taskId") + idemNote + "。"
+                    + String.valueOf(r.getOrDefault("hint", "等待本机设备领取"))
+                    + "。请先用自然语言告知用户已派发，不要假装已经在本机执行完毕。";
+        } catch (Exception e) {
+            return "[ToolError] dispatch_local_task 失败: " + e.getMessage();
+        }
+    }
+
+    private Tool buildDispatchLocalTaskTool() {
+        String schema = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "instruction": {
+                      "type": "string",
+                      "description": "Clear task for the local Cursor/Connector/prompt worker, e.g. open repo X and fix Y"
+                    },
+                    "idempotency_key": {
+                      "type": "string",
+                      "description": "Optional stable key to avoid duplicate enqueue if you call this tool twice for the same intent"
+                    }
+                  },
+                  "required": ["instruction"]
+                }
+                """;
+        try {
+            return Tool.ofFunction(new ToolFunction(
+                    "dispatch_local_task",
+                    "After normal chat, dispatch a task to the user's local device (desktop Connector or prompt-linked worker). Use ONLY when local machine control is required. Do not use for pure conversation. Pass idempotency_key when retrying the same intent.",
+                    objectMapper.readTree(schema)
+            ));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /**
@@ -998,6 +1073,10 @@ public class AgentLoopService {
         if ("store_memory".equals(toolName)) {
             return executeStoreMemoryTool(sessionId, arguments);
         }
+        // Built-in: find_tools — 工具库语义/词法混合召回（对齐记忆系统）
+        if ("find_tools".equals(toolName)) {
+            return executeFindTools(arguments, userId);
+        }
         // Built-in: tavily_search — web search via Tavily API (key from system_config)
         if ("tavily_search".equals(toolName)) {
             return executeTavilySearchTool(arguments, sessionId, userId);
@@ -1009,6 +1088,10 @@ public class AgentLoopService {
         // Built-in: create_tool — 编写工具的工具，将新工具注册到 agent_tools 表
         if ("create_tool".equals(toolName)) {
             return executeCreateTool(arguments, userId);
+        }
+        // Built-in: dispatch_local_task — 单聊派发本机任务（客户端领取 / 提示词设备领取）
+        if ("dispatch_local_task".equals(toolName)) {
+            return executeDispatchLocalTask(arguments, sessionId, userId);
         }
         // Built-in: install_container_package — 在用户隔离的 Linux 容器内安装软件（如 python3、nodejs）
         if ("install_container_package".equals(toolName)) {
@@ -1037,6 +1120,47 @@ public class AgentLoopService {
      * Built-in recall_memory tool: retrieve relevant long-term memories by semantic search.
      * Flow: AI does intent analysis → calls recall_memory with a query → uses returned memories to answer.
      */
+    /**
+     * 官方 find_tools：混合召回官方库 + Agent 工具箱，返回带分数的相关工具列表。
+     */
+    private String executeFindTools(String argumentsJson, Long userId) {
+        try {
+            JsonNode args = objectMapper.readTree(argumentsJson == null || argumentsJson.isBlank() ? "{}" : argumentsJson);
+            String query = args.path("query").asText("").trim();
+            if (query.isEmpty()) {
+                return "[ToolError] find_tools 需要非空的 query（例如：查天气、HTTP 请求、安装 JDK）。";
+            }
+            int topK = args.path("top_k").asInt(8);
+            if (topK < 1) topK = 1;
+            if (topK > 20) topK = 20;
+            List<ToolIndexService.ToolHit> hits = toolIndexService.searchTools(query, topK, userId);
+            if (hits.isEmpty()) {
+                return "未找到与「" + query + "」足够相关的工具。"
+                        + " 可换更具体的说法重试；若需封装新能力可用 create_tool；装包/任意 shell 等重活需办公室工具。";
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append("找到 ").append(hits.size()).append(" 个相关工具（按相关度排序，优先用高分）：\n");
+            int i = 1;
+            for (ToolIndexService.ToolHit h : hits) {
+                sb.append(i++).append(". ").append(h.toolName())
+                        .append(h.official() ? " [官方]" : " [Agent工具箱]")
+                        .append("  score=").append(String.format(java.util.Locale.ROOT, "%.2f", h.score()))
+                        .append("  (").append(h.matchReason()).append(")\n");
+                if (h.toolType() != null && !h.toolType().isBlank()) {
+                    sb.append("   类型: ").append(h.toolType()).append('\n');
+                }
+                String desc = h.description() == null ? "" : h.description().trim();
+                if (desc.length() > 220) desc = desc.substring(0, 220) + "…";
+                if (!desc.isEmpty()) sb.append("   ").append(desc).append('\n');
+            }
+            sb.append("说明：请只调用上表中的工具名；若都不合适，勿臆造工具名，可 create_tool 或换 query 再 find_tools。");
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("[Agent] find_tools failed: {}", e.getMessage());
+            return "[ToolError] find_tools 失败: " + e.getMessage();
+        }
+    }
+
     private String executeRecallMemoryTool(String sessionId, String argumentsJson, Long userId) {
         try {
             JsonNode args = objectMapper.readTree(argumentsJson);
@@ -1190,7 +1314,8 @@ public class AgentLoopService {
 
             if (toolName.isEmpty()) return "[ToolError] create_tool 需要非空的 tool_name（仅字母、数字、下划线，如 get_weather）。";
             if (!toolName.matches("[a-zA-Z][a-zA-Z0-9_]*")) return "[ToolError] tool_name 须以字母开头，仅含字母、数字、下划线。";
-            if (Set.of("recall_memory", "store_memory", "tavily_search", "http_request", "create_tool", "install_container_package", "run_container_cmd", "write_container_file").contains(toolName)) {
+            if (Set.of("recall_memory", "store_memory", "find_tools", "tavily_search", "http_request", "create_tool",
+                    "install_container_package", "run_container_cmd", "write_container_file").contains(toolName)) {
                 return "[ToolError] tool_name 不能与内置工具重名: " + toolName;
             }
             if (toolDescription.isEmpty()) return "[ToolError] create_tool 需要非空的 tool_description。";
@@ -1227,8 +1352,9 @@ public class AgentLoopService {
                 entity.setEntryPoint(entryPoint);
                 entity.setIsActive(true);
                 toolRepository.save(entity);
+                toolIndexService.indexToolByName(toolName, userId);
                 log.info("[Agent] create_tool: 已更新用户工具 {} userId={}", toolName, userId);
-                return "工具已更新: " + toolName + "。后续对话中可调用此工具。";
+                return "工具已更新: " + toolName + "。后续对话中可调用此工具；可用 find_tools 检索。";
             }
             if (toolRepository.findByToolNameAndUserIdIsNull(toolName).isPresent()) {
                 return "[ToolError] 工具名 " + toolName + " 与系统工具重名，请换一个名称。";
@@ -1244,8 +1370,9 @@ public class AgentLoopService {
                     .userId(userId)
                     .build();
             toolRepository.save(entity);
+            toolIndexService.indexToolByName(toolName, userId);
             log.info("[Agent] create_tool: 已注册用户工具 {} userId={}", toolName, userId);
-            return "工具已注册: " + toolName + "。后续对话中可调用此工具。注意：脚本类工具当前为占位执行，实际运行需接入执行引擎。";
+            return "工具已注册到 Agent 工具箱: " + toolName + "。平台已保存脚本，后续可直接调用或用 find_tools 检索（无需办公室）。";
         } catch (JsonProcessingException e) {
             return "[ToolError] input_schema 须为合法 JSON 对象: " + e.getMessage();
         } catch (Exception e) {
@@ -1283,53 +1410,13 @@ public class AgentLoopService {
             if (packages.isEmpty()) {
                 return "[ToolError] install_container_package 需要至少一个合法包名，例如 \"python3\"。";
             }
-            if (officeRentalService.hasActiveOffice(userId)) {
-                UserOffice office = officeRentalService.requireActiveOfficeEntity(userId);
-                String result = officeRemoteExecutor.install(office, packages);
-                publisher.publish(AgentEvent.toolOutputChunk(sessionId, toolCallId, result, iteration));
-                return result;
+            if (!officeRentalService.hasActiveOffice(userId)) {
+                return "[ToolError] 请先租用办公室后再安装软件包（办公室工具依赖已开通的办公室）。";
             }
-            if (!scriptDockerProperties.enabled()) {
-                return "[ToolError] 请先租用办公室后再安装软件包（宽边界工具依赖办公室 CVM）。";
-            }
-            String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
-            if (containerIdOrName == null) {
-                return "[ToolError] 无法获取或创建用户 Linux 容器，请确认 Docker 已启动。";
-            }
-            if (!userContainerManager.ensureContainerRunning(containerIdOrName)) {
-                return "[ToolError] 用户容器已停止且无法重新启动，请刷新页面或稍后重试。";
-            }
-            String pkgList = String.join(" ", packages);
-            ProcessBuilder pb = new ProcessBuilder(
-                    "docker", "exec", containerIdOrName,
-                    "sh", "-c", "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y " + pkgList
-            );
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
-            StringBuilder outBuilder = new StringBuilder();
-            AtomicLong lastOutputTime = new AtomicLong(System.currentTimeMillis());
-            Thread reader = new Thread(() -> readProcessOutputWithStreaming(
-                    outBuilder, p.getInputStream(), 50_000,
-                    lastOutputTime, chunk -> publisher.publish(AgentEvent.toolOutputChunk(sessionId, toolCallId, chunk, iteration))
-            ));
-            reader.start();
-            int idleSec = scriptDockerProperties.runContainerCmdIdleTimeoutSeconds();
-            long idleMs = idleSec * 1000L;
-            while (p.isAlive() && !p.waitFor(500, TimeUnit.MILLISECONDS)) {
-                if (p.isAlive() && (System.currentTimeMillis() - lastOutputTime.get() >= idleMs)) {
-                    p.destroyForcibly();
-                    try { reader.join(2000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-                    return "[ToolError] install_container_package 在 " + idleSec + "s 内无新输出，视为卡住已终止。\n" + (outBuilder.length() > 800 ? outBuilder.substring(0, 800) + "..." : outBuilder.toString());
-                }
-            }
-            try { reader.join(2000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-            String output = outBuilder.toString().trim();
-            int exit = p.exitValue();
-            if (exit != 0) {
-                return "[ToolError] 容器内安装失败 (exit " + exit + "): " + (output.length() > 1500 ? output.substring(0, 1500) + "..." : output);
-            }
-            log.info("[Agent:{}] install_container_package 已安装: {}", sessionId, pkgList);
-            return "已在该用户 Linux 容器内安装: " + pkgList + "。\n" + (output.length() > 800 ? output.substring(0, 800) + "..." : output);
+            UserOffice office = officeRentalService.requireActiveOfficeEntity(userId);
+            String result = officeRemoteExecutor.install(office, packages);
+            publisher.publish(AgentEvent.toolOutputChunk(sessionId, toolCallId, result, iteration));
+            return result;
         } catch (Exception e) {
             log.warn("[Agent:{}] install_container_package failed: {}", sessionId, e.getMessage());
             return "[ToolError] install_container_package 执行失败: " + e.getMessage();
@@ -1371,77 +1458,23 @@ public class AgentLoopService {
                     return "[ToolError] run_container_cmd 单条命令不得超过 800 字符（当前 " + cmd.length() + "）。长脚本请使用 write_container_file 写入脚本文件，再通过 run_container_cmd 执行脚本。";
                 }
             }
-            if (officeRentalService.hasActiveOffice(userId)) {
-                UserOffice office = officeRentalService.requireActiveOfficeEntity(userId);
-                StringBuilder all = new StringBuilder();
-                for (int i = 0; i < commandsToRun.size(); i++) {
-                    String one = officeRemoteExecutor.exec(office, commandsToRun.get(i), 300);
-                    publisher.publish(AgentEvent.toolOutputChunk(sessionId, toolCallId, one + "\n", iteration));
-                    if (one.startsWith("[ToolError]")) {
-                        return "第 " + (i + 1) + "/" + commandsToRun.size() + " 条命令失败:\n" + one;
-                    }
-                    if (all.length() > 0) all.append("\n");
-                    all.append(one);
-                }
-                return all.toString().isBlank()
-                        ? "(共 " + commandsToRun.size() + " 条命令在办公室执行成功，无输出)"
-                        : all.toString();
+            if (!officeRentalService.hasActiveOffice(userId)) {
+                return "[ToolError] 请先租用办公室后再执行命令（办公室工具依赖已开通的办公室）。";
             }
-            if (!scriptDockerProperties.enabled()) {
-                return "[ToolError] 请先租用办公室后再执行命令（宽边界工具依赖办公室 CVM）。";
-            }
-            String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
-            if (containerIdOrName == null) {
-                return "[ToolError] 无法获取或创建用户 Linux 容器，请确认 Docker 已启动。";
-            }
-            if (!userContainerManager.ensureContainerRunning(containerIdOrName)) {
-                return "[ToolError] 用户容器已停止且无法重新启动，请刷新页面或稍后重试。";
-            }
-            int idleSec = scriptDockerProperties.runContainerCmdIdleTimeoutSeconds();
-            long idleMs = idleSec * 1000L;
-            StringBuilder allOutput = new StringBuilder();
+            UserOffice office = officeRentalService.requireActiveOfficeEntity(userId);
+            StringBuilder all = new StringBuilder();
             for (int i = 0; i < commandsToRun.size(); i++) {
-                String command = commandsToRun.get(i);
-                ProcessBuilder pb = new ProcessBuilder(
-                        "docker", "exec", containerIdOrName,
-                        "sh", "-c", command
-                );
-                pb.redirectErrorStream(true);
-                Process p = pb.start();
-                StringBuilder outBuilder = new StringBuilder();
-                AtomicLong lastOutputTime = new AtomicLong(System.currentTimeMillis());
-                Thread reader = new Thread(() -> readProcessOutputWithStreaming(
-                        outBuilder, p.getInputStream(), RUN_CONTAINER_CMD_MAX_OUTPUT_CHARS,
-                        lastOutputTime, chunk -> publisher.publish(AgentEvent.toolOutputChunk(sessionId, toolCallId, chunk, iteration))
-                ));
-                reader.start();
-                // 不设总时长：仅当连续无输出超过 idleSec 才视为卡住；长时间有输出（如几小时下载）会一直跑
-                while (p.isAlive() && !p.waitFor(500, TimeUnit.MILLISECONDS)) {
-                    if (p.isAlive()) {
-                        long now = System.currentTimeMillis();
-                        long sinceLastOutput = now - lastOutputTime.get();
-                        if (sinceLastOutput >= idleMs) {
-                            p.destroyForcibly();
-                            try { reader.join(2000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-                            String output = outBuilder.toString().trim();
-                            return "[ToolError] 第 " + (i + 1) + "/" + commandsToRun.size() + " 条命令在 " + idleSec + "s 内无新输出，视为卡住已终止。\n已捕获输出:\n" + (allOutput.length() > 1500 ? allOutput.substring(0, 1500) + "..." : allOutput) + "\n" + (output.length() > 500 ? output.substring(0, 500) + "..." : output);
-                        }
-                    }
+                String one = officeRemoteExecutor.exec(office, commandsToRun.get(i), 300);
+                publisher.publish(AgentEvent.toolOutputChunk(sessionId, toolCallId, one + "\n", iteration));
+                if (one.startsWith("[ToolError]")) {
+                    return "第 " + (i + 1) + "/" + commandsToRun.size() + " 条命令失败:\n" + one;
                 }
-                try { reader.join(2000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-                String output = outBuilder.toString().trim();
-                int exit = p.exitValue();
-                if (exit != 0) {
-                    return "[ToolError] 第 " + (i + 1) + "/" + commandsToRun.size() + " 条命令退出码 " + exit + ":\n" + (output.length() > 3000 ? output.substring(0, 3000) + "..." : output);
-                }
-                if (!output.isEmpty()) {
-                    if (allOutput.length() > 0) allOutput.append("\n");
-                    allOutput.append(output);
-                }
+                if (all.length() > 0) all.append("\n");
+                all.append(one);
             }
-            log.info("[Agent:{}] run_container_cmd 执行成功, {} 条命令", sessionId, commandsToRun.size());
-            String result = allOutput.toString().trim();
-            return result.isEmpty() ? "(共 " + commandsToRun.size() + " 条命令执行成功，无输出)" : result;
+            return all.toString().isBlank()
+                    ? "(共 " + commandsToRun.size() + " 条命令在办公室执行成功，无输出)"
+                    : all.toString();
         } catch (Exception e) {
             log.warn("[Agent:{}] run_container_cmd failed: {}", sessionId, e.getMessage());
             return "[ToolError] run_container_cmd 执行失败: " + e.getMessage();
@@ -1465,79 +1498,37 @@ public class AgentLoopService {
     }
 
     /**
-     * 标准做法：通过 stdin 将内容管道进容器写文件，不经过 shell 参数，故无需转义任何符号（引号、$、反引号等）。
-     * 容器内执行 read -r path 读第一行作为路径，cat > "$path" 或 cat >> "$path" 写剩余 stdin。
-     * 单次 content 不得超过 WRITE_CONTAINER_FILE_MAX_CONTENT_CHARS，长脚本分多次调用、append=true 追加。
+     * 在办公室环境写文件。长脚本可分多次调用、append=true 追加。
      */
     private String executeWriteContainerFile(String sessionId, String argumentsJson, Long userId) {
         if (userId == null) {
             return "[ToolError] write_container_file 需要已登录用户。";
         }
-        Path tempFile = null;
         try {
             JsonNode args = objectMapper.readTree(argumentsJson);
             String path = args.path("path").asText("").trim();
             String content = args.has("content") ? args.get("content").asText("") : "";
             boolean append = args.path("append").asBoolean(false);
             if (path.isEmpty()) {
-                return "[ToolError] write_container_file 需要非空的 path（容器内文件路径，不要包含换行）。";
+                return "[ToolError] write_container_file 需要非空的 path（办公室环境内文件路径，不要包含换行）。";
             }
             if (path.contains("\n") || path.contains("\r")) {
                 return "[ToolError] write_container_file 的 path 不能包含换行符。";
             }
-            if (officeRentalService.hasActiveOffice(userId)) {
-                UserOffice office = officeRentalService.requireActiveOfficeEntity(userId);
-                if (append) {
-                    // 简化：办公室路径先读后拼（exec cat）；失败则直接覆盖写
-                    String existing = officeRemoteExecutor.exec(office, "cat " + path + " 2>/dev/null || true", 30);
-                    if (!existing.startsWith("[ToolError]")) {
-                        content = existing + content;
-                    }
+            if (!officeRentalService.hasActiveOffice(userId)) {
+                return "[ToolError] 请先租用办公室后再写文件（办公室工具依赖已开通的办公室）。";
+            }
+            UserOffice office = officeRentalService.requireActiveOfficeEntity(userId);
+            if (append) {
+                String existing = officeRemoteExecutor.exec(office, "cat " + path + " 2>/dev/null || true", 30);
+                if (!existing.startsWith("[ToolError]")) {
+                    content = existing + content;
                 }
-                return officeRemoteExecutor.write(office, path, content);
             }
-            if (!scriptDockerProperties.enabled()) {
-                return "[ToolError] 请先租用办公室后再写文件（宽边界工具依赖办公室 CVM）。";
-            }
-            String containerIdOrName = userContainerManager.getOrCreateContainer(userId);
-            if (containerIdOrName == null) {
-                return "[ToolError] 无法获取或创建用户 Linux 容器。";
-            }
-            if (!userContainerManager.ensureContainerRunning(containerIdOrName)) {
-                return "[ToolError] 用户容器已停止且无法重新启动，请刷新页面或稍后重试。";
-            }
-            tempFile = Files.createTempFile("aimate_wcf_", ".dat");
-            Files.writeString(tempFile, path + "\n" + content, StandardCharsets.UTF_8);
-            String shellCmd = append ? "read -r path; cat >> \"$path\"" : "read -r path; cat > \"$path\"";
-            ProcessBuilder pb = new ProcessBuilder(
-                    "docker", "exec", "-i", containerIdOrName,
-                    "sh", "-c", shellCmd
-            );
-            pb.redirectInput(ProcessBuilder.Redirect.from(tempFile.toFile()));
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
-            StringBuilder outBuilder = new StringBuilder();
-            Thread reader = new Thread(() -> readProcessOutputInto(outBuilder, p.getInputStream(), 4000));
-            reader.start();
-            boolean finished = p.waitFor(60, java.util.concurrent.TimeUnit.SECONDS);
-            try { reader.join(2000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-            if (!finished) {
-                p.destroyForcibly();
-                return "[ToolError] write_container_file 超时（60s）。";
-            }
-            int exit = p.exitValue();
-            if (exit != 0) {
-                return "[ToolError] write_container_file 失败 exit " + exit + ": " + outBuilder.toString().trim();
-            }
-            log.info("[Agent:{}] write_container_file 已写入 {} (append={})", sessionId, path, append);
-            return "已写入容器内文件: " + path + " (" + (append ? "追加" : "覆盖") + "), " + content.length() + " 字节。";
+            return officeRemoteExecutor.write(office, path, content);
         } catch (Exception e) {
             log.warn("[Agent:{}] write_container_file failed: {}", sessionId, e.getMessage());
             return "[ToolError] write_container_file 执行失败: " + e.getMessage();
-        } finally {
-            if (tempFile != null) {
-                try { Files.deleteIfExists(tempFile); } catch (Exception ignored) { }
-            }
         }
     }
 
@@ -1634,22 +1625,25 @@ public class AgentLoopService {
      * When the index is unavailable or returns nothing, falls back to all active tools.
      * Respects user tool settings (memory, web search, create_tool, script exec).
      */
-    private List<Tool> loadRelevantTools(String queryText, int topK, Long userId) {
-        List<String> relevantIds = toolIndexService.searchRelevantTools(queryText, topK, userId);
-        if (relevantIds == null || relevantIds.isEmpty()) {
-            return loadAllTools(userId);
+    private List<Tool> loadRelevantTools(String queryText, int topK, Long userId, AgentSession session) {
+        List<ToolIndexService.ToolHit> hits = toolIndexService.searchTools(queryText, topK, userId);
+        if (hits == null || hits.isEmpty()) {
+            return loadAllTools(userId, session);
         }
         List<Tool> fromSearch = new ArrayList<>();
         Set<String> added = new java.util.LinkedHashSet<>();
-        for (String id : relevantIds) {
-            if (id == null || !added.add(id)) continue;
-            findToolByNameAndUser(id, userId).map(this::toTool).ifPresent(fromSearch::add);
+        for (ToolIndexService.ToolHit hit : hits) {
+            if (hit == null || hit.toolName() == null || !added.add(hit.toolName())) continue;
+            findToolByNameAndUser(hit.toolName(), userId).map(this::toTool).ifPresent(fromSearch::add);
         }
-        return ensureSystemToolsFirst(fromSearch, userId);
+        if (fromSearch.isEmpty()) {
+            return loadAllTools(userId, session);
+        }
+        return ensureSystemToolsFirst(fromSearch, userId, session);
     }
 
     /** 从 agent_tools 表加载系统工具 + 当前用户工具；按用户工具开关过滤。 */
-    private List<Tool> loadAllTools(Long userId) {
+    private List<Tool> loadAllTools(Long userId, AgentSession session) {
         List<AgentTool> systemTools = toolRepository.findByUserIdIsNullAndIsActiveTrue();
         List<AgentTool> userTools = userId != null ? toolRepository.findByUserIdAndIsActiveTrue(userId) : List.of();
         List<Tool> base = new ArrayList<>();
@@ -1658,7 +1652,7 @@ public class AgentLoopService {
         if (base.isEmpty()) {
             log.debug("[Agent] agent_tools 表为空，使用内置工具（可执行 seed_builtin_tools.sql 将内置工具入库）");
         }
-        return ensureSystemToolsFirst(base, userId);
+        return ensureSystemToolsFirst(base, userId, session);
     }
 
     /** 先查系统工具，再查当前用户工具（用于执行与工具列表）。 */
@@ -1669,31 +1663,29 @@ public class AgentLoopService {
         return Optional.empty();
     }
 
-    private static final Set<String> SYSTEM_TOOL_NAMES_SET = Set.of("recall_memory", "store_memory", "tavily_search", "http_request");
+    private static final Set<String> SYSTEM_TOOL_NAMES_SET = Set.of(
+            "recall_memory", "store_memory", "find_tools", "tavily_search", "http_request");
     /** 由代码直接构建、不从 DB 重复加载的工具名 */
     private static final Set<String> CODE_BUILT_TOOL_NAMES = Set.of(
-            "recall_memory", "store_memory", "tavily_search", "http_request", "create_tool",
+            "recall_memory", "store_memory", "find_tools", "tavily_search", "http_request", "create_tool",
+            "dispatch_local_task",
             "install_container_package", "run_container_cmd", "write_container_file");
 
     /**
      * 按用户工具开关组装修复：长期记忆、联网搜索（Tavily）、HTTP、AI 编写工具、脚本执行。
-     * 将启用的系统工具置于列表前，再追加 DB 中非内置工具。
-     * Docker 未启用时不暴露容器类工具，避免 Agent 误用 curl。
+     * 官方工具 → Agent 工具箱（DB）→ create_tool（无需办公室）→ 办公室重活工具（需开通）。
      * <p>
      * 联网搜索 = Tavily（需后台配置 TAVILY_API_KEY + 用户开启 webSearchEnabled）。
      * http_request 是独立的 HTTP 调用工具，不绑定联网搜索开关。
      */
-    private List<Tool> ensureSystemToolsFirst(List<Tool> tools, Long userId) {
-        UserToolSettings settings = userToolSettingsService.getOrCreate(userId);
-        boolean memoryEnabled = systemConfigService.isRagMemoryEnabled()
-                && (settings == null || Boolean.TRUE.equals(settings.getMemoryEnabled()));
-        boolean webSearchEnabled = settings == null || Boolean.TRUE.equals(settings.getWebSearchEnabled());
+    private List<Tool> ensureSystemToolsFirst(List<Tool> tools, Long userId, AgentSession session) {
+        var settings = userToolSettingsService.resolveForSession(session, userId);
+        boolean memoryEnabled = systemConfigService.isRagMemoryEnabled() && settings.memoryEnabled();
+        boolean webSearchEnabled = settings.webSearchEnabled();
         boolean tavilyConfigured = systemConfigService.getTavilyApiKey().isPresent();
-        boolean createToolEnabled = settings == null || Boolean.TRUE.equals(settings.getCreateToolEnabled());
-        boolean scriptExecEnabled = settings == null || Boolean.TRUE.equals(settings.getScriptExecEnabled());
+        boolean createToolEnabled = settings.createToolEnabled();
+        boolean scriptExecEnabled = settings.scriptExecEnabled();
         boolean hasOffice = userId != null && officeRentalService.hasActiveOffice(userId);
-        boolean dockerOn = scriptDockerProperties.enabled();
-        boolean wideWorkspace = hasOffice || dockerOn;
 
         List<Tool> out = new ArrayList<>();
         if (memoryEnabled) {
@@ -1705,19 +1697,61 @@ public class AgentLoopService {
         }
         // http_request：通用 HTTP 请求工具，与联网搜索无关
         out.add(buildHttpRequestTool());
+        // find_tools：工具库召回（工具多时先搜再调）
+        out.add(buildFindToolsTool());
         for (Tool t : tools) {
             if (!CODE_BUILT_TOOL_NAMES.contains(t.function().name())) out.add(t);
         }
-        // 宽边界工具：优先办公室 CVM；无办公室时不暴露（平台仅基础工具）
-        if (scriptExecEnabled && wideWorkspace) {
+        // Agent 可沉淀简单工具（查天气等），平台保存并执行，不依赖办公室
+        if (createToolEnabled) {
+            out.add(buildCreateToolTool());
+        }
+        // 本机桥接：单聊开启「使用本机」时，Agent 先正常聊，需要控本机再 dispatch_local_task
+        if (session != null && session.getUserAgentId() != null) {
+            userAgentRepository.findById(session.getUserAgentId()).ifPresent(ua -> {
+                if (LocalBridgeService.isDmLocalAssistEnabled(ua)) {
+                    out.add(buildDispatchLocalTaskTool());
+                }
+            });
+        }
+        // 办公室：仅装包/任意命令/写沙箱等重活
+        if (scriptExecEnabled && hasOffice) {
             out.add(buildInstallContainerPackageTool());
             out.add(buildRunContainerCmdTool());
             out.add(buildWriteContainerFileTool());
         }
-        if (createToolEnabled && hasOffice) {
-            out.add(buildCreateToolTool());
-        }
         return out;
+    }
+
+    private Tool buildFindToolsTool() {
+        String schema = """
+                {
+                  "type":"object",
+                  "properties":{
+                    "query":{
+                      "type":"string",
+                      "description":"Natural language description of the capability you need (e.g. 查天气, weather API, 安装 JDK, HTTP 请求). Prefer concrete verbs/nouns over vague words."
+                    },
+                    "top_k":{
+                      "type":"integer",
+                      "minimum":1,
+                      "maximum":20,
+                      "description":"Max tools to return (default 8)."
+                    }
+                  },
+                  "required":["query"]
+                }
+                """;
+        try {
+            JsonNode params = objectMapper.readTree(schema);
+            return Tool.ofFunction(new ToolFunction(
+                    "find_tools",
+                    "Search the tool catalog (official + this user's Agent toolbox) by natural language, like recall_memory but for tools. Use when the toolbox is large or you are unsure which tool to call. Returns a ranked list with relevance scores—prefer higher scores; never invent tool names not returned.",
+                    params
+            ));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to build find_tools schema", e);
+        }
     }
 
     private Tool buildHttpRequestTool() {
@@ -1996,7 +2030,7 @@ public class AgentLoopService {
             JsonNode params = objectMapper.readTree(schema);
             return Tool.ofFunction(new ToolFunction(
                     "create_tool",
-                    "Create or update a new tool that the agent can call later. Use when the user asks you to 'create a tool', 'add a capability', 'write a tool for X', or to implement a reusable script/function. You must provide tool_name (unique id), tool_description (when to use it), input_schema (JSON Schema string), and tool_type (PYTHON_SCRIPT, NODE_SCRIPT, or SHELL_CMD). Optionally provide script_content (source code) and entry_point (filename). Only script-based tools can be created; JAVA_NATIVE is not allowed.",
+                    "Create or update a simple Agent-toolbox tool the PLATFORM stores and executes (no Office needed). Use after a successful third-party API call (e.g. weather) to crystallize a reusable wrapper, or when the user asks to 'create a tool' / 'add a capability'. Prefer for safe scripts (HTTP/API wrappers, small Python/Node helpers). For installing JDK, apt packages, or arbitrary VM shell, use Office tools instead. Provide tool_name, tool_description, input_schema (JSON Schema string), tool_type (PYTHON_SCRIPT/NODE_SCRIPT/SHELL_CMD); optional script_content and entry_point.",
                     params
             ));
         } catch (JsonProcessingException e) {

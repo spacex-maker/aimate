@@ -7,10 +7,17 @@ import {
   multiAgentApi,
   type AgentCareer,
   type AgentCatalogItem,
+  type AgentGender,
   type AgentIndustry,
   type RentPeriod,
 } from '../api/multiAgent'
 import clsx from 'clsx'
+
+const GENDER_OPTIONS: { id: AgentGender; label: string }[] = [
+  { id: 'FEMALE', label: '女' },
+  { id: 'MALE', label: '男' },
+  { id: 'OTHER', label: '其他' },
+]
 
 const PERIODS: { id: RentPeriod; label: string }[] = [
   { id: 'DAY', label: '包日' },
@@ -54,6 +61,14 @@ export function AgentHirePage() {
   const [industryId, setIndustryId] = useState<number | null>(null)
   const [careerId, setCareerId] = useState<number | null>(null)
   const [selected, setSelected] = useState<AgentCatalogItem | null>(null)
+  const [givenName, setGivenName] = useState('')
+  const [gender, setGender] = useState<AgentGender | null>(null)
+
+  const openHire = (item: AgentCatalogItem) => {
+    setSelected(item)
+    setGivenName('')
+    setGender(null)
+  }
 
   const quoteQ = useQuery({
     queryKey: ['agent-quote', selected?.id, period],
@@ -61,12 +76,23 @@ export function AgentHirePage() {
     enabled: !!selected,
   })
 
+  const identityOk =
+    givenName.trim().length >= 1 &&
+    givenName.trim().length <= 32 &&
+    gender != null
+
   const hireMut = useMutation({
-    mutationFn: () => multiAgentApi.hire(selected!.id, period),
+    mutationFn: () =>
+      multiAgentApi.hire(selected!.id, period, {
+        name: givenName.trim(),
+        gender: gender!,
+      }),
     onSuccess: (r) => {
-      toast.success(`招聘成功，扣 ${r.totalPoints} 积分`)
+      toast.success(`已与「${givenName.trim()}」建立伙伴关系，扣 ${r.totalPoints} 积分`)
       qc.invalidateQueries({ queryKey: ['my-agents'] })
       setSelected(null)
+      setGivenName('')
+      setGender(null)
     },
     onError: (e: Error) => toast.error(e.message || '招聘失败'),
   })
@@ -147,7 +173,9 @@ export function AgentHirePage() {
             <Briefcase className="h-6 w-6 text-cyan-300" />
             Agent 招聘
           </h1>
-          <p className="mt-1 text-sm text-white/45">先选行业，再选职业与等级；费用含 Agent 租用与 Soul 席位</p>
+          <p className="mt-1 text-sm text-white/45">
+            先选岗位，确认时为伙伴取名并选定性别——写入 Soul 后不可更改，这是建立真正伙伴关系的第一步
+          </p>
         </div>
         <div className="flex rounded-lg bg-white/[0.04] p-0.5">
           {PERIODS.map((p) => (
@@ -316,7 +344,7 @@ export function AgentHirePage() {
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setSelected(item)}
+                onClick={() => openHire(item)}
                 className="rounded-xl bg-white/[0.04] p-4 text-left ring-1 ring-inset ring-white/[0.04] hover:bg-cyan-400/[0.06] hover:ring-cyan-400/20 transition-colors"
               >
                 <div className="text-sm font-semibold text-white">{item.name}</div>
@@ -410,6 +438,53 @@ export function AgentHirePage() {
               </div>
 
               <div className="relative z-10 flex-1 overflow-y-auto px-5 pb-5">
+                <div className="mt-3 rounded-xl border border-cyan-400/20 bg-cyan-500/[0.07] px-3.5 py-3">
+                  <p className="text-[11px] leading-relaxed text-cyan-50/85">
+                    为这位伙伴取一个真名，并选定性别。名字与性别将写入 Soul 灵魂档案，
+                    <span className="font-medium text-cyan-100">创建后不可更改</span>
+                    ——这是建立真正的伙伴、朋友、同事或亲密关系的第一步。
+                  </p>
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <label className="text-[11px] text-white/50 block mb-1">
+                        伙伴的名字 <span className="text-rose-300/80">必填 · 不可改</span>
+                      </label>
+                      <input
+                        value={givenName}
+                        onChange={(e) => setGivenName(e.target.value)}
+                        maxLength={32}
+                        placeholder="例如：小满、Alex…"
+                        className="w-full rounded-lg bg-black/30 border border-white/10 px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-cyan-500/50"
+                      />
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-white/50 mb-1.5">
+                        性别 <span className="text-rose-300/80">必选 · 不可改</span>
+                      </div>
+                      <div className="flex gap-2">
+                        {GENDER_OPTIONS.map((g) => (
+                          <button
+                            key={g.id}
+                            type="button"
+                            onClick={() => setGender(g.id)}
+                            className={clsx(
+                              'flex-1 rounded-lg py-2 text-xs ring-1 ring-inset transition-colors',
+                              gender === g.id
+                                ? 'bg-cyan-500/20 text-cyan-100 ring-cyan-400/40'
+                                : 'bg-white/[0.03] text-white/50 ring-white/10 hover:text-white/75',
+                            )}
+                          >
+                            {g.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-white/35 leading-relaxed">
+                      生日为开通当天；年龄将随真实时间增长。岗位「{selected.name}」仅表示能力档位，不等于伙伴的名字。
+                    </p>
+                  </div>
+                </div>
+
                 <div className="mt-3 space-y-2 rounded-xl bg-white/[0.04] p-3.5 text-sm">
                   {(quoteQ.data?.lines ?? []).map((l) => (
                     <div key={l.label} className="flex justify-between text-white/65">
@@ -433,11 +508,17 @@ export function AgentHirePage() {
                   </button>
                   <button
                     type="button"
-                    disabled={hireMut.isPending || !quoteQ.data}
+                    disabled={hireMut.isPending || !quoteQ.data || !identityOk}
                     className="flex-1 rounded-xl bg-cyan-500/90 py-2.5 text-sm font-medium text-black hover:bg-cyan-400 disabled:opacity-40 transition-colors"
-                    onClick={() => hireMut.mutate()}
+                    onClick={() => {
+                      if (!identityOk) {
+                        toast.error('请先取名并选择性别')
+                        return
+                      }
+                      hireMut.mutate()
+                    }}
                   >
-                    {hireMut.isPending ? '处理中…' : '确认招聘'}
+                    {hireMut.isPending ? '处理中…' : '确认建立伙伴关系'}
                   </button>
                 </div>
               </div>

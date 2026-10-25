@@ -1,5 +1,6 @@
 package com.openforge.aimate.agent;
 
+import com.openforge.aimate.agent.dto.SessionResponse;
 import com.openforge.aimate.domain.RentPeriod;
 import com.openforge.aimate.memory.SoulMemoryBridge;
 import lombok.RequiredArgsConstructor;
@@ -56,7 +57,9 @@ public class UserAgentController {
             return agentHireService.hire(
                     requireUserId(),
                     body.catalogId(),
-                    RentPeriod.valueOf(body.period().trim().toUpperCase())
+                    RentPeriod.valueOf(body.period().trim().toUpperCase()),
+                    body.name(),
+                    body.gender()
             );
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
@@ -91,6 +94,18 @@ public class UserAgentController {
             return userAgentService.detail(requireUserId(), id);
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        }
+    }
+
+    /** 打开与该 Agent 的单聊：有旧会话则复用，否则新建空会话 */
+    @PostMapping("/me/agents/{id}/open-chat")
+    public SessionResponse openChat(@PathVariable Long id) {
+        try {
+            return userAgentService.openChat(requireUserId(), id);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
         }
     }
 
@@ -157,7 +172,8 @@ public class UserAgentController {
         throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "未登录");
     }
 
-    public record HireBody(Long catalogId, String period) {}
+    /** name / gender 必填：伙伴真名与性别，写入 Soul 后不可更改 */
+    public record HireBody(Long catalogId, String period, String name, String gender) {}
     public record RenewBody(String period) {}
     public record ExcludeBody(List<String> atomIds) {}
     public record AvatarBody(String image, Boolean clear) {}

@@ -90,11 +90,16 @@ public class OfficialKnowledgeService {
             Long categoryId,
             Boolean enabled,
             String q,
+            String tag,
+            String code,
             int page,
             int size
     ) {
         int p = Math.max(0, page);
         int s = Math.min(100, Math.max(1, size));
+        String qFilter = blankToNull(q);
+        String tagFilter = blankToNull(tag);
+        String codeFilter = blankToNull(code);
         // 选中分类时：含该节点及其所有子孙挂载的知识
         List<Long> categoryIds = null;
         if (categoryId != null) {
@@ -104,12 +109,13 @@ public class OfficialKnowledgeService {
         if (categoryIds != null && categoryIds.size() > 1) {
             final List<Long> catIds = categoryIds;
             final Boolean enabledFilter = enabled;
-            final String qFilter = q;
             // 多分类：含子分类挂载的知识，内存筛选后分页
             List<KnowledgeBase> all = knowledgeBaseRepository.findAll().stream()
                     .filter(k -> catIds.contains(k.getCategoryId()))
                     .filter(k -> enabledFilter == null || k.isEnabled() == enabledFilter)
                     .filter(k -> matchQ(k, qFilter))
+                    .filter(k -> matchContains(k.getTags(), tagFilter))
+                    .filter(k -> matchContains(k.getCode(), codeFilter))
                     .sorted((a, b) -> {
                         int d = Integer.compare(a.getSortOrder(), b.getSortOrder());
                         return d != 0 ? d : Long.compare(a.getId(), b.getId());
@@ -117,13 +123,14 @@ public class OfficialKnowledgeService {
                     .toList();
             int from = Math.min(p * s, all.size());
             int to = Math.min(from + s, all.size());
-            List<Map<String, Object>> items = all.subList(from, to).stream().map(this::kbView).toList();
+            List<Map<String, Object>> items = all.subList(from, to).stream().map(this::kbListView).toList();
             int totalPages = s == 0 ? 0 : (int) Math.ceil(all.size() / (double) s);
             return pageResult(items, p, s, all.size(), totalPages);
         }
         Long singleCat = categoryIds != null && categoryIds.size() == 1 ? categoryIds.get(0) : categoryId;
-        result = knowledgeBaseRepository.search(singleCat, enabled, blankToNull(q), PageRequest.of(p, s));
-        List<Map<String, Object>> items = result.getContent().stream().map(this::kbView).toList();
+        result = knowledgeBaseRepository.search(
+                singleCat, enabled, qFilter, tagFilter, codeFilter, PageRequest.of(p, s));
+        List<Map<String, Object>> items = result.getContent().stream().map(this::kbListView).toList();
         return pageResult(items, p, s, result.getTotalElements(), result.getTotalPages());
     }
 
@@ -307,6 +314,11 @@ public class OfficialKnowledgeService {
                 || contains(k.getCode(), needle);
     }
 
+    private static boolean matchContains(String hay, String needle) {
+        if (!StringUtils.hasText(needle)) return true;
+        return contains(hay, needle.trim().toLowerCase());
+    }
+
     private static boolean contains(String hay, String needle) {
         return hay != null && hay.toLowerCase().contains(needle);
     }
@@ -324,9 +336,11 @@ public class OfficialKnowledgeService {
         return m;
     }
 
-    private Map<String, Object> kbView(KnowledgeBase k) {
+    private Map<String, Object> kbListView(KnowledgeBase k) {
         Map<String, Object> m = kbBrief(k);
-        m.put("content", k.getContent());
+        String content = k.getContent();
+        int len = content == null ? 0 : content.trim().length();
+        m.put("contentLength", len);
         m.put("sortOrder", k.getSortOrder());
         m.put("enabled", k.isEnabled());
         m.put("createTime", k.getCreateTime());
@@ -336,6 +350,12 @@ public class OfficialKnowledgeService {
             m.put("categoryCode", cat.getCode());
         });
         m.put("linkedCatalogCount", catalogKnowledgeRepository.countByKnowledgeBaseId(k.getId()));
+        return m;
+    }
+
+    private Map<String, Object> kbView(KnowledgeBase k) {
+        Map<String, Object> m = kbListView(k);
+        m.put("content", k.getContent());
         return m;
     }
 

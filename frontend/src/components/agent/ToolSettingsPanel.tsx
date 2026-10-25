@@ -10,10 +10,14 @@ const SAVE_DEBOUNCE_MS = 400
 
 interface Props {
   onClose?: () => void
+  /** 单聊会话：有则读写会话覆盖 */
+  sessionId?: string | null
+  /** 首页选中的伙伴：无 session 时按 Agent 默认展示，改写时会先打开单聊再覆盖 */
+  userAgentId?: number | null
 }
 
 const LABELS: Record<
-  keyof ToolSettingsDto,
+  keyof Omit<ToolSettingsDto, 'overridden'>,
   { title: string; hint: string; icon: typeof Brain }
 > = {
   memoryEnabled: {
@@ -28,15 +32,17 @@ const LABELS: Record<
   },
   createToolEnabled: {
     title: '自主编写工具',
-    hint: 'Agent 可按需生成并调用临时工具',
+    hint: 'Agent 可沉淀简单工具到工具箱，由平台保存并执行（无需办公室）',
     icon: Code2,
   },
   scriptExecEnabled: {
-    title: '脚本执行',
-    hint: '在隔离环境中运行用户系统脚本',
+    title: '办公室脚本',
+    hint: '开通办公室后：装包 / 任意命令 / 写沙箱文件等重活',
     icon: Terminal,
   },
 }
+
+type FlagKey = keyof typeof LABELS
 
 function ToggleSwitch({
   checked,
@@ -66,24 +72,27 @@ function ToggleSwitch({
   )
 }
 
-export function ToolSettingsPanel({ onClose: _onClose }: Props) {
+export function ToolSettingsPanel({ onClose: _onClose, sessionId = null, userAgentId = null }: Props) {
   const queryClient = useQueryClient()
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scope = { sessionId, userAgentId }
+  const queryKey = ['tool-settings', sessionId ?? null, userAgentId ?? null] as const
+
   const { data: settings, isLoading } = useQuery({
-    queryKey: ['tool-settings'],
-    queryFn: () => agentApi.getToolSettings(),
+    queryKey,
+    queryFn: () => agentApi.getToolSettings(scope),
   })
 
   const updateMutation = useMutation({
-    mutationFn: (body: ToolSettingsDto) => agentApi.updateToolSettings(body),
+    mutationFn: (body: ToolSettingsDto) => agentApi.updateToolSettings(body, scope),
     onMutate: async (next) => {
-      await queryClient.cancelQueries({ queryKey: ['tool-settings'] })
-      const prev = queryClient.getQueryData<ToolSettingsDto>(['tool-settings'])
-      queryClient.setQueryData<ToolSettingsDto>(['tool-settings'], next)
+      await queryClient.cancelQueries({ queryKey })
+      const prev = queryClient.getQueryData<ToolSettingsDto>(queryKey)
+      queryClient.setQueryData<ToolSettingsDto>(queryKey, { ...next, overridden: true })
       return { prev }
     },
     onError: (_err, _next, ctx) => {
-      if (ctx?.prev) queryClient.setQueryData(['tool-settings'], ctx.prev)
+      if (ctx?.prev) queryClient.setQueryData(queryKey, ctx.prev)
       toast.error('保存失败')
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['tool-settings'] }),
@@ -96,17 +105,19 @@ export function ToolSettingsPanel({ onClose: _onClose }: Props) {
     []
   )
 
-  const handleToggle = (key: keyof ToolSettingsDto, value: boolean) => {
+  const handleToggle = (key: FlagKey, value: boolean) => {
     if (!settings) return
-    const next: ToolSettingsDto = { ...settings, [key]: value }
-    queryClient.setQueryData<ToolSettingsDto>(['tool-settings'], next)
+    const next: ToolSettingsDto = { ...settings, [key]: value, overridden: true }
+    queryClient.setQueryData<ToolSettingsDto>(queryKey, next)
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
       debounceRef.current = null
-      const latest = queryClient.getQueryData<ToolSettingsDto>(['tool-settings'])
+      const latest = queryClient.getQueryData<ToolSettingsDto>(queryKey)
       if (latest) updateMutation.mutate(latest)
     }, SAVE_DEBOUNCE_MS)
   }
+
+  const followingAgent = settings != null && settings.overridden === false
 
   return (
     <div
@@ -121,13 +132,19 @@ export function ToolSettingsPanel({ onClose: _onClose }: Props) {
         <h3 className="relative text-[11px] font-semibold tracking-wide text-white/80 uppercase">
           系统工具
         </h3>
-        <p className="relative mt-0.5 text-[10px] text-white/35">按会话能力开关，更改即时生效</p>
+        <p className="relative mt-0.5 text-[10px] text-white/35">
+          {followingAgent
+            ? '当前跟随 Agent 默认；在此修改仅影响本会话'
+            : settings?.overridden
+              ? '本会话已单独设置；改 Agent 默认会同步到所有单聊'
+              : '按会话能力开关，更改即时生效'}
+        </p>
       </div>
       <div className="p-2 space-y-1">
         {isLoading ? (
           <p className="text-xs text-white/40 py-4 text-center">加载中…</p>
         ) : (
-          (Object.keys(LABELS) as (keyof ToolSettingsDto)[]).map((key) => {
+          (Object.keys(LABELS) as FlagKey[]).map((key) => {
             const { title, hint, icon: Icon } = LABELS[key]
             const checked = settings?.[key] ?? true
             return (

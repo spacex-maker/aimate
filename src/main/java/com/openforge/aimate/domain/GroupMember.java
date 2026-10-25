@@ -59,6 +59,21 @@ public class GroupMember extends BaseEntity {
     @Column(name = "agent_reply_mode", length = 32)
     private AgentReplyMode agentReplyMode;
 
+    /**
+     * 是否允许非主人的其他群成员通过 @ / 回复 触发本 Agent。
+     * 仅 AGENT 有效；主人始终可触发。默认 true。
+     * Agent 互 @ 另受「同主人」约束，不受本开关放开跨主人。
+     */
+    @Column(name = "others_may_mention", nullable = false)
+    private boolean othersMayMention = true;
+
+    /**
+     * 被他人 @（含同主人其他 Agent）时是否先请示所属人类。
+     * 主人本人点名不请示。默认 false。
+     */
+    @Column(name = "require_owner_approval_on_mention", nullable = false)
+    private boolean requireOwnerApprovalOnMention = false;
+
     @Column(name = "joined_at", nullable = false)
     private LocalDateTime joinedAt = LocalDateTime.now();
 

@@ -2,6 +2,7 @@ package com.openforge.aimate.office;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.openforge.aimate.domain.AgentTool;
 import com.openforge.aimate.domain.UserOffice;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -63,6 +64,45 @@ public class OfficeRemoteExecutor {
             return "[ToolError] 办公室写文件失败: " + n;
         }
         return "已写入办公室文件: " + path;
+    }
+
+    /**
+     * 在办公室 CVM 上执行 Agent 工具箱脚本：写入脚本与参数文件后直接执行（依赖 shebang）。
+     */
+    public String runScriptTool(UserOffice office, AgentTool tool, String argumentsJson) {
+        String content = tool.getScriptContent();
+        if (content == null || content.isBlank()) {
+            return "[ToolError] Script content is empty for tool: " + tool.getToolName();
+        }
+        String safe = tool.getToolName() == null ? "tool" : tool.getToolName().replaceAll("[^a-zA-Z0-9._-]", "_");
+        String ext = switch (tool.getToolType()) {
+            case PYTHON_SCRIPT -> ".py";
+            case NODE_SCRIPT -> ".js";
+            case SHELL_CMD -> ".sh";
+            default -> "";
+        };
+        String scriptPath = "/tmp/aimate_tools/" + safe + ext;
+        String argsPath = scriptPath + ".args.json";
+        String body = ensureShebang(content, tool.getToolType());
+        String w1 = write(office, scriptPath, body);
+        if (w1.startsWith("[ToolError]")) return w1;
+        String args = (argumentsJson != null && !argumentsJson.isBlank()) ? argumentsJson : "{}";
+        String w2 = write(office, argsPath, args);
+        if (w2.startsWith("[ToolError]")) return w2;
+        String cmd = "mkdir -p /tmp/aimate_tools && chmod +x " + scriptPath
+                + " && PYTHONUNBUFFERED=1 " + scriptPath + " < " + argsPath;
+        return exec(office, cmd, 120);
+    }
+
+    private static String ensureShebang(String content, AgentTool.ToolType type) {
+        String t = content.stripLeading();
+        if (t.startsWith("#!")) return content;
+        return switch (type) {
+            case PYTHON_SCRIPT -> "#!/usr/bin/env python3\n" + content;
+            case NODE_SCRIPT -> "#!/usr/bin/env node\n" + content;
+            case SHELL_CMD -> "#!/bin/bash\n" + content;
+            default -> content;
+        };
     }
 
     public boolean health(UserOffice office) {

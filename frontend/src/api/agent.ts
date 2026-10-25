@@ -95,6 +95,12 @@ export const agentApi = {
       body: JSON.stringify({ archived }),
     }),
 
+  renameSession: (sessionId: string, title: string) =>
+    http<SessionResponse>(`${BASE}/${sessionId}/title`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+
   continueSession: (
     sessionId: string,
     body: { message: string; modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null; images?: string[] }
@@ -165,15 +171,33 @@ export const agentApi = {
       headers: { 'Content-Type': 'application/json' },
     }),
 
-  /** 当前用户系统工具开关（长期记忆、联网搜索、AI 编写工具、脚本执行） */
-  getToolSettings: () =>
-    http<ToolSettingsDto>('/api/agent/tool-settings'),
+  /**
+   * 系统工具开关。
+   * 传 sessionId / userAgentId 时：单聊生效值（会话覆盖优先，否则 Agent 默认）。
+   * 都不传：用户级（兼容）。
+   */
+  getToolSettings: (params?: { sessionId?: string | null; userAgentId?: number | null }) => {
+    const q = new URLSearchParams()
+    if (params?.sessionId) q.set('sessionId', params.sessionId)
+    if (params?.userAgentId != null) q.set('userAgentId', String(params.userAgentId))
+    const qs = q.toString()
+    return http<ToolSettingsDto>(`/api/agent/tool-settings${qs ? `?${qs}` : ''}`)
+  },
 
-  /** 更新系统工具开关 */
-  updateToolSettings: (body: ToolSettingsDto) =>
-    http<ToolSettingsDto>('/api/agent/tool-settings', {
+  /** 更新系统工具开关（带 sessionId/userAgentId 时写入单聊覆盖） */
+  updateToolSettings: (
+    body: ToolSettingsDto,
+    params?: { sessionId?: string | null; userAgentId?: number | null },
+  ) => {
+    const q = new URLSearchParams()
+    if (params?.sessionId) q.set('sessionId', params.sessionId)
+    if (params?.userAgentId != null) q.set('userAgentId', String(params.userAgentId))
+    const qs = q.toString()
+    const { overridden: _o, ...flags } = body
+    return http<ToolSettingsDto>(`/api/agent/tool-settings${qs ? `?${qs}` : ''}`, {
       method: 'PUT',
-      body: JSON.stringify(body),
+      body: JSON.stringify(flags),
       headers: { 'Content-Type': 'application/json' },
-    }),
+    })
+  },
 }

@@ -2,11 +2,9 @@ package com.openforge.aimate.agent;
 
 import com.openforge.aimate.agent.dto.ContextUsageDto;
 import com.openforge.aimate.domain.AgentSession;
-import com.openforge.aimate.domain.SessionMessage;
 import com.openforge.aimate.domain.SystemModel;
 import com.openforge.aimate.llm.TokenCounter;
 import com.openforge.aimate.llm.model.Message;
-import com.openforge.aimate.repository.SessionMessageRepository;
 import com.openforge.aimate.repository.SystemModelRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -36,7 +34,6 @@ public class ContextUsageService {
     private static final int TOKENS_PER_IMAGE = 765;
 
     private final SessionMessageService sessionMessageService;
-    private final SessionMessageRepository messageRepository;
     private final SystemModelRepository systemModelRepository;
 
     @Transactional(readOnly = true)
@@ -65,16 +62,7 @@ public class ContextUsageService {
 
         int toolsTokens = TOOLS_BASE_TOKENS;
         int limit = resolveLimit(systemModelId);
-        boolean msgSuggest = isMessageVolumeSuggestCompress(session);
-        return ContextUsageDto.of(systemTokens, conversationTokens, toolsTokens, limit, msgSuggest);
-    }
-
-    /** 与 ContextCompressService 保留窗口对齐：活跃非系统消息明显偏多时建议压缩 */
-    private boolean isMessageVolumeSuggestCompress(AgentSession session) {
-        if (session == null || session.getId() == null) return false;
-        List<SessionMessage> active = messageRepository.findActiveContextBySessionId(session.getId());
-        long nonSystem = active.stream().filter(m -> !"system".equalsIgnoreCase(m.getRole())).count();
-        return nonSystem > 14 + 6;
+        return ContextUsageDto.of(systemTokens, conversationTokens, toolsTokens, limit);
     }
 
     public int resolveLimit(Long systemModelId) {

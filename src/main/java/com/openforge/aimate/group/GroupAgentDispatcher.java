@@ -1,5 +1,7 @@
 package com.openforge.aimate.group;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openforge.aimate.agent.AgentPromptService;
 import com.openforge.aimate.agent.SystemModelChatHelper;
 import com.openforge.aimate.domain.ChatGroup;
@@ -12,6 +14,7 @@ import com.openforge.aimate.llm.model.ChatRequest;
 import com.openforge.aimate.llm.model.ChatResponse;
 import com.openforge.aimate.llm.model.Message;
 import com.openforge.aimate.localbridge.LocalBridgeService;
+import com.openforge.aimate.memory.GroupMemoryCaptureService;
 import com.openforge.aimate.office.AgentDailyPointsService;
 import com.openforge.aimate.domain.User;
 import com.openforge.aimate.repository.GroupMemberRepository;
@@ -44,18 +47,32 @@ public class GroupAgentDispatcher {
     private static final int CONTEXT_N = 40;
     /** SMART 投票分析消耗 */
     private static final long VOTE_POINTS = 1L;
+    /** 生成本机派发判定消耗 */
+    private static final long LOCAL_JUDGE_POINTS = 1L;
     /** 生成回复分析消耗 */
     private static final long GENERATE_POINTS = 5L;
     private static final Pattern MENTION = Pattern.compile("@([^\\s@，,。.！!？?]+)");
 
-    /** LLM 投票结果：未调用模型则 analyzed=false（不算已读） */
-    private record VoteOutcome(boolean analyzed, boolean yes, long pointsSpent) {
-        static VoteOutcome skipped() { return new VoteOutcome(false, false, 0L); }
-        static VoteOutcome of(boolean yes, long pts) { return new VoteOutcome(true, yes, pts); }
+    /**
+     * LLM 意图识别结果。
+     * analyzed=false 表示未得到模型结论；quotaHit=true 表示日额度卡掉（前置限流）。
+     */
+    private record VoteOutcome(boolean analyzed, boolean yes, long pointsSpent, boolean quotaHit) {
+        static VoteOutcome skipped() { return new VoteOutcome(false, false, 0L, false); }
+        static VoteOutcome quotaExceeded() { return new VoteOutcome(false, false, 0L, true); }
+        static VoteOutcome of(boolean yes, long pts) { return new VoteOutcome(true, yes, pts, false); }
     }
 
     private record GenOutcome(String content, long pointsSpent) {}
 
+    /** 是否需要客户端/本机参与：由模型语义判断，禁止关键词表 */
+    private record LocalJudgeOutcome(boolean needLocal, String instruction, long pointsSpent) {
+        static LocalJudgeOutcome skipped() { return new LocalJudgeOutcome(false, null, 0L); }
+        static LocalJudgeOutcome no(long pts) { return new LocalJudgeOutcome(false, null, pts); }
+        static LocalJudgeOutcome yes(String instruction, long pts) {
+            return new LocalJudgeOutcome(true, instruction, pts);
+        }
+    }
 
     private final GroupMemberRepository memberRepository;
     private final GroupMessageRepository messageRepository;
@@ -68,6 +85,11 @@ public class GroupAgentDispatcher {
     private final AgentDailyPointsService dailyPointsService;
     private final GroupMessageService messageService;
     private final LocalBridgeService localBridgeService;
+    private final GroupMentionApprovalService mentionApprovalService;
+    private final GroupAgentContextService groupAgentContextService;
+    private final GroupMemoryCaptureService groupMemoryCaptureService;
+    private final GroupAgentToolService groupAgentToolService;
+    private final ObjectMapper objectMapper;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     /** 单 Agent 串行：避免叠话 */
     private final ConcurrentHashMap<Long, Semaphore> agentLocks = new ConcurrentHashMap<>();
@@ -83,7 +105,12 @@ public class GroupAgentDispatcher {
             LlmRouter llmRouter,
             AgentDailyPointsService dailyPointsService,
             @Lazy GroupMessageService messageService,
-            LocalBridgeService localBridgeService
+            LocalBridgeService localBridgeService,
+            @Lazy GroupMentionApprovalService mentionApprovalService,
+            GroupAgentContextService groupAgentContextService,
+            GroupMemoryCaptureService groupMemoryCaptureService,
+            GroupAgentToolService groupAgentToolService,
+            ObjectMapper objectMapper
     ) {
         this.memberRepository = memberRepository;
         this.messageRepository = messageRepository;
@@ -96,30 +123,73 @@ public class GroupAgentDispatcher {
         this.dailyPointsService = dailyPointsService;
         this.messageService = messageService;
         this.localBridgeService = localBridgeService;
+        this.mentionApprovalService = mentionApprovalService;
+        this.groupAgentContextService = groupAgentContextService;
+        this.groupMemoryCaptureService = groupMemoryCaptureService;
+        this.groupAgentToolService = groupAgentToolService;
+        this.objectMapper = objectMapper;
     }
 
+    /** 主人同意点名请示后继续开口（异步）。 */
+    public void resumeAfterMentionApproved(ChatGroup group, GroupMessage trigger, GroupMember agentMember) {
+        String roster = buildRosterText(group.getId());
+        executor.submit(() -> handleOne(
+                group, trigger, null, agentMember, roster,
+                false, 0L, true, true));
+    }
+
+    /** 用户发消息后派发（兼容入口）。 */
     public void dispatchAfterUserMessage(ChatGroup group, GroupMessage userMsg, GroupMember sender) {
+        dispatchAfterMessage(group, userMsg, sender);
+    }
+
+    /**
+     * 群内出现新消息后派发：用户消息与 Agent 消息均走此路径。
+     * SMART / MENTION / ALWAYS 均参与识别；发信 Agent 自己跳过，避免自激。
+     */
+    public void dispatchAfterMessage(ChatGroup group, GroupMessage triggerMsg, GroupMember sender) {
+        if (triggerMsg == null || triggerMsg.getSenderType() == GroupMessage.SenderType.SYSTEM) {
+            return;
+        }
         List<GroupMember> agents = memberRepository.findByGroupIdAndMemberType(
                 group.getId(), GroupMember.MemberType.AGENT);
         String roster = buildRosterText(group.getId());
-        String dialogue = buildRecentDialogue(group.getId(), userMsg);
 
         List<GroupMember> smartAgents = new ArrayList<>();
         for (GroupMember am : agents) {
+            if (isSameAgent(sender, am)) {
+                continue;
+            }
+            // 停用/过期 Agent 不进意图识别与生成
+            UserAgent uaStatus = userAgentRepository.findById(am.getUserAgentId()).orElse(null);
+            if (uaStatus == null || uaStatus.getStatus() != UserAgent.Status.ACTIVE) {
+                continue;
+            }
             GroupMember.AgentReplyMode mode = effectiveMode(am);
             if (mode == GroupMember.AgentReplyMode.SMART) {
                 smartAgents.add(am);
             } else {
-                executor.submit(() -> handleOne(group, userMsg, sender, am, roster, true, 0L));
+                executor.submit(() -> handleOne(
+                        group, triggerMsg, sender, am, roster,
+                        true, 0L, false, false));
             }
         }
         if (!smartAgents.isEmpty()) {
-            executor.submit(() -> dispatchSmartAgents(group, userMsg, sender, smartAgents, roster, dialogue));
+            executor.submit(() -> dispatchSmartAgents(group, triggerMsg, sender, smartAgents, roster));
         }
     }
 
+    private static boolean isSameAgent(GroupMember sender, GroupMember candidate) {
+        if (sender == null || candidate == null) return false;
+        if (sender.getId() != null && sender.getId().equals(candidate.getId())) return true;
+        return sender.getUserAgentId() != null
+                && sender.getUserAgentId().equals(candidate.getUserAgentId());
+    }
+
     /**
-     * SMART 两阶段：每个 Agent 用花名册+对话各自问大模型要不要回 → 再生成。
+     * SMART 全流程：每个开了智能回复的 Agent 都走大模型意图识别，再生成。
+     * 前置只做去重（发信 Agent 自己已在上层跳过）与限流（日额度）；
+     * @ / 软点名不做「要不要触发」的硬编码决定，只作为投票提示与审批标记。
      * 多人同时 YES 可并行开口，不强制单人。
      */
     private void dispatchSmartAgents(
@@ -127,32 +197,41 @@ public class GroupAgentDispatcher {
             GroupMessage userMsg,
             GroupMember sender,
             List<GroupMember> smartAgents,
-            String roster,
-            String dialogue
+            String roster
     ) {
-        // 已投票 YES 的 Agent → 生成；投票消耗记在 value 里，生成后再累计已读积分
         Map<Long, Long> votePointsByMemberId = new ConcurrentHashMap<>();
+        Map<Long, Boolean> mentionedByMemberId = new ConcurrentHashMap<>();
         List<GroupMember> speakers = new CopyOnWriteArrayList<>();
         Phaser phaser = new Phaser(1);
         for (GroupMember am : smartAgents) {
             phaser.register();
             executor.submit(() -> {
                 try {
-                    if (isMentionedOrReply(userMsg, am)) {
-                        votePointsByMemberId.put(am.getId(), 0L);
-                        speakers.add(am);
+                    // 仅记录 @/引用，供后续请示审批；不在此短路决定开口
+                    boolean fromMention = isMentionedOrReply(userMsg, am);
+                    mentionedByMemberId.put(am.getId(), fromMention);
+
+                    String agentDialogue = groupAgentContextService.buildDialogueText(
+                            group, am.getUserAgentId(), userMsg);
+                    VoteOutcome vote = voteShouldReply(group, userMsg, am, roster, agentDialogue);
+                    if (vote.quotaHit()) {
+                        log.info("[GroupAgent] SMART rate-limited skip agent={}", am.getUserAgentId());
                         return;
                     }
-                    VoteOutcome vote = voteShouldReply(group, userMsg, am, roster, dialogue);
                     if (!vote.analyzed()) {
-                        // 未做大模型分析：不算已读
+                        // 模型调用失败：不用硬编码抢答；仅当明显点到自己时兜底，避免整群哑火
+                        if (fromMention || isSoftAddressed(userMsg, am)) {
+                            log.warn("[GroupAgent] SMART vote failed → addressed fallback agent={}",
+                                    am.getUserAgentId());
+                            votePointsByMemberId.put(am.getId(), 0L);
+                            speakers.add(am);
+                        }
                         return;
                     }
                     if (vote.yes()) {
                         votePointsByMemberId.put(am.getId(), vote.pointsSpent());
                         speakers.add(am);
                     } else {
-                        // 分析后决定不回：已读，展示投票消耗
                         messageService.markMemberRead(userMsg, am, vote.pointsSpent());
                         messageService.publishAgentStatus(group, am, "read_only");
                     }
@@ -167,24 +246,25 @@ public class GroupAgentDispatcher {
 
         for (GroupMember am : speakers) {
             long prior = votePointsByMemberId.getOrDefault(am.getId(), 0L);
-            executor.submit(() -> handleOne(group, userMsg, sender, am, roster, false, prior));
+            boolean fromMention = Boolean.TRUE.equals(mentionedByMemberId.get(am.getId()));
+            executor.submit(() -> handleOne(
+                    group, userMsg, sender, am, roster,
+                    false, prior, fromMention, false));
         }
     }
 
     private GroupMember.AgentReplyMode effectiveMode(GroupMember agentMember) {
-        GroupMember.AgentReplyMode mode = agentMember.getAgentReplyMode() != null
+        // 本机桥与云端 Agent 一致：静默 / 仅@ / 总是 / 智能相关；控本机仍由「群聊可用本机」开关决定
+        return agentMember.getAgentReplyMode() != null
                 ? agentMember.getAgentReplyMode()
                 : GroupMember.AgentReplyMode.MENTION_ONLY;
-        UserAgent ua = userAgentRepository.findById(agentMember.getUserAgentId()).orElse(null);
-        if (LocalBridgeService.isLocalBridge(ua) && mode != GroupMember.AgentReplyMode.SILENT) {
-            return GroupMember.AgentReplyMode.MENTION_ONLY;
-        }
-        return mode;
     }
 
     /**
      * @param needDecide true=非 SMART 两阶段路径，内部再判定是否开口
      * @param priorPoints 此前已消耗（如 SMART 投票）的积分，计入已读展示
+     * @param fromMentionHint SMART 两阶段已知是否因 @ 入选；needDecide 时会再算
+     * @param skipApprovalGate 主人已同意后的续跑，跳过请示卡
      */
     private void handleOne(
             ChatGroup group,
@@ -193,11 +273,12 @@ public class GroupAgentDispatcher {
             GroupMember agentMember,
             String roster,
             boolean needDecide,
-            long priorPoints
+            long priorPoints,
+            boolean fromMentionHint,
+            boolean skipApprovalGate
     ) {
         Semaphore lock = agentLocks.computeIfAbsent(agentMember.getUserAgentId(), id -> new Semaphore(1));
         if (!lock.tryAcquire()) {
-            // 未抢到锁=本轮未分析，不算已读
             return;
         }
         long analyzedPoints = Math.max(0L, priorPoints);
@@ -206,32 +287,43 @@ public class GroupAgentDispatcher {
             boolean localBridge = LocalBridgeService.isLocalBridge(uaEarly);
             GroupMember.AgentReplyMode mode = effectiveMode(agentMember);
 
+            boolean fromMention = fromMentionHint;
             boolean shouldSpeak;
             if (!needDecide) {
                 shouldSpeak = true;
             } else {
                 shouldSpeak = switch (mode) {
                     case SILENT -> false;
-                    case ALWAYS -> true;
-                    case MENTION_ONLY -> isMentionedOrReply(userMsg, agentMember);
+                    case ALWAYS -> {
+                        // 始终回，但若本轮确实被 @ 且开了请示，仍走审批
+                        fromMention = isMentionedOrReply(userMsg, agentMember);
+                        yield true;
+                    }
+                    case MENTION_ONLY -> {
+                        fromMention = isMentionedOrReply(userMsg, agentMember);
+                        yield fromMention;
+                    }
                     case SMART -> {
-                        if (isMentionedOrReply(userMsg, agentMember)) {
-                            yield true;
-                        }
+                        // 与两阶段路径一致：始终走模型意图识别；@ 只作审批标记
+                        fromMention = isMentionedOrReply(userMsg, agentMember);
                         VoteOutcome vote = voteShouldReply(
-                                group, userMsg, agentMember, roster, buildRecentDialogue(group.getId(), userMsg));
+                                group, userMsg, agentMember, roster,
+                                groupAgentContextService.buildDialogueText(
+                                        group, agentMember.getUserAgentId(), userMsg));
+                        if (vote.quotaHit()) {
+                            yield false;
+                        }
                         if (vote.analyzed()) {
                             analyzedPoints += vote.pointsSpent();
                             yield vote.yes();
                         }
-                        // 未分析：不算已读
-                        yield false;
+                        // 模型失败兜底：仅明显点到自己时开口
+                        yield fromMention || isSoftAddressed(userMsg, agentMember);
                     }
                 };
             }
 
             if (!shouldSpeak) {
-                // 仅当已做过 LLM 分析（如 SMART 投 NO）才记已读；SILENT / 未 @ 不记
                 if (analyzedPoints > 0) {
                     messageService.markMemberRead(userMsg, agentMember, analyzedPoints);
                     messageService.publishAgentStatus(group, agentMember, "read_only");
@@ -239,23 +331,58 @@ public class GroupAgentDispatcher {
                 return;
             }
 
-            if (localBridge && uaEarly != null) {
-                // 本地桥：等 worker complete 后再记已读（分析在本地完成）
-                localBridgeService.enqueueFromMention(group, userMsg, agentMember, uaEarly);
+            if (!skipApprovalGate && fromMention && uaEarly != null
+                    && mentionApprovalService.requestApprovalIfNeeded(group, userMsg, agentMember, uaEarly)) {
                 return;
             }
 
+            // 本地桥接：先云端聊天；需控本机时入队——客户端由 Connector 领取，提示词由 worker 领取
             messageService.publishAgentStatus(group, agentMember, "thinking");
             GenOutcome gen = generateReply(group, userMsg, agentMember, roster);
             analyzedPoints += gen.pointsSpent();
-            if (StringUtils.hasText(gen.content())) {
-                messageService.postAgentMessage(group, agentMember, gen.content().trim(), userMsg.getId());
+            String replyBody = gen.content() != null ? gen.content().trim() : "";
+            String localInstruction = null;
+            if (localBridge && uaEarly != null && LocalBridgeService.isGroupLocalAssistEnabled(uaEarly)) {
+                LocalDispatchParsed parsed = LocalDispatchParsed.parse(replyBody);
+                replyBody = parsed.chatText();
+                // 无论回复是否自带 [[LOCAL:]]，都过语义判定；纯聊天不得派本机
+                String dialogue = groupAgentContextService.buildDialogueText(
+                        group, agentMember.getUserAgentId(), userMsg);
+                LocalJudgeOutcome judge = judgeLocalDispatch(
+                        group, userMsg, uaEarly, replyBody, dialogue);
+                analyzedPoints += judge.pointsSpent();
+                if (judge.needLocal()) {
+                    if (StringUtils.hasText(judge.instruction())) {
+                        localInstruction = judge.instruction().trim();
+                    } else if (StringUtils.hasText(parsed.localInstruction())) {
+                        localInstruction = parsed.localInstruction().trim();
+                    }
+                }
+                // judge=false → 丢弃 [[LOCAL:]]，避免误派
             }
-            // Agent 已读 = 已完成大模型分析；悬浮展示 analyzedPoints
-            if (analyzedPoints > 0) {
+            if (StringUtils.hasText(replyBody)) {
+                messageService.postAgentMessage(group, agentMember, replyBody, userMsg.getId());
+            }
+            boolean dispatchedLocal = false;
+            if (StringUtils.hasText(localInstruction) && uaEarly != null) {
+                var task = localBridgeService.enqueueFromMention(
+                        group, userMsg, agentMember, uaEarly, localInstruction);
+                dispatchedLocal = task != null;
+                if (dispatchedLocal) {
+                    try {
+                        messageService.postAgentMessage(
+                                group, agentMember,
+                                "（" + localBridgeService.describeDispatchHint(uaEarly) + "）",
+                                userMsg.getId());
+                    } catch (Exception ignored) {}
+                }
+            }
+            // 已派发本机任务：等设备 complete 再记已读；否则本轮记已读
+            if (!dispatchedLocal && analyzedPoints > 0) {
                 messageService.markMemberRead(userMsg, agentMember, analyzedPoints);
             }
-            messageService.publishAgentStatus(group, agentMember, "idle");
+            messageService.publishAgentStatus(group, agentMember,
+                    dispatchedLocal ? "waiting_local" : "idle");
         } catch (Exception e) {
             log.warn("[GroupAgent] agent={} group={} failed: {}",
                     agentMember.getUserAgentId(), group.getPublicId(), e.getMessage());
@@ -270,30 +397,142 @@ public class GroupAgentDispatcher {
         }
     }
 
+    /** 桌面本机工具花名：用户常说「cursor」指本机桥 Agent，不必名字里真有 Cursor。 */
+    private static final List<String> LOCAL_DESKTOP_ALIASES = List.of(
+            "cursor", "codex", "windsurf", "cline", "本机", "connector");
+
+    /**
+     * 无 @ 但正文点到真名/花名/本机工具别名（至少 2 字）——仅作意图识别提示与失败兜底，
+     * 不再单独决定是否开口。本机桥：用户叫「cursor」而档案名是 Orion 也算点到。
+     */
+    private boolean isSoftAddressed(GroupMessage userMsg, GroupMember agentMember) {
+        if (userMsg == null || userMsg.getSenderType() != GroupMessage.SenderType.USER) return false;
+        String content = userMsg.getContent();
+        if (!StringUtils.hasText(content)) return false;
+        UserAgent ua = userAgentRepository.findById(agentMember.getUserAgentId()).orElse(null);
+        if (ua == null) return false;
+        // 已明确 @ 了别人则不算软点名（对照本 Agent 全部别名）
+        if (contentHasExplicitAtOfSomeoneElse(content, agentMember, ua)) return false;
+        String lower = content.toLowerCase(Locale.ROOT);
+        for (String alias : addressAliases(agentMember, ua)) {
+            if (!StringUtils.hasText(alias) || alias.length() < 2) continue;
+            if (lower.contains(alias.toLowerCase(Locale.ROOT))) {
+                return canTriggerMention(userMsg, agentMember, ua);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 可被点名的别名：真名、群昵称、人设里的桌面工具名、本机桥默认花名。
+     */
+    private List<String> addressAliases(GroupMember agentMember, UserAgent ua) {
+        List<String> out = new ArrayList<>();
+        if (ua.getName() != null && ua.getName().trim().length() >= 2) {
+            out.add(ua.getName().trim());
+        }
+        if (agentMember != null && StringUtils.hasText(agentMember.getNickname())
+                && agentMember.getNickname().trim().length() >= 2) {
+            out.add(agentMember.getNickname().trim());
+        }
+        String persona = safePersona(ua.getId());
+        String personaLower = persona != null ? persona.toLowerCase(Locale.ROOT) : "";
+        boolean localBridge = LocalBridgeService.isLocalBridge(ua);
+        for (String alias : LOCAL_DESKTOP_ALIASES) {
+            boolean inName = ua.getName() != null
+                    && ua.getName().toLowerCase(Locale.ROOT).contains(alias);
+            boolean inPersona = personaLower.contains(alias);
+            // 本机桥：默认认 Cursor/Codex 等花名；云端仅当名字/人设已出现该词时认
+            if (localBridge || inName || inPersona) {
+                out.add(alias);
+            }
+        }
+        return out;
+    }
+
+    private static boolean isVoteYes(String answer) {
+        if (!StringUtils.hasText(answer)) return false;
+        String t = answer.trim().toUpperCase(Locale.ROOT);
+        if (t.contains("YES") || t.startsWith("Y")) return true;
+        // 中文模型偶发
+        String raw = answer.trim();
+        return raw.startsWith("是") || raw.contains("要回") || raw.contains("开口");
+    }
+
     private boolean isMentionedOrReply(GroupMessage userMsg, GroupMember agentMember) {
         UserAgent ua = userAgentRepository.findById(agentMember.getUserAgentId()).orElse(null);
         if (ua == null) return false;
-        if (userMsg.getReplyToId() != null) {
+        String name = ua.getName() != null ? ua.getName().trim() : "";
+        String content = userMsg.getContent();
+
+        boolean atMe = false;
+        if (StringUtils.hasText(content)) {
+            for (String alias : addressAliases(agentMember, ua)) {
+                if (isAtMentionOf(content, alias)) {
+                    atMe = true;
+                    break;
+                }
+            }
+        }
+        // 仅「人类」引用本 Agent 的消息算点名；Agent 互引要用显式 @
+        boolean replyToMe = false;
+        if (userMsg.getSenderType() == GroupMessage.SenderType.USER && userMsg.getReplyToId() != null) {
             GroupMessage parent = messageRepository.findById(userMsg.getReplyToId()).orElse(null);
             if (parent != null
                     && parent.getSenderType() == GroupMessage.SenderType.AGENT
                     && agentMember.getUserAgentId().equals(parent.getSenderAgentId())) {
-                return true;
+                replyToMe = true;
             }
         }
-        String content = userMsg.getContent();
-        if (!StringUtils.hasText(content)) return false;
-        String name = ua.getName() != null ? ua.getName().trim() : "";
+        // 正文已明确 @ 了别人时，引用回复不算对本 Agent 的点名
+        boolean hit = atMe || (replyToMe && !contentHasExplicitAtOfSomeoneElse(content, agentMember, ua));
+        if (!hit) return false;
+        return canTriggerMention(userMsg, agentMember, ua);
+    }
+
+    /** 正文 @ 是否指向「非本 Agent」（对照本 Agent 全部别名）。 */
+    private boolean contentHasExplicitAtOfSomeoneElse(String content, GroupMember agentMember, UserAgent ua) {
+        if (!StringUtils.hasText(content) || !content.contains("@")) return false;
+        for (String alias : addressAliases(agentMember, ua)) {
+            if (isAtMentionOf(content, alias)) return false;
+        }
+        return MENTION.matcher(content).find();
+    }
+
+    /**
+     * 谁可触发：主人人类始终可；其他人类看 othersMayMention；
+     * 其他 Agent 仅同主人（跨主人互 @ 无效）。
+     */
+    private boolean canTriggerMention(GroupMessage trigger, GroupMember target, UserAgent targetUa) {
+        Long ownerId = targetUa.getUserId();
+        if (trigger.getSenderType() == GroupMessage.SenderType.USER) {
+            Long uid = trigger.getSenderUserId();
+            if (ownerId != null && ownerId.equals(uid)) return true;
+            return target.isOthersMayMention();
+        }
+        if (trigger.getSenderType() == GroupMessage.SenderType.AGENT) {
+            if (trigger.getSenderAgentId() == null || ownerId == null) return false;
+            UserAgent senderUa = userAgentRepository.findById(trigger.getSenderAgentId()).orElse(null);
+            return senderUa != null && ownerId.equals(senderUa.getUserId());
+        }
+        return false;
+    }
+
+    /** 正文是否 @ 了本 Agent（全名包含或 @token 为名字前缀，且 token 足够长避免「专家」误伤）。 */
+    private static boolean isAtMentionOf(String content, String agentName) {
+        String name = agentName.trim();
         if (name.isEmpty()) return false;
         String lower = content.toLowerCase(Locale.ROOT);
-        if (lower.contains("@" + name.toLowerCase(Locale.ROOT))) return true;
-        // 宽松：@ 后片段匹配名字前缀
+        String nameLower = name.toLowerCase(Locale.ROOT);
+        if (lower.contains("@" + nameLower)) return true;
         var m = MENTION.matcher(content);
         while (m.find()) {
             String token = m.group(1).trim();
-            if (name.equalsIgnoreCase(token) || name.toLowerCase(Locale.ROOT).startsWith(token.toLowerCase(Locale.ROOT))) {
-                return true;
-            }
+            if (token.isEmpty()) continue;
+            String tokenLower = token.toLowerCase(Locale.ROOT);
+            if (name.equalsIgnoreCase(token)) return true;
+            // token 须至少 2 字，且是名字前缀；禁止用短后缀（如「专家」）匹配「Cursor · 专家」
+            if (tokenLower.length() >= 2 && nameLower.startsWith(tokenLower)) return true;
         }
         return false;
     }
@@ -315,23 +554,32 @@ public class GroupAgentDispatcher {
             dailyPointsService.assertWithinDailyLimit(ua.getId(), VOTE_POINTS);
         } catch (Exception e) {
             log.info("[GroupAgent] SMART skip agent={} daily limit: {}", ua.getId(), e.getMessage());
-            return VoteOutcome.skipped();
+            return VoteOutcome.quotaExceeded();
         }
         String raw = userMsg.getContent() == null ? "" : userMsg.getContent().trim();
         String persona = safePersona(ua.getId());
+        String aliases = String.join(" / ", addressAliases(agentMember, ua));
+        // 启发式观察信号：只喂给模型，不做代码层开口决定
+        boolean signalAtMe = isMentionedOrReply(userMsg, agentMember);
+        boolean signalSoft = isSoftAddressed(userMsg, agentMember);
         String system = """
                 # Role
                 你是群聊里的「%s」。现在只做一件事：根据花名册与对话，判断**你自己**本轮要不要说话。
-                只输出 YES 或 NO。
+                只输出 YES 或 NO。代码不会替你硬编码决定；下面的 Address signals 只是观察提示。
 
                 # Decision policy
                 1. 对方在点名/称呼花名册里的**别人**（哪怕没有 @）→ 你必须 NO，不要抢话、不要代答
-                2. 对方在点名/称呼的就是你（全名或明显指向你的身份称呼）→ YES
-                3. 话题明显落在你的人设/职责，且没有更合适的在场同事 → YES
-                4. 话题更适合花名册里另一位同事 → NO
-                5. 纯闲聊/打招呼：你可以 YES（想接就接），也可以 NO；按人设自然选择
-                6. 纯系统通知 / 无信息 → NO
-                7. 拿不准且有更对口的同事在场 → NO；群里只有你能接 → YES
+                2. 对方在点名/称呼的就是你（全名、花名、本机工具别名如 Cursor、职责称呼，**不必有 @**）→ YES
+                3. Address signals 里 explicit_at_or_reply_to_me=yes → 强烈倾向 YES（除非明显误触/广告）
+                4. Address signals 里 soft_name_or_alias_in_text=yes → 倾向 YES
+                5. 对方让你去问/转告/安排其他同事（例如「你去问问秘书」）→ 仍是对你下指令 → YES，不要因为涉及别人就 NO
+                6. 对方在向你抱怨/质问你的行为（例如「你为什么不回」），即使没写名字 → YES
+                7. 话题明显落在你的人设/职责（编码、本机、秘书事务等），且没有更合适的在场同事 → YES
+                8. 话题更适合花名册里另一位同事，且对方也不是在叫你 → NO
+                9. 面向全群的正式同步/点名确认（如「请各位知晓」「让大家知道」「同步给大家」）→ YES，用一两句确认收到即可，不要长篇复读别人已说的内容
+                10. 纯闲聊/打招呼：你可以 YES（想接就接），也可以 NO；按人设自然选择
+                11. 纯系统旁白（如「已转发到本机」「排队中」）/ 无信息 → NO
+                12. 拿不准：若消息是在问「你们 / 大家」且你能答 → YES；否则 NO
 
                 # Output contract
                 YES | NO
@@ -340,25 +588,35 @@ public class GroupAgentDispatcher {
                 # Group
                 %s
 
-                # Roster（群里所有人，用他们的真实名字判断点名）
+                # Roster（群里所有人，用他们的真实名字与别名判断点名）
                 %s
 
                 # You
                 - name: %s
+                - also-known-as: %s
                 - kind: %s
+                - local-bridge: %s
                 - persona: %s
 
-                # Recent dialogue（时间正序；最后一条是最新用户消息）
+                # Address signals（启发式观察，最终由你按 Decision policy 决定）
+                - explicit_at_or_reply_to_me: %s
+                - soft_name_or_alias_in_text: %s
+
+                # Recent dialogue（时间正序；最后一条是最新消息，可能来自用户或另一位 Agent）
                 %s
 
-                # Latest user message（请据此投票）
+                # Latest message（请据此投票）
                 %s
                 """.formatted(
                 group.getTitle() != null ? group.getTitle() : "",
                 StringUtils.hasText(roster) ? roster : "（暂无）",
                 ua.getName(),
+                StringUtils.hasText(aliases) ? aliases : ua.getName(),
                 ua.getKind() != null ? ua.getKind().name() : "AGENT",
+                LocalBridgeService.isLocalBridge(ua) ? "yes（用户说 Cursor/本机 常指你）" : "no",
                 persona.length() > 500 ? persona.substring(0, 500) : persona,
+                signalAtMe ? "yes" : "no",
+                signalSoft ? "yes" : "no",
                 StringUtils.hasText(dialogue) ? dialogue : "(no prior)",
                 raw
         );
@@ -366,17 +624,24 @@ public class GroupAgentDispatcher {
             String answer;
             SystemModel model = pickCheapModel(ua);
             if (model != null) {
-                answer = systemModelChatHelper.chatText(model, system, user);
+                // 投票只要 YES/NO：关掉思考链，避免 max_tokens=8 被 reasoning 吃光
+                answer = systemModelChatHelper.chatMessages(
+                        model,
+                        List.of(Message.system(system), Message.user(user)),
+                        0.0,
+                        32,
+                        true);
             } else {
                 ChatResponse resp = llmRouter.chat(ChatRequest.builder()
                         .messages(List.of(Message.system(system), Message.user(user)))
                         .temperature(0.0)
-                        .maxTokens(8)
+                        .maxTokens(32)
+                        .thinking(ChatRequest.Thinking.disabled())
                         .build());
                 answer = resp.firstMessage() != null ? resp.firstMessage().content() : "";
             }
             dailyPointsService.recordSpend(ua.getUserId(), ua.getId(), VOTE_POINTS);
-            boolean yes = answer != null && answer.toUpperCase(Locale.ROOT).contains("YES");
+            boolean yes = isVoteYes(answer);
             log.info("[GroupAgent] SMART vote agent={} answer={} msg={}",
                     ua.getName(), answer != null ? answer.trim() : "", clip(raw, 40));
             return VoteOutcome.of(yes, VOTE_POINTS);
@@ -429,9 +694,15 @@ public class GroupAgentDispatcher {
             } else if (m.getMemberType() == GroupMember.MemberType.AGENT && m.getUserAgentId() != null) {
                 userAgentRepository.findById(m.getUserAgentId()).ifPresent(ua -> {
                     String kind = ua.getKind() == UserAgent.Kind.SECRETARY ? "秘书同事" : "专业同事";
+                    if (LocalBridgeService.isLocalBridge(ua)) {
+                        kind = "本机桥同事（Cursor/桌面）";
+                    }
                     String digest = safePersona(ua.getId());
                     if (digest.length() > 80) digest = digest.substring(0, 80) + "…";
-                    lines.add("- 同事：「" + ua.getName() + "」（" + kind
+                    String aka = String.join("/", addressAliases(m, ua));
+                    lines.add("- 同事：「" + ua.getName() + "」"
+                            + (StringUtils.hasText(aka) ? " 又名「" + aka + "」" : "")
+                            + "（" + kind
                             + (StringUtils.hasText(digest) ? "；简介：" + digest : "")
                             + "）");
                 });
@@ -449,10 +720,25 @@ public class GroupAgentDispatcher {
      * 群聊回复系统提示：结构化契约 + 拟人表达约束。
      * 人设文本作为「角色卡」注入，不把 Agent 写成冷冰冰的机器人旁白。
      */
-    private static String buildReplySystemPrompt(UserAgent ua, ChatGroup group, String persona, String roster) {
+    private String buildReplySystemPrompt(UserAgent ua, ChatGroup group, String persona, String roster) {
         String kindLabel = ua.getKind() == UserAgent.Kind.SECRETARY ? "秘书同事" : "专业同事";
         String personaBlock = StringUtils.hasText(persona) ? persona.trim() : "（未单独配置人设，按可靠、好相处的同事来）";
         String rosterBlock = StringUtils.hasText(roster) ? roster.trim() : "（暂无花名册）";
+        String localBlock = "";
+        if (LocalBridgeService.isGroupLocalAssistEnabled(ua)) {
+            localBlock = """
+
+                # Local device
+                You are bound to the user's local desktop Connector, but most group messages are cloud chat only.
+                Append ONE final line ONLY when the user clearly needs local machine work
+                (read/write files, run commands, inspect local env/IDE/git on their PC):
+                   [[LOCAL:executable task for the local app]]
+                That line is stripped from the group message.
+                NEVER append [[LOCAL:]] for: pure chat, Q&A, greetings, info sync, roster, remembering facts,
+                group coordination, or explaining something without asking to touch the machine.
+                When unsure → do not append; chat reply alone is enough.
+                """.stripIndent();
+        }
         return """
                 # Identity
                 你是群「%s」里的真人同事「%s」（%s）。你有自己的性格、专业边界和说话习惯。
@@ -463,7 +749,7 @@ public class GroupAgentDispatcher {
 
                 # Character card（必须遵守）
                 %s
-
+                %s
                 # How you talk（拟人）
                 - 像微信/飞书群里正常说话：口语、有温度，可适度幽默或吐槽，但别油腻。
                 - 用「我」，直接对话；禁止「作为 AI / 语言模型 / 智能助手」等自我介绍。
@@ -479,15 +765,165 @@ public class GroupAgentDispatcher {
                 - 若信息不足，用一句自然的追问补齐，而不是拒绝或空话。
                 - 保持人设一致；不确定时宁可简短真诚，也不要编造事实。
 
+                # Tools（需要时调用，不要空喊）
+                - get_group_info：当前群名/公告/人数等
+                - list_group_members / get_group_member：最新花名册与某人资料（成员会变动，不确定就查）
+                - recall_memory / store_memory：你自己的长期记忆（单聊+群聊共用）；重要约定要记下来
+
                 # Context usage
-                下文会按时间给出近期群聊；把最新一条用户消息当作本轮要回应的内容。
+                下文是「人类可见」结构化会话：时间、消息号、发送者、引用、@、已读/未读、系统事件。
+                把标记为「本轮要回应的最新消息」当作本轮要回应的内容；引用块里有原文，不要说看不见引用。
                 """.formatted(
                 group.getTitle() != null ? group.getTitle() : "这个群",
                 ua.getName(),
                 kindLabel,
                 rosterBlock,
-                personaBlock
+                personaBlock,
+                localBlock
         ).stripIndent();
+    }
+
+    /**
+     * 语义判定：本轮是否需要客户端/本机参与。任意语言，禁止关键词表。
+     * 输出 JSON：{"needLocal":true|false,"instruction":"..."|null}
+     */
+    private LocalJudgeOutcome judgeLocalDispatch(
+            ChatGroup group,
+            GroupMessage userMsg,
+            UserAgent ua,
+            String agentReply,
+            String dialogue
+    ) {
+        try {
+            dailyPointsService.assertWithinDailyLimit(ua.getId(), LOCAL_JUDGE_POINTS);
+        } catch (Exception e) {
+            return LocalJudgeOutcome.skipped();
+        }
+        String latest = userMsg.getContent() == null ? "" : userMsg.getContent().trim();
+        String system = """
+                You gatekeep the local-desktop Connector (Cursor / Windsurf / Codex).
+                Default is needLocal=false. Only set needLocal=true when the LATEST user intent
+                clearly requires the local machine itself.
+
+                needLocal=true ONLY if the user needs at least one of:
+                - read / write / edit / create / delete files or code on the local disk
+                - run shell / build / test / install commands on the local machine
+                - inspect local environment (local paths, local git, IDE, Connector, installed tools on PC)
+                - explicitly asks the local app/agent to execute a task on their computer
+
+                needLocal=false for ALL of the following (even if the speaker is a local-bridge agent):
+                - pure chat, greetings, opinions, explanations, brainstorming
+                - syncing / announcing personal info or group roster ("tell everyone", "让他们知道")
+                - group coordination, reminding members, "who hasn't spoken"
+                - server-side / cloud DB / group settings questions that do not need the PC filesystem
+                - the agent merely planning or promising to look later, without a concrete local action now
+                - repeating or confirming chat content
+
+                When unsure → needLocal=false.
+                Judge by meaning/intent in ANY language — never by keyword lists.
+
+                Output ONLY compact JSON, no markdown:
+                {"needLocal":true,"instruction":"<one executable task for the local app>"}
+                or
+                {"needLocal":false,"instruction":null}
+
+                When needLocal=true, instruction must be concrete and actionable; prefer the user's language.
+                """.stripIndent();
+        String user = """
+                # Group
+                %s
+
+                # Agent
+                %s
+
+                # Recent dialogue
+                %s
+
+                # Latest user message
+                %s
+
+                # Agent's chat reply just now (context only; may be incomplete)
+                %s
+                """.formatted(
+                group.getTitle() != null ? group.getTitle() : "",
+                ua.getName(),
+                StringUtils.hasText(dialogue) ? dialogue : "(none)",
+                latest,
+                StringUtils.hasText(agentReply) ? clip(agentReply, 800) : "(empty)"
+        );
+        try {
+            String answer;
+            SystemModel model = pickCheapModel(ua);
+            if (model != null) {
+                answer = systemModelChatHelper.chatMessages(
+                        model,
+                        List.of(Message.system(system), Message.user(user)),
+                        0.0,
+                        256,
+                        true);
+            } else {
+                ChatResponse resp = llmRouter.chat(ChatRequest.builder()
+                        .messages(List.of(Message.system(system), Message.user(user)))
+                        .temperature(0.0)
+                        .maxTokens(256)
+                        .thinking(ChatRequest.Thinking.disabled())
+                        .build());
+                answer = resp.firstMessage() != null ? resp.firstMessage().content() : "";
+            }
+            dailyPointsService.recordSpend(ua.getUserId(), ua.getId(), LOCAL_JUDGE_POINTS);
+            LocalJudgeOutcome parsed = parseLocalJudgeJson(answer);
+            log.info("[GroupAgent] local-judge agent={} need={} instr={}",
+                    ua.getName(),
+                    parsed.needLocal(),
+                    clip(parsed.instruction() != null ? parsed.instruction() : "", 60));
+            return parsed;
+        } catch (Exception e) {
+            log.warn("[GroupAgent] local-judge failed agent={}: {}", ua.getId(), e.getMessage());
+            return LocalJudgeOutcome.skipped();
+        }
+    }
+
+    private LocalJudgeOutcome parseLocalJudgeJson(String raw) {
+        if (!StringUtils.hasText(raw)) return LocalJudgeOutcome.no(LOCAL_JUDGE_POINTS);
+        String t = raw.trim();
+        int start = t.indexOf('{');
+        int end = t.lastIndexOf('}');
+        if (start < 0 || end <= start) return LocalJudgeOutcome.no(LOCAL_JUDGE_POINTS);
+        try {
+            JsonNode node = objectMapper.readTree(t.substring(start, end + 1));
+            boolean need = node.path("needLocal").asBoolean(false)
+                    || "true".equalsIgnoreCase(node.path("needLocal").asText(""));
+            String instruction = null;
+            JsonNode instr = node.get("instruction");
+            if (instr != null && !instr.isNull()) {
+                instruction = instr.asText(null);
+            }
+            if (need && StringUtils.hasText(instruction)) {
+                return LocalJudgeOutcome.yes(instruction.trim(), LOCAL_JUDGE_POINTS);
+            }
+            return LocalJudgeOutcome.no(LOCAL_JUDGE_POINTS);
+        } catch (Exception e) {
+            log.debug("[GroupAgent] local-judge JSON parse fail: {}", e.getMessage());
+            return LocalJudgeOutcome.no(LOCAL_JUDGE_POINTS);
+        }
+    }
+
+    /** 从云端回复中拆出 [[LOCAL:...]] 本机任务说明 */
+    private record LocalDispatchParsed(String chatText, String localInstruction) {
+        static LocalDispatchParsed parse(String raw) {
+            if (!StringUtils.hasText(raw)) return new LocalDispatchParsed("", null);
+            java.util.regex.Pattern p = java.util.regex.Pattern.compile(
+                    "\\[\\[LOCAL:\\s*([\\s\\S]+?)\\]\\]\\s*$",
+                    java.util.regex.Pattern.CASE_INSENSITIVE);
+            java.util.regex.Matcher m = p.matcher(raw.trim());
+            if (!m.find()) return new LocalDispatchParsed(raw.trim(), null);
+            String instruction = m.group(1) != null ? m.group(1).trim() : null;
+            String chat = raw.substring(0, m.start()).trim();
+            if (!StringUtils.hasText(instruction)) {
+                return new LocalDispatchParsed(StringUtils.hasText(chat) ? chat : raw.trim(), null);
+            }
+            return new LocalDispatchParsed(chat, instruction);
+        }
     }
 
     private GenOutcome generateReply(ChatGroup group, GroupMessage userMsg, GroupMember agentMember, String roster) {
@@ -501,41 +937,27 @@ public class GroupAgentDispatcher {
         }
 
         String persona = safePersona(ua.getId());
-        List<GroupMessage> recent = messageRepository.findByGroupIdOrderByIdDesc(
-                group.getId(), PageRequest.of(0, CONTEXT_N));
-        List<GroupMessage> chronological = new ArrayList<>(recent);
-        java.util.Collections.reverse(chronological);
-
-        List<Message> msgs = new ArrayList<>();
-        msgs.add(Message.system(buildReplySystemPrompt(ua, group, persona, roster)));
-
-        for (GroupMessage m : chronological) {
-            if (m.getId().equals(userMsg.getId())) continue;
-            String line = formatLine(m);
-            if (m.getSenderType() == GroupMessage.SenderType.AGENT
-                    && ua.getId().equals(m.getSenderAgentId())) {
-                msgs.add(Message.assistantText(m.getContent() != null ? m.getContent() : ""));
-            } else if (m.getSenderType() != GroupMessage.SenderType.SYSTEM) {
-                msgs.add(Message.user(line));
-            }
+        List<Message> msgs = groupAgentContextService.buildLlmMessages(
+                group, ua, buildReplySystemPrompt(ua, group, persona, roster), userMsg);
+        String soul = groupMemoryCaptureService.soulPromptBlock(
+                ua.getUserId(), ua.getId(), userMsg.getContent());
+        if (StringUtils.hasText(soul) && !msgs.isEmpty()) {
+            msgs.add(1, Message.system(soul));
         }
-        msgs.add(Message.user(formatLine(userMsg)));
 
         try {
-            String content;
             SystemModel model = pickCheapModel(ua);
-            if (model != null) {
-                content = systemModelChatHelper.chatMessages(model, msgs, 0.7, 1024);
-            } else {
-                ChatResponse resp = llmRouter.chat(ChatRequest.builder()
-                        .messages(msgs)
-                        .temperature(0.7)
-                        .maxTokens(1024)
-                        .build());
-                content = resp.firstMessage() != null ? resp.firstMessage().content() : null;
-            }
+            // 可调 get_group_info / list_group_members / 记忆工具，再回群聊短正文
+            String content = groupAgentToolService.chatWithGroupTools(model, msgs, group, ua);
             // 只要完成了一次模型调用，就算分析消耗（无论是否空回复）
             dailyPointsService.recordSpend(ua.getUserId(), ua.getId(), GENERATE_POINTS);
+            if (!StringUtils.hasText(content)) {
+                log.warn("[GroupAgent] generate empty content agent={} group={}",
+                        ua.getName(), group.getPublicId());
+                content = "在，刚才没组织好词，你再跟我说一遍？";
+            }
+            groupMemoryCaptureService.captureAfterGroupTurn(
+                    ua.getId(), group.getId(), userMsg.getId(), content);
             return new GenOutcome(content, GENERATE_POINTS);
         } catch (Exception e) {
             log.warn("[GroupAgent] generate failed: {}", e.getMessage());

@@ -1,16 +1,36 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, MoreHorizontal, UserPlus } from 'lucide-react'
+import { ChevronDown, MoreHorizontal, UserPlus, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import {
   groupsApi,
   type AgentReplyMode,
   type GroupDetail,
+  type GroupMember,
   type LocalBridgeTaskStatus,
 } from '../../api/groups'
 import { AppSelect } from '../../ui/AppSelect'
+import { AppToggle } from '../../ui/AppToggle'
 import { useAuth } from '../../hooks/useAuth'
+import { formatAgentDisplayTitle } from '../agent/AgentAvatar'
+import { GroupAgentContextRing } from './GroupAgentContextRing'
+
+function memberDisplayName(m: GroupMember, isAgent: boolean) {
+  if (isAgent) {
+    return (
+      m.displayTitle ||
+      formatAgentDisplayTitle({
+        name: m.name,
+        careerName: m.careerName,
+        originalName: m.originalName,
+      }) ||
+      'Agent'
+    )
+  }
+  return m.name || m.username || '成员'
+}
 
 const REPLY_MODE_OPTIONS = [
   { value: 'SILENT', label: '静默（仅已读）' },
@@ -34,12 +54,24 @@ function roleLabel(role: string) {
   return '成员'
 }
 
-function MemberAvatar({ name, url, agent }: { name: string; url?: string | null; agent?: boolean }) {
+function MemberAvatar({
+  name,
+  url,
+  agent,
+  className,
+}: {
+  name: string
+  url?: string | null
+  agent?: boolean
+  className?: string
+}) {
   return (
     <div
       className={clsx(
-        'flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-full text-sm font-medium',
+        'flex flex-shrink-0 items-center justify-center overflow-hidden rounded-full text-sm font-medium',
+        !className && 'h-10 w-10',
         agent ? 'bg-cyan-500/15 text-cyan-100' : 'bg-white/[0.08] text-white/80',
+        className,
       )}
     >
       {url ? (
@@ -51,116 +83,20 @@ function MemberAvatar({ name, url, agent }: { name: string; url?: string | null;
   )
 }
 
-type MoreMenuItem = {
-  key: string
-  label: string
-  danger?: boolean
-  onClick?: () => void
-  /** Nested choices (e.g. reply habit modes); picking one closes the menu. */
-  choices?: { value: string; label: string; active?: boolean; onPick: () => void }[]
-}
-
-function MoreMenu({ items }: { items: MoreMenuItem[] }) {
-  const [open, setOpen] = useState(false)
-  const [expanded, setExpanded] = useState<string | null>(null)
-  const root = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) {
-      setExpanded(null)
-      return
-    }
-    const onDoc = (e: MouseEvent) => {
-      if (!root.current?.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [open])
-  if (!items.length) return null
-  return (
-    <div ref={root} className="relative">
-      <button
-        type="button"
-        className="rounded-lg p-1.5 text-white/35 hover:bg-white/10 hover:text-white/70"
-        aria-label="更多操作"
-        onClick={() => setOpen((v) => !v)}
-      >
-        <MoreHorizontal className="h-4 w-4" />
-      </button>
-      {open && (
-        <div className="absolute right-0 z-30 mt-1 min-w-[10.5rem] overflow-hidden rounded-lg bg-[#1c1c1c] py-1 shadow-xl ring-1 ring-inset ring-white/[0.06]">
-          {items.map((it) =>
-            it.choices?.length ? (
-              <div key={it.key}>
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-xs text-white/75 hover:bg-white/[0.06]"
-                  onClick={() => setExpanded((k) => (k === it.key ? null : it.key))}
-                >
-                  <span>{it.label}</span>
-                  <ChevronDown
-                    className={clsx(
-                      'h-3 w-3 text-white/35 transition',
-                      expanded === it.key && 'rotate-180',
-                    )}
-                  />
-                </button>
-                {expanded === it.key && (
-                  <div className="bg-black/30 py-0.5">
-                    {it.choices.map((c) => (
-                      <button
-                        key={c.value}
-                        type="button"
-                        className={clsx(
-                          'block w-full px-3 py-1.5 pl-4 text-left text-[11px] hover:bg-white/8',
-                          c.active ? 'text-cyan-200/90' : 'text-white/55',
-                        )}
-                        onClick={() => {
-                          setOpen(false)
-                          c.onPick()
-                        }}
-                      >
-                        {c.active ? '✓ ' : ''}
-                        {c.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <button
-                key={it.key}
-                type="button"
-                className={clsx(
-                  'block w-full px-3 py-1.5 text-left text-xs hover:bg-white/8',
-                  it.danger ? 'text-red-300/85' : 'text-white/75',
-                )}
-                onClick={() => {
-                  setOpen(false)
-                  it.onClick?.()
-                }}
-              >
-                {it.label}
-              </button>
-            ),
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
 function AgentTaskPool({
   publicId,
   userAgentId,
   agentName,
   canView,
+  defaultOpen = true,
 }: {
   publicId: string
   userAgentId: number
   agentName: string
   canView: boolean
+  defaultOpen?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   const [status, setStatus] = useState<'' | LocalBridgeTaskStatus>('')
   const [page, setPage] = useState(0)
   const q = useQuery({
@@ -229,10 +165,7 @@ function AgentTaskPool({
           ) : (
             <ul className="max-h-48 space-y-1.5 overflow-auto">
               {q.data!.items.map((t) => (
-                <li
-                  key={t.id}
-                  className="rounded-md bg-white/[0.04] px-2 py-1.5 text-[11px]"
-                >
+                <li key={t.id} className="rounded-md bg-white/[0.04] px-2 py-1.5 text-[11px]">
                   <div className="flex items-center justify-between gap-2">
                     <span
                       className={clsx(
@@ -290,6 +223,236 @@ function AgentTaskPool({
   )
 }
 
+function MemberSettingsModal({
+  publicId,
+  member,
+  displayName,
+  detail,
+  onClose,
+  onChanged,
+}: {
+  publicId: string
+  member: GroupMember
+  displayName: string
+  detail: GroupDetail
+  onClose: () => void
+  onChanged: () => void
+}) {
+  const { user } = useAuth()
+  const isAgent = member.memberType === 'AGENT'
+  const ownsAgent = isAgent && member.ownerUserId != null && member.ownerUserId === user?.userId
+  const canManage = detail.myRole === 'OWNER' || detail.myRole === 'ADMIN'
+  const canEditReply = isAgent && (canManage || ownsAgent)
+  const canEditMention = isAgent && ownsAgent
+  const canViewTasks = isAgent && !!member.localBridge && (canManage || ownsAgent)
+  const canPromote = detail.myRole === 'OWNER' && member.role !== 'OWNER' && !isAgent
+  const canRemove =
+    member.role !== 'OWNER' &&
+    (canManage || ownsAgent) &&
+    !(member.role === 'ADMIN' && detail.myRole !== 'OWNER')
+
+  const [replyMode, setReplyMode] = useState<AgentReplyMode>(
+    (member.agentReplyMode as AgentReplyMode) || 'MENTION_ONLY',
+  )
+  const [othersMayMention, setOthersMayMention] = useState(member.othersMayMention !== false)
+  const [requireOwnerApproval, setRequireOwnerApproval] = useState(
+    member.requireOwnerApprovalOnMention === true,
+  )
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setReplyMode((member.agentReplyMode as AgentReplyMode) || 'MENTION_ONLY')
+    setOthersMayMention(member.othersMayMention !== false)
+    setRequireOwnerApproval(member.requireOwnerApprovalOnMention === true)
+  }, [member.id, member.agentReplyMode, member.othersMayMention, member.requireOwnerApprovalOnMention])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const saveAgentSettings = async (patch: {
+    replyMode?: AgentReplyMode
+    othersMayMention?: boolean
+    requireOwnerApprovalOnMention?: boolean
+  }) => {
+    setSaving(true)
+    try {
+      await groupsApi.patchAgentSettings(publicId, member.id, patch)
+      toast.success('已保存')
+      onChanged()
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/60 p-3 sm:items-center">
+      <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭" onClick={onClose} />
+      <div className="relative z-10 flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-[#161616] shadow-2xl ring-1 ring-inset ring-white/[0.06]">
+        <div className="flex items-start gap-3 border-b border-white/[0.06] px-4 py-3">
+          {isAgent && member.userAgentId != null ? (
+            <GroupAgentContextRing publicId={publicId} userAgentId={member.userAgentId} size={44}>
+              <MemberAvatar name={displayName} url={member.avatarUrl} agent className="h-full w-full" />
+            </GroupAgentContextRing>
+          ) : (
+            <MemberAvatar name={displayName} url={member.avatarUrl} agent={isAgent} />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-medium text-white/90">{displayName}</div>
+            <p className="mt-0.5 text-[11px] text-white/40">
+              {isAgent ? (
+                <>
+                  Agent · 归属 {member.ownerName || `用户#${member.ownerUserId ?? '?'}`}
+                  {member.localBridge ? ' · 本机桥' : ''}
+                </>
+              ) : (
+                <>
+                  {roleLabel(member.role)}
+                  {member.username ? ` · @${member.username}` : ''}
+                </>
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-white/40 hover:bg-white/8 hover:text-white/70"
+            aria-label="关闭"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+          {canEditReply && (
+            <section>
+              <div className="mb-1.5 text-[11px] font-medium text-white/55">回复习惯</div>
+              <AppSelect
+                value={replyMode}
+                options={REPLY_MODE_OPTIONS}
+                onChange={(v) => {
+                  const mode = v as AgentReplyMode
+                  setReplyMode(mode)
+                  void saveAgentSettings({ replyMode: mode })
+                }}
+                disabled={saving}
+              />
+            </section>
+          )}
+
+          {canEditMention && (
+            <section className="space-y-2">
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.04] px-3 py-2.5">
+                <span className="min-w-0">
+                  <span className="block text-xs text-white/70">允许其他成员 @</span>
+                  <span className="mt-0.5 block text-[10px] leading-relaxed text-white/35">
+                    关闭后仅你本人 @ / 回复可触发；其他人类点名无效。Agent 互 @ 另需同主人
+                  </span>
+                </span>
+                <AppToggle
+                  checked={othersMayMention}
+                  disabled={saving}
+                  ariaLabel="允许其他成员 @"
+                  onChange={(v) => {
+                    setOthersMayMention(v)
+                    void saveAgentSettings({ othersMayMention: v })
+                  }}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.04] px-3 py-2.5">
+                <span className="min-w-0">
+                  <span className="block text-xs text-white/70">被 @ 时请示我</span>
+                  <span className="mt-0.5 block text-[10px] leading-relaxed text-white/35">
+                    开启后，其他人（含同主人 Agent）点名先发审批气泡，仅你可同意或拒绝；你自己 @ 不请示
+                  </span>
+                </span>
+                <AppToggle
+                  checked={requireOwnerApproval}
+                  disabled={saving}
+                  ariaLabel="被 @ 时请示我"
+                  onChange={(v) => {
+                    setRequireOwnerApproval(v)
+                    void saveAgentSettings({ requireOwnerApprovalOnMention: v })
+                  }}
+                />
+              </div>
+            </section>
+          )}
+
+          {isAgent && member.localBridge && member.userAgentId != null && (
+            <section>
+              <div className="mb-1.5 text-[11px] font-medium text-white/55">任务池</div>
+              <AgentTaskPool
+                publicId={publicId}
+                userAgentId={member.userAgentId}
+                agentName={displayName}
+                canView={canViewTasks}
+                defaultOpen
+              />
+            </section>
+          )}
+
+          {(canPromote || canRemove) && (
+            <section className="space-y-2 border-t border-white/[0.06] pt-3">
+              <div className="text-[11px] font-medium text-white/55">成员操作</div>
+              {canPromote && (
+                <button
+                  type="button"
+                  className="w-full rounded-lg bg-white/[0.06] px-3 py-2 text-left text-xs text-white/75 hover:bg-white/10"
+                  onClick={async () => {
+                    try {
+                      if (member.role === 'ADMIN') await groupsApi.demoteAdmin(publicId, member.id)
+                      else await groupsApi.promoteAdmin(publicId, member.id)
+                      toast.success(member.role === 'ADMIN' ? '已取消管理员' : '已设为管理员')
+                      onChanged()
+                      onClose()
+                    } catch (e) {
+                      toast.error((e as Error).message)
+                    }
+                  }}
+                >
+                  {member.role === 'ADMIN' ? '取消管理员' : '设为管理员'}
+                </button>
+              )}
+              {canRemove && (
+                <button
+                  type="button"
+                  className="w-full rounded-lg bg-red-500/10 px-3 py-2 text-left text-xs text-red-300/85 hover:bg-red-500/15"
+                  onClick={async () => {
+                    const who = isAgent ? `Agent「${displayName}」` : `「${displayName}」`
+                    if (!confirm(`确定将 ${who} 移出群聊？`)) return
+                    try {
+                      await groupsApi.removeMember(publicId, member.id)
+                      toast.success('已移出')
+                      onChanged()
+                      onClose()
+                    } catch (e) {
+                      toast.error((e as Error).message)
+                    }
+                  }}
+                >
+                  移出群聊
+                </button>
+              )}
+            </section>
+          )}
+
+          {!canEditReply && !canEditMention && !canViewTasks && !canPromote && !canRemove && (
+            <p className="py-6 text-center text-[11px] text-white/35">暂无可操作项</p>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
 export function GroupMembersPanel({
   publicId,
   detail,
@@ -305,8 +468,16 @@ export function GroupMembersPanel({
   const [selectedAgents, setSelectedAgents] = useState<number[]>([])
   const [batchMode, setBatchMode] = useState<AgentReplyMode>('MENTION_ONLY')
   const [batchOpen, setBatchOpen] = useState(false)
+  const [settingsMember, setSettingsMember] = useState<GroupMember | null>(null)
   const canManage = detail.myRole === 'OWNER' || detail.myRole === 'ADMIN'
   const canInvite = detail.canInvite !== false
+
+  useEffect(() => {
+    if (!settingsMember) return
+    const fresh = detail.members.find((x) => x.id === settingsMember.id)
+    if (fresh) setSettingsMember(fresh)
+    else setSettingsMember(null)
+  }, [detail.members]) // eslint-disable-line react-hooks/exhaustive-deps -- sync open modal with refreshed detail
 
   const membersSorted = useMemo(() => {
     const rank = (r: string) => (r === 'OWNER' ? 0 : r === 'ADMIN' ? 1 : 2)
@@ -320,20 +491,11 @@ export function GroupMembersPanel({
 
   const agents = detail.members.filter((m) => m.memberType === 'AGENT')
 
-  const setReply = async (memberId: number, mode: AgentReplyMode) => {
-    try {
-      await groupsApi.setReplyMode(publicId, { agentMemberId: memberId, mode })
-      onChanged()
-    } catch (e) {
-      toast.error((e as Error).message)
-    }
-  }
-
   return (
     <div className="space-y-3">
       <div className="flex items-start justify-between gap-2">
         <p className="text-[11px] leading-relaxed text-white/40">
-          人类与 Agent 同等管理。Agent 显示归属用户；本地桥 Agent 可查看本群任务池（未领/已领/完成/失败/取消）。
+          点成员卡片右侧 ⋯ 打开设置。Agent 的回复习惯、@ 许可与任务池都在设置里。
         </p>
         {canInvite ? (
           <button
@@ -350,99 +512,53 @@ export function GroupMembersPanel({
       </div>
 
       {canManage && (
-        <label className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.04] px-3 py-2 text-xs text-white/65">
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.04] px-3 py-2.5 text-xs text-white/65">
           <span>
             允许普通成员邀请
             <span className="mt-0.5 block text-[10px] text-white/35">
               关闭后仅群主/管理员可邀请用户或 Agent，扫码入群也会暂停
             </span>
           </span>
-          <input
-            type="checkbox"
-            className="accent-blue-500"
+          <AppToggle
             checked={detail.membersInviteEnabled !== false}
-            onChange={async (e) => {
+            ariaLabel="允许普通成员邀请"
+            onChange={async (v) => {
               try {
-                await groupsApi.patch(publicId, { membersInviteEnabled: e.target.checked })
-                toast.success(e.target.checked ? '已开启成员邀请' : '已关闭成员邀请')
+                await groupsApi.patch(publicId, { membersInviteEnabled: v })
+                toast.success(v ? '已开启成员邀请' : '已关闭成员邀请')
                 onChanged()
               } catch (err) {
                 toast.error((err as Error).message)
               }
             }}
           />
-        </label>
+        </div>
       )}
 
       <ul className="space-y-2">
         {membersSorted.map((m) => {
           const isAgent = m.memberType === 'AGENT'
-          const displayName = m.name || m.username || (isAgent ? 'Agent' : '成员')
+          const displayName = memberDisplayName(m, isAgent)
           const isSelf = !isAgent && m.userId === user?.userId
           const ownsAgent = isAgent && m.ownerUserId != null && m.ownerUserId === user?.userId
-          const canPromote = detail.myRole === 'OWNER' && m.role !== 'OWNER'
-          const canRemove =
-            m.role !== 'OWNER' &&
-            (canManage || ownsAgent) &&
-            !(m.role === 'ADMIN' && detail.myRole !== 'OWNER')
           const canEditReply = isAgent && (canManage || ownsAgent)
-          const canViewTasks = isAgent && !!m.localBridge && (canManage || ownsAgent)
-          const menuItems: MoreMenuItem[] = []
-          if (canEditReply) {
-            const cur = m.agentReplyMode || 'MENTION_ONLY'
-            menuItems.push({
-              key: 'reply',
-              label: '回复习惯',
-              choices: REPLY_MODE_OPTIONS.map((opt) => ({
-                value: opt.value,
-                label: opt.label,
-                active: cur === opt.value,
-                onPick: () => setReply(m.id, opt.value as AgentReplyMode),
-              })),
-            })
-          }
-          if (canPromote) {
-            menuItems.push({
-              key: 'role',
-              label: m.role === 'ADMIN' ? '取消管理员' : '设为管理员',
-              onClick: async () => {
-                try {
-                  if (m.role === 'ADMIN') await groupsApi.demoteAdmin(publicId, m.id)
-                  else await groupsApi.promoteAdmin(publicId, m.id)
-                  toast.success(m.role === 'ADMIN' ? '已取消管理员' : '已设为管理员')
-                  onChanged()
-                } catch (e) {
-                  toast.error((e as Error).message)
-                }
-              },
-            })
-          }
-          if (canRemove) {
-            menuItems.push({
-              key: 'remove',
-              label: '移出群聊',
-              danger: true,
-              onClick: async () => {
-                const who = isAgent ? `Agent「${displayName}」` : `「${displayName}」`
-                if (!confirm(`确定将 ${who} 移出群聊？`)) return
-                try {
-                  await groupsApi.removeMember(publicId, m.id)
-                  toast.success('已移出')
-                  onChanged()
-                } catch (e) {
-                  toast.error((e as Error).message)
-                }
-              },
-            })
-          }
+          const showSettingsBtn =
+            isAgent ||
+            (detail.myRole === 'OWNER' && m.role !== 'OWNER') ||
+            (m.role !== 'OWNER' &&
+              (canManage || ownsAgent) &&
+              !(m.role === 'ADMIN' && detail.myRole !== 'OWNER'))
 
           return (
-            <li
-              key={m.id}
-              className="rounded-xl bg-white/[0.04] p-3"
-            >
+            <li key={m.id} className="rounded-xl bg-white/[0.04] p-3">
               <div className="flex items-start gap-3">
-                <MemberAvatar name={displayName} url={m.avatarUrl} agent={isAgent} />
+                {isAgent && m.userAgentId != null ? (
+                  <GroupAgentContextRing publicId={publicId} userAgentId={m.userAgentId} size={44}>
+                    <MemberAvatar name={displayName} url={m.avatarUrl} agent className="h-full w-full" />
+                  </GroupAgentContextRing>
+                ) : (
+                  <MemberAvatar name={displayName} url={m.avatarUrl} agent={isAgent} />
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -460,6 +576,11 @@ export function GroupMembersPanel({
                             本机桥
                           </span>
                         )}
+                        {isAgent && m.othersMayMention === false && (
+                          <span className="rounded bg-amber-500/12 px-1.5 py-0.5 text-[10px] text-amber-200/80">
+                            仅主人可 @
+                          </span>
+                        )}
                       </div>
                       <p className="mt-0.5 truncate text-[11px] text-white/35">
                         {isAgent ? (
@@ -474,7 +595,7 @@ export function GroupMembersPanel({
                           </>
                         )}
                       </p>
-                        {isAgent && (
+                      {isAgent && (
                         <p className="mt-1 text-[10px] text-white/30">
                           回复：
                           {REPLY_MODE_OPTIONS.find((o) => o.value === (m.agentReplyMode || 'MENTION_ONLY'))
@@ -506,20 +627,18 @@ export function GroupMembersPanel({
                           title="批量选择"
                         />
                       )}
-                      <MoreMenu items={menuItems} />
+                      {showSettingsBtn && (
+                        <button
+                          type="button"
+                          className="rounded-lg p-1.5 text-white/35 hover:bg-white/10 hover:text-white/70"
+                          aria-label="成员设置"
+                          onClick={() => setSettingsMember(m)}
+                        >
+                          <MoreHorizontal className="h-4 w-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
-
-                  {isAgent && m.localBridge && m.userAgentId != null && (
-                    <div className="mt-2">
-                      <AgentTaskPool
-                        publicId={publicId}
-                        userAgentId={m.userAgentId}
-                        agentName={displayName}
-                        canView={canViewTasks}
-                      />
-                    </div>
-                  )}
                 </div>
               </div>
             </li>
@@ -568,6 +687,22 @@ export function GroupMembersPanel({
             </div>
           )}
         </div>
+      )}
+
+      {settingsMember && (
+        <MemberSettingsModal
+          publicId={publicId}
+          member={settingsMember}
+          displayName={memberDisplayName(
+            settingsMember,
+            settingsMember.memberType === 'AGENT',
+          )}
+          detail={detail}
+          onClose={() => setSettingsMember(null)}
+          onChanged={() => {
+            onChanged()
+          }}
+        />
       )}
     </div>
   )

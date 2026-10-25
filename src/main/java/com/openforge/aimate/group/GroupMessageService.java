@@ -1,8 +1,10 @@
 package com.openforge.aimate.group;
 
+import com.openforge.aimate.agent.UserAgentIdentityService;
 import com.openforge.aimate.domain.ChatGroup;
 import com.openforge.aimate.domain.GroupAttachment;
 import com.openforge.aimate.domain.GroupMember;
+import com.openforge.aimate.domain.GroupMentionApproval;
 import com.openforge.aimate.domain.GroupMessage;
 import com.openforge.aimate.domain.GroupMessageRead;
 import com.openforge.aimate.domain.User;
@@ -14,6 +16,7 @@ import com.openforge.aimate.repository.GroupMessageReadRepository;
 import com.openforge.aimate.repository.GroupMessageRepository;
 import com.openforge.aimate.repository.UserAgentRepository;
 import com.openforge.aimate.repository.UserRepository;
+import com.openforge.aimate.memory.GroupMemoryCaptureService;
 import com.openforge.aimate.storage.ChatCosStorageService;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
@@ -32,6 +35,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -49,10 +53,13 @@ public class GroupMessageService {
     private final GroupMessageReadRepository readRepository;
     private final UserRepository userRepository;
     private final UserAgentRepository userAgentRepository;
+    private final UserAgentIdentityService identityService;
     private final GroupAccessService access;
     private final GroupEventPublisher eventPublisher;
     private final ChatCosStorageService chatCos;
     private final GroupAgentDispatcher agentDispatcher;
+    private final GroupMentionApprovalService mentionApprovalService;
+    private final GroupMemoryCaptureService groupMemoryCaptureService;
 
     public GroupMessageService(
             ChatGroupRepository groupRepository,
@@ -62,10 +69,13 @@ public class GroupMessageService {
             GroupMessageReadRepository readRepository,
             UserRepository userRepository,
             UserAgentRepository userAgentRepository,
+            UserAgentIdentityService identityService,
             GroupAccessService access,
             GroupEventPublisher eventPublisher,
             ChatCosStorageService chatCos,
-            @Lazy GroupAgentDispatcher agentDispatcher
+            @Lazy GroupAgentDispatcher agentDispatcher,
+            @Lazy GroupMentionApprovalService mentionApprovalService,
+            GroupMemoryCaptureService groupMemoryCaptureService
     ) {
         this.groupRepository = groupRepository;
         this.memberRepository = memberRepository;
@@ -74,10 +84,21 @@ public class GroupMessageService {
         this.readRepository = readRepository;
         this.userRepository = userRepository;
         this.userAgentRepository = userAgentRepository;
+        this.identityService = identityService;
         this.access = access;
         this.eventPublisher = eventPublisher;
         this.chatCos = chatCos;
         this.agentDispatcher = agentDispatcher;
+        this.mentionApprovalService = mentionApprovalService;
+        this.groupMemoryCaptureService = groupMemoryCaptureService;
+    }
+
+    /** SSE / 建卡发布用：组装单条消息 view（含审批卡）。 */
+    public Map<String, Object> messageViewForPublish(GroupMessage msg, Long viewerUserId) {
+        return messageView(msg, List.of(), List.of(), Map.of(), Map.of(), viewerUserId,
+                mentionApprovalService.byCardMessageIds(
+                        msg.getMessageKind() == GroupMessage.MessageKind.MENTION_APPROVAL
+                                ? List.of(msg.getId()) : List.of()));
     }
 
     @Transactional
@@ -107,10 +128,9 @@ public class GroupMessageService {
 
         markRead(msg, me, 0L);
 
-        g.setUpdateTime(LocalDateTime.now());
-        groupRepository.save(g);
+        groupRepository.touchActivity(g.getId());
 
-        Map<String, Object> view = messageView(msg, savedAtts, List.of(readBrief(me, 0L)));
+        Map<String, Object> view = messageView(msg, savedAtts, List.of(readBrief(me, 0L)), userId);
         eventPublisher.publish(g.getPublicId(), "MESSAGE", view);
 
         // 事务提交后再派发，避免异步线程读不到本条消息
@@ -122,13 +142,25 @@ public class GroupMessageService {
                 @Override
                 public void afterCommit() {
                     agentDispatcher.dispatchAfterUserMessage(groupRef, msgRef, senderRef);
+                    groupMemoryCaptureService.observeImportantUserMessage(groupRef.getId(), msgRef.getId());
                 }
             });
         } else {
             agentDispatcher.dispatchAfterUserMessage(groupRef, msgRef, senderRef);
+            groupMemoryCaptureService.observeImportantUserMessage(groupRef.getId(), msgRef.getId());
         }
 
         return view;
+    }
+
+    /** 分享快照：按时间正序取最近 limit 条（已 enrich）。 */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> snapshotForShare(Long groupId, int limit) {
+        int lim = Math.min(500, Math.max(1, limit <= 0 ? 200 : limit));
+        List<GroupMessage> msgs = messageRepository.findByGroupIdOrderByIdDesc(groupId, PageRequest.of(0, lim));
+        msgs = new ArrayList<>(msgs);
+        java.util.Collections.reverse(msgs);
+        return enrichMessages(msgs, null);
     }
 
     @Transactional(readOnly = true)
@@ -155,7 +187,7 @@ public class GroupMessageService {
             msgs = new ArrayList<>(msgs);
             java.util.Collections.reverse(msgs);
         }
-        return enrichMessages(msgs);
+        return enrichMessages(msgs, userId);
     }
 
     @Transactional(readOnly = true)
@@ -224,19 +256,124 @@ public class GroupMessageService {
     /** Agent / system 写消息入口 */
     @Transactional
     public Map<String, Object> postAgentMessage(ChatGroup g, GroupMember agentMember, String content, Long replyToId) {
+        return postAgentMessage(g, agentMember, content, replyToId, true, null);
+    }
+
+    @Transactional
+    public Map<String, Object> postAgentMessageWithThinking(
+            ChatGroup g, GroupMember agentMember, String content, Long replyToId, String thinkingText
+    ) {
+        return postAgentMessage(g, agentMember, content, replyToId, true, thinkingText, null);
+    }
+
+    @Transactional
+    public Map<String, Object> postAgentMessageWithTraces(
+            ChatGroup g,
+            GroupMember agentMember,
+            String content,
+            Long replyToId,
+            String thinkingText,
+            String executionText
+    ) {
+        return postAgentMessage(g, agentMember, content, replyToId, true, thinkingText, executionText);
+    }
+
+    /**
+     * @param triggerDispatch false 时不触发其它 Agent（流式占位/增量更新用，避免递归派发）
+     */
+    @Transactional
+    public Map<String, Object> postAgentMessage(
+            ChatGroup g, GroupMember agentMember, String content, Long replyToId, boolean triggerDispatch
+    ) {
+        return postAgentMessage(g, agentMember, content, replyToId, triggerDispatch, null, null);
+    }
+
+    @Transactional
+    public Map<String, Object> postAgentMessage(
+            ChatGroup g,
+            GroupMember agentMember,
+            String content,
+            Long replyToId,
+            boolean triggerDispatch,
+            String thinkingText
+    ) {
+        return postAgentMessage(g, agentMember, content, replyToId, triggerDispatch, thinkingText, null);
+    }
+
+    @Transactional
+    public Map<String, Object> postAgentMessage(
+            ChatGroup g,
+            GroupMember agentMember,
+            String content,
+            Long replyToId,
+            boolean triggerDispatch,
+            String thinkingText,
+            String executionText
+    ) {
         GroupMessage msg = new GroupMessage();
         msg.setGroupId(g.getId());
         msg.setSenderType(GroupMessage.SenderType.AGENT);
         msg.setSenderAgentId(agentMember.getUserAgentId());
         msg.setContent(content);
+        if (StringUtils.hasText(thinkingText)) {
+            msg.setThinkingText(thinkingText.trim());
+        }
+        if (StringUtils.hasText(executionText)) {
+            msg.setExecutionText(executionText.trim());
+        }
         msg.setReplyToId(replyToId);
         messageRepository.saveAndFlush(msg);
         extractLinks(g.getId(), msg.getId(), content);
         // 自己发的消息不当作「已读回执」展示消耗；points=0
         markRead(msg, agentMember, 0L);
-        g.setUpdateTime(LocalDateTime.now());
-        groupRepository.save(g);
-        Map<String, Object> view = messageView(msg, List.of(), List.of(readBrief(agentMember, 0L)));
+        // 并发 SMART 回复时禁止对同一托管实体 save（否则 OptimisticLock 吞掉后发言）
+        groupRepository.touchActivity(g.getId());
+        Map<String, Object> view = messageView(msg, List.of(), List.of(readBrief(agentMember, 0L)), null);
+        eventPublisher.publish(g.getPublicId(), "MESSAGE", view);
+
+        if (triggerDispatch) {
+            // Agent 消息同样触发其他 SMART/MENTION Agent 识别（含 Agent 互 @）
+            final ChatGroup groupRef = g;
+            final GroupMessage msgRef = msg;
+            final GroupMember senderRef = agentMember;
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        agentDispatcher.dispatchAfterMessage(groupRef, msgRef, senderRef);
+                    }
+                });
+            } else {
+                agentDispatcher.dispatchAfterMessage(groupRef, msgRef, senderRef);
+            }
+        }
+        return view;
+    }
+
+    /**
+     * 原地更新 Agent 消息正文并推 SSE MESSAGE（前端按 id upsert）。
+     * 不触发 Agent 派发。
+     */
+    @Transactional
+    public Map<String, Object> updateAgentMessageContent(
+            ChatGroup g, GroupMember agentMember, Long messageId, String content
+    ) {
+        if (messageId == null || !StringUtils.hasText(content)) {
+            throw new IllegalArgumentException("messageId/content 无效");
+        }
+        GroupMessage msg = messageRepository.findById(messageId)
+                .orElseThrow(() -> new IllegalArgumentException("消息不存在"));
+        if (!msg.getGroupId().equals(g.getId())) {
+            throw new IllegalArgumentException("消息不属于该群");
+        }
+        if (msg.getSenderType() != GroupMessage.SenderType.AGENT
+                || !Objects.equals(msg.getSenderAgentId(), agentMember.getUserAgentId())) {
+            throw new IllegalArgumentException("只能更新本 Agent 自己的消息");
+        }
+        msg.setContent(content);
+        messageRepository.saveAndFlush(msg);
+        groupRepository.touchActivity(g.getId());
+        Map<String, Object> view = messageView(msg, List.of(), List.of(readBrief(agentMember, 0L)), null);
         eventPublisher.publish(g.getPublicId(), "MESSAGE", view);
         return view;
     }
@@ -274,6 +411,22 @@ public class GroupMessageService {
         ));
     }
 
+    /** 本机/Agent 思考过程实时推送（不落库气泡；前端显示在回复气泡上方） */
+    public void publishAgentThinking(ChatGroup g, Map<String, Object> payload) {
+        if (g == null || payload == null || payload.isEmpty()) return;
+        eventPublisher.publish(g.getPublicId(), "AGENT_THINKING", payload);
+    }
+
+    /** 给已有 Agent 消息补上思考过程正文 */
+    @Transactional
+    public void attachThinking(Long messageId, String thinkingText) {
+        if (messageId == null || !StringUtils.hasText(thinkingText)) return;
+        messageRepository.findById(messageId).ifPresent(msg -> {
+            msg.setThinkingText(thinkingText.trim());
+            messageRepository.save(msg);
+        });
+    }
+
     private GroupMessageRead markRead(GroupMessage msg, GroupMember member, long pointsSpent) {
         long add = Math.max(0L, pointsSpent);
         var existing = readRepository.findByMessageIdAndMemberId(msg.getId(), member.getId());
@@ -301,16 +454,32 @@ public class GroupMessageService {
             if (a == null || !StringUtils.hasText(a.url())) continue;
             GroupAttachment.Kind kind = parseKind(a.kind());
             String url = a.url().trim();
+            // data URL 远超 1024 列宽；必须落 COS，禁止截断后入库（否则气泡里图片不可见）
             if ((kind == GroupAttachment.Kind.IMAGE || kind == GroupAttachment.Kind.VIDEO || kind == GroupAttachment.Kind.AUDIO)
-                    && url.startsWith("data:") && chatCos.isUsable()) {
-                List<String> persisted = chatCos.persistUserImages(List.of(url));
-                if (!persisted.isEmpty()) url = persisted.get(0);
+                    && url.startsWith("data:")) {
+                if (!chatCos.isUsable()) {
+                    throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "图片存储未配置，暂无法发送图片");
+                }
+                try {
+                    List<String> persisted = chatCos.persistUserImages(List.of(url));
+                    if (persisted.isEmpty() || !StringUtils.hasText(persisted.get(0))) {
+                        throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "图片上传失败");
+                    }
+                    url = persisted.get(0).trim();
+                } catch (ResponseStatusException e) {
+                    throw e;
+                } catch (Exception e) {
+                    throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "图片上传失败: " + e.getMessage());
+                }
+            }
+            if (url.length() > 1024) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "附件地址过长");
             }
             GroupAttachment row = new GroupAttachment();
             row.setGroupId(groupId);
             row.setMessageId(messageId);
             row.setKind(kind);
-            row.setUrl(trim(url, 1024));
+            row.setUrl(url);
             row.setMime(trim(a.mime(), 128));
             row.setSizeBytes(a.sizeBytes());
             row.setTitle(trim(a.title(), 256));
@@ -344,7 +513,7 @@ public class GroupMessageService {
         }
     }
 
-    private List<Map<String, Object>> enrichMessages(List<GroupMessage> msgs) {
+    private List<Map<String, Object>> enrichMessages(List<GroupMessage> msgs, Long viewerUserId) {
         if (msgs.isEmpty()) return List.of();
         List<Long> ids = msgs.stream().map(GroupMessage::getId).toList();
         Map<Long, List<GroupAttachment>> atts = attachmentRepository.findByMessageIdIn(ids).stream()
@@ -372,6 +541,12 @@ public class GroupMessageService {
                     atts.computeIfAbsent(a.getMessageId(), k -> new ArrayList<>()).add(a));
         }
 
+        List<Long> approvalCardIds = msgs.stream()
+                .filter(m -> m.getMessageKind() == GroupMessage.MessageKind.MENTION_APPROVAL)
+                .map(GroupMessage::getId)
+                .toList();
+        Map<Long, GroupMentionApproval> approvals = mentionApprovalService.byCardMessageIds(approvalCardIds);
+
         List<Map<String, Object>> out = new ArrayList<>();
         for (GroupMessage msg : msgs) {
             List<Map<String, Object>> readers = reads.getOrDefault(msg.getId(), List.of()).stream()
@@ -387,12 +562,18 @@ public class GroupMessageService {
                         return readBrief(gm, spent);
                     })
                     .toList();
-            out.add(messageView(msg, atts.getOrDefault(msg.getId(), List.of()), readers, parents, atts));
+            out.add(messageView(msg, atts.getOrDefault(msg.getId(), List.of()), readers, parents, atts,
+                    viewerUserId, approvals));
         }
         return out;
     }
 
-    private Map<String, Object> messageView(GroupMessage msg, List<GroupAttachment> atts, List<Map<String, Object>> readers) {
+    private Map<String, Object> messageView(
+            GroupMessage msg,
+            List<GroupAttachment> atts,
+            List<Map<String, Object>> readers,
+            Long viewerUserId
+    ) {
         Map<Long, GroupMessage> parents = Map.of();
         Map<Long, List<GroupAttachment>> parentAtts = Map.of();
         if (msg.getReplyToId() != null) {
@@ -402,7 +583,10 @@ public class GroupMessageService {
                 parentAtts = Map.of(parent.getId(), attachmentRepository.findByMessageId(parent.getId()));
             }
         }
-        return messageView(msg, atts, readers, parents, parentAtts);
+        Map<Long, GroupMentionApproval> approvals = msg.getMessageKind() == GroupMessage.MessageKind.MENTION_APPROVAL
+                ? mentionApprovalService.byCardMessageIds(List.of(msg.getId()))
+                : Map.of();
+        return messageView(msg, atts, readers, parents, parentAtts, viewerUserId, approvals);
     }
 
     private Map<String, Object> messageView(
@@ -410,7 +594,9 @@ public class GroupMessageService {
             List<GroupAttachment> atts,
             List<Map<String, Object>> readers,
             Map<Long, GroupMessage> parents,
-            Map<Long, List<GroupAttachment>> allAtts
+            Map<Long, List<GroupAttachment>> allAtts,
+            Long viewerUserId,
+            Map<Long, GroupMentionApproval> approvalsByCardId
     ) {
         Map<String, Object> v = new LinkedHashMap<>();
         v.put("id", msg.getId());
@@ -419,8 +605,17 @@ public class GroupMessageService {
         v.put("senderUserId", msg.getSenderUserId());
         v.put("senderAgentId", msg.getSenderAgentId());
         v.put("content", msg.getContent());
+        if (StringUtils.hasText(msg.getThinkingText())) {
+            v.put("thinking", msg.getThinkingText());
+        }
+        if (StringUtils.hasText(msg.getExecutionText())) {
+            v.put("execution", msg.getExecutionText());
+        }
         v.put("replyToId", msg.getReplyToId());
         v.put("clientMsgId", msg.getClientMsgId());
+        GroupMessage.MessageKind kind = msg.getMessageKind() != null
+                ? msg.getMessageKind() : GroupMessage.MessageKind.CHAT;
+        v.put("messageKind", kind.name());
         v.put("createTime", msg.getCreateTime());
         fillSender(v, msg);
         v.put("attachments", atts.stream().map(this::attachmentView).toList());
@@ -437,6 +632,12 @@ public class GroupMessageService {
                 v.put("replyTo", replySnapshot(parent, allAtts.getOrDefault(parent.getId(), List.of())));
             }
         }
+        if (kind == GroupMessage.MessageKind.MENTION_APPROVAL && approvalsByCardId != null) {
+            GroupMentionApproval row = approvalsByCardId.get(msg.getId());
+            if (row != null) {
+                v.put("mentionApproval", mentionApprovalService.approvalView(row, viewerUserId));
+            }
+        }
         return v;
     }
 
@@ -449,6 +650,9 @@ public class GroupMessageService {
         } else if (msg.getSenderType() == GroupMessage.SenderType.AGENT && msg.getSenderAgentId() != null) {
             userAgentRepository.findById(msg.getSenderAgentId()).ifPresent(ua -> {
                 v.put("senderName", ua.getName());
+                v.put("senderOriginalName", identityService.originalName(ua));
+                v.put("senderCareerName", identityService.careerName(ua));
+                v.put("senderDisplayTitle", identityService.displayTitle(ua));
                 v.put("senderAvatarUrl", ua.getAvatarUrl());
             });
         } else {

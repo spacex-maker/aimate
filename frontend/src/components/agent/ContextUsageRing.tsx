@@ -1,10 +1,20 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Minimize2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { formatTokenCount } from '../../lib/estimateTokens'
 import { agentApi } from '../../api/agent'
+
+export type ContextCompressResult = {
+  ok: boolean
+  compressedMessages: number
+  keptRecentMessages: number
+  summaryChars: number
+  usageBefore: { usedTokens: number }
+  usageAfter: { usedTokens: number }
+  message: string
+}
 
 export interface ContextUsageRingProps {
   percent: number
@@ -15,17 +25,30 @@ export interface ContextUsageRingProps {
   messageTokens?: number
   toolsTokens?: number
   draftTokens?: number
-  /** 服务端建议压缩（≥72% 或消息量偏多） */
+  /** 服务端建议压缩（仅占用 ≥72%） */
   compressRecommended?: boolean
-  /** 有会话时可手动压缩 */
+  /** 有会话时可手动压缩（单聊） */
   sessionId?: string | null
   systemModelId?: number | null
+  /** 群聊等：自定义压缩（与 sessionId 二选一） */
+  compressFn?: (() => Promise<ContextCompressResult>) | null
+  /** 压缩成功后额外失效的 queryKey 前缀 */
+  invalidateKeys?: unknown[][]
   className?: string
+  /**
+   * chip：输入栏旁小环（默认）；
+   * halo：套在头像一周，children 为头像
+   */
+  variant?: 'chip' | 'halo'
+  /** halo 外径（含描边），默认 36 */
+  haloSize?: number
+  /** variant=halo 时包裹的头像 */
+  children?: ReactNode
 }
 
-function ringColor(percent: number, recommend?: boolean): string {
+function ringColor(percent: number): string {
   if (percent >= 90) return '#f87171'
-  if (percent >= 72 || recommend) return '#fbbf24'
+  if (percent >= 72) return '#fbbf24'
   if (percent >= 70) return '#fbbf24'
   return '#34d399'
 }
@@ -45,27 +68,39 @@ export function ContextUsageRing({
   compressRecommended = false,
   sessionId = null,
   systemModelId = null,
+  compressFn = null,
+  invalidateKeys,
   className,
+  variant = 'chip',
+  haloSize = 36,
+  children,
 }: ContextUsageRingProps) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [anchor, setAnchor] = useState<{ left: number; bottom: number } | null>(null)
 
-  const size = 18
-  const stroke = 2.25
+  const halo = variant === 'halo'
+  const size = halo ? haloSize : 18
+  const stroke = halo ? 2.5 : 2.25
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
   const clamped = Math.min(100, Math.max(0, percent))
-  const suggest = compressRecommended || percent >= 72
+  // 仅当占用 ≥72% 时提示；兼容旧接口误报的 compressRecommended
+  const suggest = percent >= 72 || (compressRecommended && percent >= 72)
   const visiblePct = usedTokens > 0 ? Math.max(clamped, 1.5) : 0
   const dash = (Math.min(100, visiblePct) / 100) * c
-  const color = ringColor(percent, suggest)
+  const color = ringColor(percent)
   const label = `${percent >= 10 ? Math.round(percent) : percent.toFixed(1)}%`
   const sys = systemTokens
   const conv = conversationTokens > 0 ? conversationTokens : Math.max(0, messageTokens - systemTokens)
+  const canCompress = !!(sessionId || compressFn)
+  const avatarInset = stroke + 1.5
 
   const compressMut = useMutation({
-    mutationFn: () => agentApi.compressContext(sessionId!, systemModelId),
+    mutationFn: () =>
+      compressFn
+        ? compressFn()
+        : agentApi.compressContext(sessionId!, systemModelId),
     onSuccess: (r) => {
       if (r.ok) {
         toast.success(
@@ -74,7 +109,10 @@ export function ContextUsageRing({
       } else {
         toast(r.message || '暂无需压缩', { icon: 'ℹ️' })
       }
-      qc.invalidateQueries({ queryKey: ['context-usage', sessionId] })
+      if (sessionId) qc.invalidateQueries({ queryKey: ['context-usage', sessionId] })
+      for (const key of invalidateKeys ?? []) {
+        qc.invalidateQueries({ queryKey: key })
+      }
     },
     onError: (e: Error) => toast.error(e.message || '压缩失败'),
   })
@@ -84,44 +122,75 @@ export function ContextUsageRing({
     [label, usedTokens, limitTokens]
   )
 
+  const openPopover = (el: HTMLElement) => {
+    const rect = el.getBoundingClientRect()
+    setAnchor({ left: rect.left + rect.width / 2, bottom: window.innerHeight - rect.top })
+    setOpen((o) => !o)
+  }
+
+  const ringSvg = (
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      className={halo ? 'pointer-events-none absolute inset-0 -rotate-90' : 'block -rotate-90'}
+      aria-hidden
+    >
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke="rgba(255,255,255,0.12)"
+        strokeWidth={stroke}
+      />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke={color}
+        strokeWidth={stroke}
+        strokeLinecap="round"
+        strokeDasharray={`${dash} ${c - dash}`}
+        className="transition-[stroke-dasharray] duration-300 ease-out"
+      />
+    </svg>
+  )
+
   return (
     <div className={`relative flex items-center gap-1 ${className ?? ''}`}>
-      <button
-        type="button"
-        className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-white/50 hover:text-white/80 hover:bg-white/[0.06] transition-colors"
-        title={title}
-        aria-label={title}
-        onClick={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect()
-          setAnchor({ left: rect.left + rect.width / 2, bottom: window.innerHeight - rect.top })
-          setOpen((o) => !o)
-        }}
-      >
-        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="block -rotate-90" aria-hidden>
-          <circle
-            cx={size / 2}
-            cy={size / 2}
-            r={r}
-            fill="none"
-            stroke="rgba(255,255,255,0.12)"
-            strokeWidth={stroke}
-          />
-          <circle
-            cx={size / 2}
-            cy={size / 2}
-            r={r}
-            fill="none"
-            stroke={color}
-            strokeWidth={stroke}
-            strokeLinecap="round"
-            strokeDasharray={`${dash} ${c - dash}`}
-            className="transition-[stroke-dasharray] duration-300 ease-out"
-          />
-        </svg>
-        <span className="hidden sm:inline text-[10px] font-mono tabular-nums text-white/40">
-          {formatTokenCount(usedTokens)}
-        </span>
-      </button>
+      {halo ? (
+        <button
+          type="button"
+          className="relative shrink-0 rounded-full outline-none transition-opacity hover:opacity-95 focus-visible:ring-2 focus-visible:ring-white/25"
+          style={{ width: size, height: size }}
+          title={title}
+          aria-label={title}
+          onClick={(e) => openPopover(e.currentTarget)}
+        >
+          {ringSvg}
+          <div
+            className="absolute overflow-hidden rounded-full bg-white/10"
+            style={{ inset: avatarInset }}
+          >
+            {children}
+          </div>
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-white/50 hover:text-white/80 hover:bg-white/[0.06] transition-colors"
+          title={title}
+          aria-label={title}
+          onClick={(e) => openPopover(e.currentTarget)}
+        >
+          {ringSvg}
+          <span className="hidden sm:inline text-[10px] font-mono tabular-nums text-white/40">
+            {formatTokenCount(usedTokens)}
+          </span>
+        </button>
+      )}
 
       {open &&
         anchor &&
@@ -189,7 +258,7 @@ export function ContextUsageRing({
                 </li>
               </ul>
 
-              {sessionId && (
+              {canCompress && (
                 <button
                   type="button"
                   disabled={compressMut.isPending}

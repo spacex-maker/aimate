@@ -10,6 +10,7 @@ import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { OAuthCallbackPage } from './pages/OAuthCallbackPage'
 import { LandingPage } from './pages/LandingPage'
+import { EmergencePage } from './pages/EmergencePage'
 import { HomePage } from './pages/HomePage'
 import { DashboardPage } from './pages/DashboardPage'
 import { SessionPage } from './pages/SessionPage'
@@ -20,8 +21,10 @@ import { AgentHirePage } from './pages/AgentHirePage'
 import { OfficeHirePage } from './pages/OfficeHirePage'
 import { MyAgentsPage } from './pages/MyAgentsPage'
 import { GroupChatPage } from './pages/GroupChatPage'
+import { GroupSharePage } from './pages/GroupSharePage'
 import { JoinGroupPage } from './pages/JoinGroupPage'
 import { ADMIN_SITE_ORIGIN } from './lib/host'
+import { SessionExpiredGate } from './auth/SessionExpiredGate'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -97,6 +100,7 @@ export default function App() {
         <Routes>
           {/* ── Public routes (no sidebar) ─────────────────────────────── */}
           <Route path="/" element={<LandingPage />} />
+          <Route path="/emergence" element={<EmergencePage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
@@ -220,6 +224,9 @@ export default function App() {
             }
           />
 
+          {/* 群聊分享快照（公开只读，随机字母后缀） */}
+          <Route path="/s/:code" element={<GroupSharePage />} />
+
           <Route
             path="/groups/:publicId"
             element={
@@ -246,6 +253,7 @@ export default function App() {
             },
           }}
         />
+        <SessionExpiredGate />
       </ChatInputProvider>
       </ModelSelectionProvider>
     </QueryClientProvider>

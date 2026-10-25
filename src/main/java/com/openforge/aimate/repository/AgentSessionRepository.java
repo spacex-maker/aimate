@@ -20,6 +20,13 @@ public interface AgentSessionRepository extends JpaRepository<AgentSession, Long
     /** 当前用户最近会话，按创建时间倒序，用于首页最近会话列表（排除已隐藏会话） */
     List<AgentSession> findByUserIdAndHiddenFalseOrderByCreateTimeDesc(Long userId, Pageable pageable);
 
+    /** 活跃会话：优先按用户最近发消息时间，其次更新时间（发消息后列表上浮） */
+    List<AgentSession> findByUserIdAndHiddenFalseOrderByLastUserMessageAtDescUpdateTimeDesc(
+            Long userId, Pageable pageable);
+
+    /** 已归档（hidden）会话，按更新时间倒序 */
+    List<AgentSession> findByUserIdAndHiddenTrueOrderByUpdateTimeDesc(Long userId, Pageable pageable);
+
     List<AgentSession> findByStatus(AgentSession.SessionStatus status);
 
     /** 重启后：将仍有线程的会话置为 IDLE（进程已退出）。 */
@@ -37,4 +44,12 @@ public interface AgentSessionRepository extends JpaRepository<AgentSession, Long
 
     List<AgentSession> findByUserIdAndUserAgentIdAndHiddenFalseOrderByUpdateTimeDesc(
             Long userId, Long userAgentId, Pageable pageable);
+
+    List<AgentSession> findByUserIdAndUserAgentIdAndHiddenFalseOrderByLastUserMessageAtDescUpdateTimeDesc(
+            Long userId, Long userAgentId, Pageable pageable);
+
+    /** Agent 默认工具开关变更后：所有单聊取消会话覆盖，重新跟随 Agent。 */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE AgentSession s SET s.toolSettingsOverridden = false WHERE s.userAgentId = :userAgentId AND s.toolSettingsOverridden = true")
+    int clearToolSettingsOverrides(@Param("userAgentId") Long userAgentId);
 }

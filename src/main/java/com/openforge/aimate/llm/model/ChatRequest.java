@@ -27,8 +27,20 @@ public record ChatRequest(
         List<Tool> tools,
         @JsonProperty("tool_choice") String toolChoice,
         Double temperature,
-        @JsonProperty("max_tokens") Integer maxTokens
+        @JsonProperty("max_tokens") Integer maxTokens,
+        /**
+         * DeepSeek 等：关闭思考链，避免 reasoning 吃光 max_tokens 导致 content 为空。
+         * 例：{@code Thinking.disabled()}
+         */
+        Thinking thinking
 ) {
+    /** OpenAI 兼容扩展：thinking.type = disabled | enabled */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Thinking(String type) {
+        public static Thinking disabled() {
+            return new Thinking("disabled");
+        }
+    }
 
     public static ChatRequest simple(String model, List<Message> messages) {
         return ChatRequest.builder()

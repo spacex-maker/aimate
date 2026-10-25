@@ -8,11 +8,9 @@ import { agentApi } from '../api/agent'
 import { apikeyApi } from '../api/apikey'
 import { multiAgentApi } from '../api/multiAgent'
 import { useAuth } from '../hooks/useAuth'
-import type { SessionResponse } from '../types/agent'
 import { useModelSelection } from '../state/modelSelection.ts'
-import { DeleteSessionModal } from '../components/agent/DeleteSessionModal'
 import { AgentInputBox } from '../components/agent/AgentInputBox'
-import { AgentAvatar } from '../components/agent/AgentAvatar'
+import { AgentAvatar, formatAgentDisplayTitle } from '../components/agent/AgentAvatar'
 
 const EXAMPLES = [
   '用 Python 写一个能批量压缩图片的脚本，并解释每一步',
@@ -25,7 +23,6 @@ export function HomePage() {
   const queryClient = useQueryClient()
   const { user } = useAuth()
   const [task, setTask] = useState('')
-  const [selectedSession, setSelectedSession] = useState<SessionResponse | null>(null)
   const [userAgentId, setUserAgentId] = useState<number | null>(null)
   const { selection, setSelection } = useModelSelection()
 
@@ -34,7 +31,7 @@ export function HomePage() {
     queryFn: () => (user?.userId != null ? apikeyApi.list(user.userId) : Promise.resolve([])),
     enabled: !!user?.userId,
   })
-  const hasDefaultLlmKey = apiKeys.some(k => k.keyType === 'LLM' && k.isDefault)
+  const hasDefaultLlmKey = apiKeys.some((k) => k.keyType === 'LLM' && k.isDefault)
 
   const { data: myAgents = [] } = useQuery({
     queryKey: ['my-agents', user?.userId],
@@ -47,21 +44,38 @@ export function HomePage() {
     enabled: !!user?.userId,
   })
 
+  const activeAgents = myAgents.filter((a) => a.status === 'ACTIVE')
+  const selectedAgent = activeAgents.find((a) => a.id === userAgentId) ?? null
+
   useEffect(() => {
     if (userAgentId != null) return
     const sec = myAgents.find((a) => a.kind === 'SECRETARY' && a.status === 'ACTIVE')
     if (sec) setUserAgentId(sec.id)
   }, [myAgents, userAgentId])
 
-  const startMutation = useMutation({
-    mutationFn: (payload: {
-      task: string
+  const openThenMaybeSend = useMutation({
+    mutationFn: async (payload: {
+      agentId: number
+      message?: string
       modelSource?: 'SYSTEM' | 'USER_KEY'
       systemModelId?: number | null
       userApiKeyId?: number | null
-      userAgentId?: number | null
       images?: string[]
-    }) => agentApi.startSession(payload),
+    }) => {
+      const session = await multiAgentApi.openChat(payload.agentId)
+      const text = (payload.message || '').trim()
+      const hasImages = !!(payload.images && payload.images.length > 0)
+      if (text || hasImages) {
+        await agentApi.continueSession(session.sessionId, {
+          message: text,
+          modelSource: payload.modelSource,
+          systemModelId: payload.systemModelId ?? null,
+          userApiKeyId: payload.userApiKeyId ?? null,
+          images: payload.images,
+        })
+      }
+      return session
+    },
     onSuccess: (session) => {
       queryClient.invalidateQueries({ queryKey: ['recent-sessions'] })
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
@@ -70,25 +84,14 @@ export function HomePage() {
     onError: (err: Error) => toast.error(err.message),
   })
 
-  const deleteMutation = useMutation({
-    mutationFn: (params: { session: SessionResponse; options: { deleteMessages: boolean; deleteMemories: boolean; hideOnly: boolean } }) =>
-      agentApi.deleteSession(params.session.sessionId, params.options),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['recent-sessions'] })
-      queryClient.invalidateQueries({ queryKey: ['conversations'] })
-      toast.success('会话已更新')
-      setSelectedSession(null)
-    },
-    onError: (err: Error) => toast.error(err.message),
-  })
-
   return (
     <div className="min-h-screen">
       <div className="max-w-3xl mx-auto px-6 py-10 pb-48 space-y-10 w-full">
-        {/* Header */}
         <div>
-          <h1 className="text-2xl font-bold text-white">新建 Agent 任务</h1>
-          <p className="text-white/40 text-sm mt-1">描述你的目标，Agent 将自主规划并执行</p>
+          <h1 className="text-2xl font-bold text-white">和伙伴聊天</h1>
+          <p className="text-white/40 text-sm mt-1">
+            每位伙伴只有一个会话窗口，像微信联系人一样继续聊
+          </p>
         </div>
 
         {profile && !profile.completed && (
@@ -104,55 +107,70 @@ export function HomePage() {
           </div>
         )}
 
-        {myAgents.length > 0 && (
+        {activeAgents.length > 0 && (
           <div>
-            <p className="mb-2 text-xs text-white/30 font-medium uppercase tracking-wider">对话 Agent</p>
+            <p className="mb-2 text-xs text-white/30 font-medium uppercase tracking-wider">选择伙伴</p>
             <div className="flex flex-wrap gap-2">
-              {myAgents
-                .filter((a) => a.status === 'ACTIVE')
-                .map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    onClick={() => setUserAgentId(a.id)}
-                    className={clsx(
-                      'inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-colors',
-                      userAgentId === a.id
-                        ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-100'
-                        : 'border-white/10 text-white/50 hover:border-white/20'
-                    )}
-                  >
-                    <AgentAvatar agent={a} size={20} />
-                    <span>
-                      {a.name}
-                      {a.kind === 'SECRETARY' ? ' · 秘书' : ''}
-                    </span>
-                  </button>
-                ))}
+              {activeAgents.map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => setUserAgentId(a.id)}
+                  className={clsx(
+                    'inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-colors',
+                    userAgentId === a.id
+                      ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-100'
+                      : 'border-white/10 text-white/50 hover:border-white/20',
+                  )}
+                >
+                  <AgentAvatar agent={a} size={20} />
+                  <span>{formatAgentDisplayTitle(a)}</span>
+                </button>
+              ))}
             </div>
+            {selectedAgent && (
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  disabled={openThenMaybeSend.isPending}
+                  onClick={() => openThenMaybeSend.mutate({ agentId: selectedAgent.id })}
+                  className="rounded-lg border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs text-white/75 hover:bg-white/[0.08] disabled:opacity-40"
+                >
+                  {openThenMaybeSend.isPending
+                    ? '打开中…'
+                    : `进入与 ${formatAgentDisplayTitle(selectedAgent)} 的对话`}
+                </button>
+                <p className="text-[11px] text-white/35">
+                  每位伙伴只有一个窗口；已聊过会直接回到最近对话。
+                </p>
+              </div>
+            )}
           </div>
         )}
 
-        {/* No LLM key warning */}
         {!hasDefaultLlmKey && (
-          <Link to="/api-keys"
-            className="flex items-center gap-3 px-4 py-3 rounded-xl border border-yellow-500/30 bg-yellow-500/5 hover:bg-yellow-500/10 transition-colors group">
+          <Link
+            to="/api-keys"
+            className="flex items-center gap-3 px-4 py-3 rounded-xl border border-yellow-500/30 bg-yellow-500/5 hover:bg-yellow-500/10 transition-colors group"
+          >
             <AlertTriangle className="w-4 h-4 text-yellow-400 flex-shrink-0" />
             <div className="flex-1 min-w-0">
               <p className="text-sm text-yellow-300 font-medium">尚未配置默认 LLM API 密钥</p>
-              <p className="text-xs text-yellow-400/60 mt-0.5">Agent 将使用系统密钥运行，点击前往配置你自己的密钥</p>
+              <p className="text-xs text-yellow-400/60 mt-0.5">
+                Agent 将使用系统密钥运行，点击前往配置你自己的密钥
+              </p>
             </div>
             <KeyRound className="w-4 h-4 text-yellow-400/50 group-hover:text-yellow-400 transition-colors" />
           </Link>
         )}
 
-        {/* Examples */}
         <div className="space-y-2">
-          <p className="text-xs text-white/30 font-medium uppercase tracking-wider">示例任务</p>
+          <p className="text-xs text-white/30 font-medium uppercase tracking-wider">示例开场</p>
           <div className="space-y-2">
-            {EXAMPLES.map(ex => (
+            {EXAMPLES.map((ex) => (
               <button
                 key={ex}
+                type="button"
                 onClick={() => setTask(ex)}
                 className="w-full text-left px-4 py-3 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] rounded-lg text-sm text-white/60 hover:text-white/80 transition-colors"
               >
@@ -161,16 +179,6 @@ export function HomePage() {
             ))}
           </div>
         </div>
-
-        {/* 最近会话模块已移动到左侧导航栏中显示，这里不再单独展示 */}
-        {selectedSession && (
-          <DeleteSessionModal
-            session={selectedSession}
-            loading={deleteMutation.isPending}
-            onClose={() => setSelectedSession(null)}
-            onConfirm={(options) => deleteMutation.mutate({ session: selectedSession, options })}
-          />
-        )}
       </div>
 
       <AgentInputBox
@@ -179,6 +187,10 @@ export function HomePage() {
         onSubmit={(opts) => {
           const text = task.trim()
           if (!text && !(opts?.images && opts.images.length > 0)) return
+          if (userAgentId == null) {
+            toast.error('请先选择一位伙伴')
+            return
+          }
           if (opts?.modelSource) {
             setSelection({
               source: opts.modelSource,
@@ -186,22 +198,27 @@ export function HomePage() {
               userApiKeyId: opts.userApiKeyId ?? null,
             })
           }
-          startMutation.mutate({
-            task: text,
+          openThenMaybeSend.mutate({
+            agentId: userAgentId,
+            message: text,
             modelSource: opts?.modelSource,
             systemModelId: opts?.systemModelId ?? null,
             userApiKeyId: opts?.userApiKeyId ?? null,
-            userAgentId,
             images: opts?.images,
           })
           setTask('')
         }}
         selectedSystemModelId={selection?.source === 'SYSTEM' ? selection.systemModelId ?? null : null}
-        placeholder="描述你想让 Agent 完成的任务，Enter 发送 · Shift+Enter 换行"
-        hintText="启动后，你可以在会话页底部继续追加问题，布局与此处保持一致。"
-        isPending={startMutation.isPending}
-        pendingLabel="启动中"
-        submitTitle="启动 Agent"
+        userAgentId={userAgentId}
+        placeholder={
+          selectedAgent
+            ? `给 ${selectedAgent.name} 发消息，Enter 发送 · Shift+Enter 换行`
+            : '选择伙伴后输入消息…'
+        }
+        hintText="每位伙伴只有一个会话；发送后进入同一聊天窗口继续对话。"
+        isPending={openThenMaybeSend.isPending}
+        pendingLabel="打开中"
+        submitTitle="发送"
       />
     </div>
   )

@@ -24,6 +24,9 @@ public class GroupController {
 
     private final GroupChatService groupChatService;
     private final GroupMessageService groupMessageService;
+    private final GroupChatShareService groupChatShareService;
+    private final GroupMentionApprovalService mentionApprovalService;
+    private final GroupAgentContextService groupAgentContextService;
 
     @PostMapping("/groups")
     public Map<String, Object> create(@RequestBody GroupChatService.CreateGroupRequest body) {
@@ -112,6 +115,54 @@ public class GroupController {
         return groupChatService.setReplyModes(requireUserId(), publicId, body);
     }
 
+    @PatchMapping("/groups/{publicId}/members/{memberId}/agent-settings")
+    public Map<String, Object> patchAgentSettings(
+            @PathVariable String publicId,
+            @PathVariable Long memberId,
+            @RequestBody GroupChatService.AgentMemberPatch body
+    ) {
+        return groupChatService.patchAgentMember(requireUserId(), publicId, memberId, body);
+    }
+
+    /** 主人同意/拒绝 Agent 被 @ 请示卡 */
+    @PostMapping("/groups/{publicId}/mention-approvals/{approvalId}/decide")
+    public Map<String, Object> decideMentionApproval(
+            @PathVariable String publicId,
+            @PathVariable Long approvalId,
+            @RequestBody Map<String, String> body
+    ) {
+        String decision = body != null ? body.get("decision") : null;
+        return mentionApprovalService.decide(requireUserId(), publicId, approvalId, decision);
+    }
+
+    /** 群内全部 Agent 的上下文占用（头像旁圆环） */
+    @GetMapping("/groups/{publicId}/agents/context-usage")
+    public Map<String, Object> agentsContextUsage(
+            @PathVariable String publicId,
+            @RequestParam(required = false) Long systemModelId
+    ) {
+        return groupAgentContextService.listUsage(requireUserId(), publicId, systemModelId);
+    }
+
+    @GetMapping("/groups/{publicId}/agents/{userAgentId}/context-usage")
+    public Object agentContextUsage(
+            @PathVariable String publicId,
+            @PathVariable Long userAgentId,
+            @RequestParam(required = false) Long systemModelId
+    ) {
+        return groupAgentContextService.getUsage(requireUserId(), publicId, userAgentId, systemModelId);
+    }
+
+    /** 压缩该 Agent 在本群的送模上下文（同单聊 SessionState 方案；群消息不删） */
+    @PostMapping("/groups/{publicId}/agents/{userAgentId}/compress-context")
+    public Object compressAgentContext(
+            @PathVariable String publicId,
+            @PathVariable Long userAgentId,
+            @RequestParam(required = false) Long systemModelId
+    ) {
+        return groupAgentContextService.compress(requireUserId(), publicId, userAgentId, systemModelId);
+    }
+
     @PostMapping("/groups/{publicId}/messages")
     public Map<String, Object> send(@PathVariable String publicId,
                                     @RequestBody GroupMessageService.SendRequest body) {
@@ -173,6 +224,18 @@ public class GroupController {
             @RequestParam(defaultValue = "20") int size
     ) {
         return groupChatService.listAgentTasks(requireUserId(), publicId, userAgentId, status, page, size);
+    }
+
+    /** 成员点击分享：快照当前聊天记录，生成随机字母后缀公开链接 */
+    @PostMapping("/groups/{publicId}/shares")
+    public Map<String, Object> createShare(@PathVariable String publicId) {
+        return groupChatShareService.create(requireUserId(), publicId);
+    }
+
+    /** 公开只读：不要求登录，仅见快照内容 */
+    @GetMapping("/public/group-shares/{code}")
+    public Map<String, Object> publicShare(@PathVariable String code) {
+        return groupChatShareService.getPublic(code);
     }
 
     private Long requireUserId() {

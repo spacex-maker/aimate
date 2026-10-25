@@ -130,7 +130,7 @@ def main() -> int:
         return 1
     while True:
         try:
-            code, body = req("POST", "/api/local-bridge/tasks/claim", {})
+            code, body = req("POST", "/api/local-bridge/tasks/claim?waitSeconds=25", {})
             if code != 200:
                 print(f"[worker] claim {code} {body}", flush=True)
                 time.sleep(INTERVAL)
@@ -142,7 +142,7 @@ def main() -> int:
                 print("[worker] idle", flush=True)
         except Exception as e:
             print(f"[worker] loop error: {e}", flush=True)
-        time.sleep(INTERVAL)
+            time.sleep(INTERVAL)
 
 
 if __name__ == "__main__":

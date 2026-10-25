@@ -25,10 +25,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -70,8 +73,20 @@ public class AgentHireService {
         return m;
     }
 
+    /** 兼容旧调用（连接器自动招聘等）：名称用商品名，性别用商品默认或 OTHER。 */
     @Transactional
     public Map<String, Object> hire(Long userId, Long catalogId, RentPeriod period) {
+        AgentCatalog c = catalogRepository.findById(catalogId)
+                .orElseThrow(() -> new IllegalArgumentException("商品不存在"));
+        String g = StringUtils.hasText(c.getDefaultGender()) ? c.getDefaultGender() : "OTHER";
+        return hire(userId, catalogId, period, c.getName(), g);
+    }
+
+    /**
+     * 招聘：必须取定伙伴真名与性别（写入 Soul 同名，创建后不可改）；生日为开通当日。
+     */
+    @Transactional
+    public Map<String, Object> hire(Long userId, Long catalogId, RentPeriod period, String givenName, String gender) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
         if (!StringUtils.hasText(user.getAimatexAccountSub())) {
@@ -80,6 +95,9 @@ public class AgentHireService {
         AgentCatalog c = catalogRepository.findById(catalogId)
                 .orElseThrow(() -> new IllegalArgumentException("商品不存在"));
         if (!c.isEnabled()) throw new IllegalStateException("该 Agent 未上架");
+
+        String soulName = normalizeAgentName(givenName);
+        String soulGender = normalizeGender(gender);
 
         long agentPts = priceAgent(c, period);
         long soulPts = priceSoul(c, period);
@@ -105,17 +123,19 @@ public class AgentHireService {
         long seatId = seat.path("seatId").asLong();
 
         String extKey = "hire-" + c.getId() + "-" + UUID.randomUUID().toString().substring(0, 8);
+        String soulDesc = buildSoulDescription(c, soulName, soulGender);
+        // Soul 侧名字在建档时写入，与 Chat 一致且不可事后改名
         JsonNode soul = soulPlatformClient.createUserSoul(
                 user.getAimatexAccountSub(),
                 seatId,
                 extKey,
-                c.getName(),
-                c.getDescription(),
+                soulName,
+                soulDesc,
                 true
         );
 
         pointsService.deduct(userId, agentPts, PointLedger.AGENT_RENT, "AGENT_RENT", orderNo, null, null,
-                c.getName() + " · " + periodLabel(period));
+                soulName + " · " + periodLabel(period));
         pointsService.deduct(userId, soulPts, PointLedger.SOUL_SEAT, "SOUL_SEAT", orderNo, null, null,
                 "Soul 席位 · " + periodLabel(period));
 
@@ -131,15 +151,17 @@ public class AgentHireService {
         order.setSoulSeatId(seatId);
         order.setStatus(AgentRentOrder.Status.PAID);
 
+        LocalDate birthday = LocalDate.now();
         UserAgent ua = new UserAgent();
         ua.setUserId(userId);
         ua.setKind(UserAgent.Kind.HIRED);
         ua.setCatalogId(c.getId());
         ua.setTier(c.getTier());
-        ua.setName(c.getName());
-        ua.setOriginalName(c.getName());
+        ua.setName(soulName);
+        ua.setOriginalName(soulName);
         ua.setAvatarUrl(c.getDefaultAvatarUrl());
-        ua.setGender(c.getDefaultGender());
+        ua.setGender(soulGender);
+        ua.setBirthday(birthday);
         ua.setPersonality(c.getPersonaTemplate() != null && c.getPersonaTemplate().length() > 512
                 ? c.getPersonaTemplate().substring(0, 512)
                 : c.getPersonaTemplate());
@@ -273,5 +295,53 @@ public class AgentHireService {
             case MONTH -> "包月";
             case YEAR -> "包年";
         };
+    }
+
+    private static final Set<String> GENDERS = Set.of("FEMALE", "MALE", "OTHER");
+
+    static String normalizeAgentName(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            throw new IllegalArgumentException("请为这位伙伴取一个名字——这是建立真正关系的第一步，取定后不可更改");
+        }
+        String name = raw.trim().replaceAll("\\s+", " ");
+        if (name.length() < 1 || name.length() > 32) {
+            throw new IllegalArgumentException("名字长度须为 1～32 个字符");
+        }
+        if (!name.matches("^[\\p{L}\\p{N}·._\\-\\s]+$")) {
+            throw new IllegalArgumentException("名字仅支持中英文、数字及 · . _ -");
+        }
+        return name;
+    }
+
+    static String normalizeGender(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            throw new IllegalArgumentException("请选择性别（选定后不可更改）");
+        }
+        String g = raw.trim().toUpperCase(Locale.ROOT);
+        // 兼容中文/旧值
+        g = switch (g) {
+            case "女", "F", "WOMAN" -> "FEMALE";
+            case "男", "M", "MAN" -> "MALE";
+            case "其他", "未知", "UNKNOWN", "非二元" -> "OTHER";
+            default -> g;
+        };
+        if (!GENDERS.contains(g)) {
+            throw new IllegalArgumentException("性别须为 女 / 男 / 其他（FEMALE / MALE / OTHER）");
+        }
+        return g;
+    }
+
+    private static String buildSoulDescription(AgentCatalog c, String name, String gender) {
+        String role = c.getName() != null ? c.getName() : "Agent";
+        String base = c.getDescription() != null ? c.getDescription().trim() : "";
+        String genderLabel = switch (gender) {
+            case "FEMALE" -> "女";
+            case "MALE" -> "男";
+            default -> "其他";
+        };
+        String head = name + "（" + genderLabel + "）· 岗位 " + role;
+        if (base.isEmpty()) return head;
+        String merged = head + "。 " + base;
+        return merged.length() > 480 ? merged.substring(0, 480) : merged;
     }
 }

@@ -25,6 +25,8 @@ export interface KnowledgeBaseBrief {
 
 export interface KnowledgeBaseDetail extends KnowledgeBaseBrief {
   content?: string | null
+  /** 列表接口返回正文长度，不含全文 */
+  contentLength?: number
   sortOrder?: number
   categoryName?: string
   categoryCode?: string
@@ -65,6 +67,8 @@ export const adminKnowledgeApi = {
     categoryId?: number | null
     enabled?: boolean | null
     q?: string
+    tag?: string
+    code?: string
     page?: number
     size?: number
   }) => {
@@ -72,6 +76,8 @@ export const adminKnowledgeApi = {
     if (params.categoryId != null) sp.set('categoryId', String(params.categoryId))
     if (params.enabled != null) sp.set('enabled', String(params.enabled))
     if (params.q) sp.set('q', params.q)
+    if (params.tag) sp.set('tag', params.tag)
+    if (params.code) sp.set('code', params.code)
     sp.set('page', String(params.page ?? 0))
     sp.set('size', String(params.size ?? 20))
     return http<PageResult<KnowledgeBaseDetail>>(`/api/admin/knowledge/bases?${sp}`)

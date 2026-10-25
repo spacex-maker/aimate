@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Send, ImagePlus, SlidersHorizontal, Mic, ChevronDown, X } from 'lucide-react'
+import { Send, ImagePlus, SlidersHorizontal, Mic, ChevronDown, X, Smile } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { ToolSettingsPanel } from './ToolSettingsPanel'
 import { ContextUsageRing } from './ContextUsageRing'
@@ -15,6 +15,7 @@ import {
   filterMentions,
   type MentionCandidate,
 } from '../chat/MentionPicker'
+import { EmojiPicker } from '../chat/EmojiPicker'
 
 export type { MentionCandidate }
 
@@ -51,6 +52,8 @@ export interface AgentInputBoxProps {
   bottomRightSlot?: ReactNode
   /** 有会话时拉取服务端上下文占用；首页无会话则仅估算当前输入 */
   sessionId?: string | null
+  /** 当前伙伴：工具开关跟随 Agent 默认 / 单聊覆盖 */
+  userAgentId?: number | null
   /**
    * plain：群聊等场景复用同一外壳，隐藏模型/工具/上下文环（仍可传图）。
    * agent：默认，会话页完整能力。
@@ -83,6 +86,7 @@ export function AgentInputBox({
   onModelChange,
   bottomRightSlot,
   sessionId = null,
+  userAgentId = null,
   variant = 'agent',
   mentionCandidates = [],
   topSlot,
@@ -93,6 +97,11 @@ export function AgentInputBox({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null)
   const [mentionIndex, setMentionIndex] = useState(0)
+  const [emojiOpen, setEmojiOpen] = useState(false)
+  const [emojiAnchor, setEmojiAnchor] = useState<{ left: number; bottom: number; width: number } | null>(null)
+  const emojiButtonRef = useRef<HTMLButtonElement>(null)
+  const emojiPanelRef = useRef<HTMLDivElement>(null)
+  const composerShellRef = useRef<HTMLDivElement>(null)
   const [glow, setGlow] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
   const [toolsAnchor, setToolsAnchor] = useState<{ left: number; bottom: number } | null>(null)
@@ -121,6 +130,26 @@ export function AgentInputBox({
       : null
   const visionOn = plain || (selectedSource === 'SYSTEM' && !!selectedModel?.supportsVision)
   const canSubmit = (value.trim() !== '' || images.length > 0) && !isPending && !disabled
+
+  useEffect(() => {
+    if (!emojiOpen) return
+    const onDown = (e: MouseEvent) => {
+      const node = e.target as Node
+      if (emojiPanelRef.current?.contains(node)) return
+      if (emojiButtonRef.current?.contains(node)) return
+      setEmojiOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setEmojiOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [emojiOpen])
+
 
   const mentionEnabled = mentionCandidates.length > 0
   const mentionItems = useMemo(() => {
@@ -300,6 +329,25 @@ export function AgentInputBox({
     return () => clearTimeout(t)
   }, [glow])
 
+
+  const insertAtCaret = (text: string) => {
+    const el = textareaRef.current
+    if (!el) {
+      onChange(value + text)
+      return
+    }
+    const start = el.selectionStart ?? value.length
+    const end = el.selectionEnd ?? value.length
+    const next = value.slice(0, start) + text + value.slice(end)
+    onChange(next)
+    requestAnimationFrame(() => {
+      const pos = start + text.length
+      el.focus()
+      el.setSelectionRange(pos, pos)
+      syncMentionFromCaret(next, pos)
+    })
+  }
+
   const addImageFiles = async (files: FileList | File[]) => {
     const list = Array.from(files).filter((f) => f.type.startsWith('image/'))
     if (list.length === 0) return
@@ -317,6 +365,22 @@ export function AgentInputBox({
       }
     }
     if (next.length) setImages((prev) => [...prev, ...next].slice(0, 4))
+  }
+
+  /** Ctrl+V / 右键粘贴截图或图片文件 */
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items
+    if (!items?.length) return
+    const files: File[] = []
+    for (const item of Array.from(items)) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const f = item.getAsFile()
+        if (f) files.push(f)
+      }
+    }
+    if (files.length === 0) return
+    e.preventDefault()
+    void addImageFiles(files)
   }
 
   const submitPayload = () => {
@@ -341,10 +405,12 @@ export function AgentInputBox({
   return (
     <form
       onSubmit={handleSubmit}
-      className={`fixed bottom-0 left-[var(--sidebar-width,0)] right-0 px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6 flex justify-center ${className ?? ''}`}
+      // 全宽 fixed 只负责居中；两侧（含列表滚动条）必须可点穿，否则滚到底时拖不动滚动条
+      className={`pointer-events-none fixed bottom-0 left-[var(--sidebar-width,0)] right-0 z-30 px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6 flex justify-center ${className ?? ''}`}
     >
-      <div className="max-w-3xl w-full flex flex-col items-center min-w-0">
+      <div className="pointer-events-auto max-w-3xl w-full flex flex-col items-center min-w-0">
         <div
+          ref={composerShellRef}
           className={`relative rounded-3xl bg-white/[0.06] backdrop-blur-xl border border-white/10 shadow-xl focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10 transition-all overflow-visible flex flex-col min-h-[128px] w-full ${glow ? 'animate-input-glow border-white/20' : ''}`}
         >
           {mention && (
@@ -355,6 +421,26 @@ export function AgentInputBox({
               onSelect={applyMention}
               query={mention.query}
             />
+          )}
+
+          {emojiOpen && emojiAnchor && createPortal(
+            <div
+              ref={emojiPanelRef}
+              className="fixed z-[80]"
+              style={{
+                left: emojiAnchor.left,
+                bottom: emojiAnchor.bottom + 6,
+                width: Math.min(emojiAnchor.width, 384),
+              }}
+            >
+              <EmojiPicker
+                onPick={(emoji) => {
+                  insertAtCaret(emoji)
+                }}
+                onClose={() => setEmojiOpen(false)}
+              />
+            </div>,
+            document.body,
           )}
           <div className="rounded-3xl overflow-hidden flex flex-col flex-1 min-h-[128px]">
           {topSlot}
@@ -378,6 +464,7 @@ export function AgentInputBox({
           <textarea
             ref={textareaRef}
             value={value}
+            onPaste={handlePaste}
             onChange={(e) => {
               const next = e.target.value
               onChange(next)
@@ -393,6 +480,11 @@ export function AgentInputBox({
               syncMentionFromCaret(el.value, el.selectionStart ?? el.value.length)
             }}
             onKeyDown={(e) => {
+              if (emojiOpen && e.key === 'Escape') {
+                e.preventDefault()
+                setEmojiOpen(false)
+                return
+              }
               if (mention) {
                 if (e.key === 'Escape') {
                   e.preventDefault()
@@ -433,6 +525,30 @@ export function AgentInputBox({
           />
           <div className="flex-shrink-0 flex items-center justify-between px-2.5 py-1 border-t border-white/[0.06]">
             <div className="flex items-center gap-0.5 relative">
+              <button
+                ref={emojiButtonRef}
+                type="button"
+                onClick={() => {
+                  const shell = composerShellRef.current
+                  if (shell) {
+                    const rect = shell.getBoundingClientRect()
+                    // 贴在整块输入卡片上方，不挡 textarea
+                    setEmojiAnchor({
+                      left: rect.left,
+                      bottom: window.innerHeight - rect.top,
+                      width: rect.width,
+                    })
+                  }
+                  setEmojiOpen((v) => !v)
+                  setMention(null)
+                }}
+                className="p-1.5 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
+                title="表情"
+                aria-label="表情"
+                aria-expanded={emojiOpen}
+              >
+                <Smile className="w-4 h-4" />
+              </button>
               <input
                 ref={imageInputRef}
                 type="file"
@@ -488,7 +604,11 @@ export function AgentInputBox({
                         bottom: toolsAnchor.bottom + 8,
                       }}
                     >
-                      <ToolSettingsPanel onClose={() => setToolsOpen(false)} />
+                      <ToolSettingsPanel
+                        onClose={() => setToolsOpen(false)}
+                        sessionId={sessionId}
+                        userAgentId={userAgentId}
+                      />
                     </div>
                   </>,
                   document.body
@@ -646,9 +766,7 @@ export function AgentInputBox({
                 messageTokens={messageTokens}
                 toolsTokens={toolsTokens}
                 draftTokens={draftTokens}
-                compressRecommended={
-                  !!contextUsage?.compressRecommended || usagePercent >= 72
-                }
+                compressRecommended={usagePercent >= 72}
                 sessionId={sessionId}
                 systemModelId={selectedSource === 'SYSTEM' ? selectedModelId : null}
               />
