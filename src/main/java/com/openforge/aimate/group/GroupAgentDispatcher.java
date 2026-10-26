@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openforge.aimate.agent.AgentPromptService;
 import com.openforge.aimate.agent.SystemModelChatHelper;
+import com.openforge.aimate.agent.UserAgentIdentityService;
 import com.openforge.aimate.domain.ChatGroup;
 import com.openforge.aimate.domain.GroupMember;
 import com.openforge.aimate.domain.GroupMessage;
@@ -32,6 +33,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
@@ -89,6 +91,7 @@ public class GroupAgentDispatcher {
     private final GroupAgentContextService groupAgentContextService;
     private final GroupMemoryCaptureService groupMemoryCaptureService;
     private final GroupAgentToolService groupAgentToolService;
+    private final UserAgentIdentityService userAgentIdentityService;
     private final ObjectMapper objectMapper;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     /** 单 Agent 串行：避免叠话 */
@@ -110,6 +113,7 @@ public class GroupAgentDispatcher {
             GroupAgentContextService groupAgentContextService,
             GroupMemoryCaptureService groupMemoryCaptureService,
             GroupAgentToolService groupAgentToolService,
+            UserAgentIdentityService userAgentIdentityService,
             ObjectMapper objectMapper
     ) {
         this.memberRepository = memberRepository;
@@ -127,6 +131,7 @@ public class GroupAgentDispatcher {
         this.groupAgentContextService = groupAgentContextService;
         this.groupMemoryCaptureService = groupMemoryCaptureService;
         this.groupAgentToolService = groupAgentToolService;
+        this.userAgentIdentityService = userAgentIdentityService;
         this.objectMapper = objectMapper;
     }
 
@@ -397,13 +402,21 @@ public class GroupAgentDispatcher {
         }
     }
 
-    /** 桌面本机工具花名：用户常说「cursor」指本机桥 Agent，不必名字里真有 Cursor。 */
-    private static final List<String> LOCAL_DESKTOP_ALIASES = List.of(
-            "cursor", "codex", "windsurf", "cline", "本机", "connector");
+    /** 各本机职业专属花名：@Workbuddy / 说 workbuddy 只点到 WORKBUDDY 桥，不与 Cursor 抢答。 */
+    private static final Map<String, List<String>> CAREER_DESKTOP_ALIASES = Map.of(
+            "CURSOR", List.of("cursor"),
+            "WORKBUDDY", List.of("workbuddy", "work buddy", "工作伙伴"),
+            "WINDSURF", List.of("windsurf"),
+            "CODEX", List.of("codex", "chatgpt"),
+            "CLINE", List.of("cline")
+    );
+
+    /** 任意本机桥共享弱别名（群里只有一个本机桥时更有用）。 */
+    private static final List<String> LOCAL_DESKTOP_SHARED_ALIASES = List.of("本机", "connector");
 
     /**
-     * 无 @ 但正文点到真名/花名/本机工具别名（至少 2 字）——仅作意图识别提示与失败兜底，
-     * 不再单独决定是否开口。本机桥：用户叫「cursor」而档案名是 Orion 也算点到。
+     * 有 @ 但正文点到真名/花名/本机工具别名（至少 2 字）——仅作意图识别提示与失败兜底，
+     * 不再单独决定是否开口。本机桥：用户叫「cursor/workbuddy」而档案名不同也算点到。
      */
     private boolean isSoftAddressed(GroupMessage userMsg, GroupMember agentMember) {
         if (userMsg == null || userMsg.getSenderType() != GroupMessage.SenderType.USER) return false;
@@ -424,27 +437,57 @@ public class GroupAgentDispatcher {
     }
 
     /**
-     * 可被点名的别名：真名、群昵称、人设里的桌面工具名、本机桥默认花名。
+     * 可被点名的别名：真名、群昵称、人设里的桌面工具名、本机桥「按职业」花名。
      */
     private List<String> addressAliases(GroupMember agentMember, UserAgent ua) {
         List<String> out = new ArrayList<>();
-        if (ua.getName() != null && ua.getName().trim().length() >= 2) {
-            out.add(ua.getName().trim());
-        }
-        if (agentMember != null && StringUtils.hasText(agentMember.getNickname())
-                && agentMember.getNickname().trim().length() >= 2) {
-            out.add(agentMember.getNickname().trim());
-        }
+        Set<String> seen = ConcurrentHashMap.newKeySet();
+        java.util.function.Consumer<String> add = (raw) -> {
+            if (!StringUtils.hasText(raw)) return;
+            String a = raw.trim();
+            if (a.length() < 2) return;
+            String key = a.toLowerCase(Locale.ROOT);
+            if (seen.add(key)) out.add(a);
+        };
+        add.accept(ua.getName());
+        if (agentMember != null) add.accept(agentMember.getNickname());
+        String careerCode = userAgentIdentityService.careerCode(ua);
+        String careerName = userAgentIdentityService.careerName(ua);
+        add.accept(careerName);
         String persona = safePersona(ua.getId());
         String personaLower = persona != null ? persona.toLowerCase(Locale.ROOT) : "";
         boolean localBridge = LocalBridgeService.isLocalBridge(ua);
-        for (String alias : LOCAL_DESKTOP_ALIASES) {
+        List<String> careerAliases = careerCode != null
+                ? CAREER_DESKTOP_ALIASES.getOrDefault(careerCode, List.of())
+                : List.of();
+        for (String alias : careerAliases) {
+            String compact = alias.replace(" ", "");
             boolean inName = ua.getName() != null
-                    && ua.getName().toLowerCase(Locale.ROOT).contains(alias);
-            boolean inPersona = personaLower.contains(alias);
-            // 本机桥：默认认 Cursor/Codex 等花名；云端仅当名字/人设已出现该词时认
+                    && ua.getName().toLowerCase(Locale.ROOT).contains(compact.toLowerCase(Locale.ROOT));
+            boolean inPersona = personaLower.contains(alias.toLowerCase(Locale.ROOT));
             if (localBridge || inName || inPersona) {
-                out.add(alias);
+                add.accept(alias);
+            }
+        }
+        if (localBridge) {
+            for (String alias : LOCAL_DESKTOP_SHARED_ALIASES) {
+                add.accept(alias);
+            }
+        } else {
+            for (List<String> aliases : CAREER_DESKTOP_ALIASES.values()) {
+                for (String alias : aliases) {
+                    String compact = alias.replace(" ", "");
+                    boolean inName = ua.getName() != null
+                            && ua.getName().toLowerCase(Locale.ROOT).contains(compact.toLowerCase(Locale.ROOT));
+                    boolean inPersona = personaLower.contains(alias.toLowerCase(Locale.ROOT));
+                    if (inName || inPersona) add.accept(alias);
+                }
+            }
+            for (String alias : LOCAL_DESKTOP_SHARED_ALIASES) {
+                boolean inName = ua.getName() != null
+                        && ua.getName().toLowerCase(Locale.ROOT).contains(alias);
+                boolean inPersona = personaLower.contains(alias);
+                if (inName || inPersona) add.accept(alias);
             }
         }
         return out;
@@ -613,7 +656,13 @@ public class GroupAgentDispatcher {
                 ua.getName(),
                 StringUtils.hasText(aliases) ? aliases : ua.getName(),
                 ua.getKind() != null ? ua.getKind().name() : "AGENT",
-                LocalBridgeService.isLocalBridge(ua) ? "yes（用户说 Cursor/本机 常指你）" : "no",
+                LocalBridgeService.isLocalBridge(ua)
+                        ? ("yes（用户说 "
+                        + (userAgentIdentityService.careerName(ua) != null
+                                ? userAgentIdentityService.careerName(ua)
+                                : "本机工具")
+                        + "/本机/connector 常指你）")
+                        : "no",
                 persona.length() > 500 ? persona.substring(0, 500) : persona,
                 signalAtMe ? "yes" : "no",
                 signalSoft ? "yes" : "no",
@@ -801,9 +850,9 @@ public class GroupAgentDispatcher {
         }
         String latest = userMsg.getContent() == null ? "" : userMsg.getContent().trim();
         String system = """
-                You gatekeep the local-desktop Connector (Cursor / Windsurf / Codex).
+                You gatekeep the local-desktop Connector (Cursor / Workbuddy / Windsurf / Codex).
                 Default is needLocal=false. Only set needLocal=true when the LATEST user intent
-                clearly requires the local machine itself.
+                clearly requires the local machine itself (the agent linked to this desktop app).
 
                 needLocal=true ONLY if the user needs at least one of:
                 - read / write / edit / create / delete files or code on the local disk

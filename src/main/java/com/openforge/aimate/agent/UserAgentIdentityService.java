@@ -45,6 +45,18 @@ public class UserAgentIdentityService {
                 .orElseGet(() -> originalName(ua));
     }
 
+    /** 职业 code（如 CURSOR / WORKBUDDY）；无目录时返回 null。 */
+    public String careerCode(UserAgent ua) {
+        if (ua == null || ua.getCatalogId() == null) return null;
+        return agentCatalogRepository.findById(ua.getCatalogId())
+                .map(AgentCatalog::getCareerId)
+                .flatMap(agentCareerRepository::findById)
+                .map(c -> c.getCode())
+                .filter(StringUtils::hasText)
+                .map(code -> code.trim().toUpperCase())
+                .orElse(null);
+    }
+
     /** 列表紧凑标题：Orion · Cursor */
     public String displayTitle(UserAgent ua) {
         if (ua == null) return "Agent";

@@ -1026,19 +1026,19 @@ a.auth-gate__cta {
 }
 
 .agent-land__headline {
-  margin: 0 0 12px;
+  margin: 0 0 14px;
   font-family: Syne, Outfit, sans-serif;
-  font-size: clamp(1.35rem, 3.2vw, 1.85rem);
-  font-weight: 700;
-  letter-spacing: -0.03em;
+  font-size: clamp(1.45rem, 3.4vw, 2rem);
+  font-weight: 650;
+  letter-spacing: -0.035em;
   color: var(--al-ink);
 }
 
 .agent-land__lead {
-  margin: 0 auto 28px;
-  max-width: 34rem;
-  font-size: 1.02rem;
-  line-height: 1.65;
+  margin: 0 auto 32px;
+  max-width: 28rem;
+  font-size: 1.05rem;
+  line-height: 1.6;
   color: var(--al-mute);
 }
 
@@ -1088,7 +1088,12 @@ a.auth-gate__cta {
 
 .agent-land__section--alt > .agent-land__reveal,
 .agent-land__section--alt > .agent-land__layers,
-.agent-land__section--alt > .agent-land__platforms {
+.agent-land__section--alt > .agent-land__platforms,
+.agent-land__section--alt > .agent-land__statement-grid,
+.agent-land__section--alt > .agent-land__scenes,
+.agent-land__section--alt > .agent-land__collab-story,
+.agent-land__section--alt > .agent-land__focus-band,
+.agent-land__section--alt > .agent-land__trust-grid {
   max-width: 1120px;
   margin-left: auto;
   margin-right: auto;
@@ -1100,6 +1105,194 @@ a.auth-gate__cta {
   max-width: 640px;
   margin: 0 auto 40px;
   text-align: center;
+}
+
+.agent-land__section-head--apple {
+  max-width: 720px;
+}
+
+.agent-land__section-head--apple h2 {
+  font-size: clamp(2rem, 4.6vw, 3.1rem);
+  font-weight: 750;
+  letter-spacing: -0.04em;
+  line-height: 1.08;
+}
+
+.agent-land__section-head--apple p {
+  max-width: 34rem;
+  margin-left: auto;
+  margin-right: auto;
+  font-size: 1.05rem;
+  line-height: 1.65;
+}
+
+.agent-land__scenes {
+  display: grid;
+  gap: 18px;
+  margin: 0 auto 28px;
+  max-width: 920px;
+}
+
+@media (min-width: 800px) {
+  .agent-land__scenes {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 22px;
+  }
+}
+
+.agent-land__scene {
+  padding: 8px 4px 4px;
+}
+
+.agent-land__scene-k {
+  display: block;
+  margin-bottom: 12px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  color: var(--al-cyan);
+}
+
+.agent-land__scene h3 {
+  margin: 0 0 10px;
+  font-family: Syne, Outfit, sans-serif;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+.agent-land__scene p {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: var(--al-mute);
+}
+
+.agent-land__statement-grid {
+  display: grid;
+  gap: 28px;
+  max-width: 880px;
+  margin: 0 auto 24px;
+}
+
+@media (min-width: 780px) {
+  .agent-land__statement-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 32px;
+  }
+}
+
+.agent-land__statement h3 {
+  margin: 0 0 10px;
+  font-family: Syne, Outfit, sans-serif;
+  font-size: 1.2rem;
+  font-weight: 720;
+  letter-spacing: -0.025em;
+}
+
+.agent-land__statement p {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: var(--al-mute);
+}
+
+.agent-land__focus-band {
+  display: grid;
+  gap: 0;
+  max-width: 760px;
+  margin: 0 auto 28px;
+  border-top: 1px solid rgba(232, 238, 248, 0.1);
+}
+
+.agent-land__focus-item {
+  padding: 28px 4px;
+  border-bottom: 1px solid rgba(232, 238, 248, 0.1);
+}
+
+.agent-land__focus-item h3 {
+  margin: 0 0 8px;
+  font-family: Syne, Outfit, sans-serif;
+  font-size: 1.35rem;
+  font-weight: 720;
+  letter-spacing: -0.03em;
+}
+
+.agent-land__focus-item p {
+  margin: 0;
+  max-width: 36rem;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: var(--al-mute);
+}
+
+.agent-land__trust-grid {
+  display: grid;
+  gap: 20px;
+  max-width: 960px;
+  margin: 0 auto 24px;
+}
+
+@media (min-width: 800px) {
+  .agent-land__trust-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.agent-land__trust-card {
+  padding: 6px 2px;
+}
+
+.agent-land__trust-icon {
+  display: block;
+  margin-bottom: 14px;
+  color: var(--al-cyan);
+  opacity: 0.85;
+}
+
+.agent-land__trust-card h3 {
+  margin: 0 0 10px;
+  font-family: Syne, Outfit, sans-serif;
+  font-size: 1.12rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.agent-land__trust-card p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--al-mute);
+}
+
+.agent-land__whisper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 22px;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  color: var(--al-dim);
+}
+
+.agent-land__tech-line {
+  margin: 8px auto 0;
+  max-width: 40rem;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--al-dim);
+}
+
+.agent-land__inline-cta--center {
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
 }
 
 .agent-land__section-head--left {

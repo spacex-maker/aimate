@@ -75,6 +75,28 @@ function sessionStub(item: ConversationItem): SessionResponse {
   }
 }
 
+/** 会话列表空闲态右侧弱提示时间 */
+function formatConversationTime(iso?: string | null): string {
+  if (!iso) return ''
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return ''
+  const now = Date.now()
+  const diff = Math.max(0, now - t)
+  const min = Math.floor(diff / 60_000)
+  if (min < 1) return '刚刚'
+  if (min < 60) return `${min}分钟前`
+  const hour = Math.floor(min / 60)
+  if (hour < 24) return `${hour}小时前`
+  const day = Math.floor(hour / 24)
+  if (day === 1) return '昨天'
+  if (day < 7) return `${day}天前`
+  const d = new Date(t)
+  const y = d.getFullYear()
+  const m = `${d.getMonth() + 1}`.padStart(2, '0')
+  const dd = `${d.getDate()}`.padStart(2, '0')
+  return y === new Date().getFullYear() ? `${m}/${dd}` : `${y}/${m}/${dd}`
+}
+
 export function Navbar({ collapsed, onToggle }: NavbarProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
@@ -337,11 +359,13 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
               ) : (
                 conversations.map((item) => {
                   const key = `${item.kind}:${item.id}`
+                  const menuOpen = menuId === key
+                  const relTime = formatConversationTime(item.updateTime)
                   return (
                     <div key={key} className="relative group/conv">
                       <div
                         className={clsx(
-                          'w-full px-2 py-2 rounded-lg flex items-center gap-2.5 transition-colors',
+                          'relative w-full rounded-lg transition-colors',
                           isConversationActive(item)
                             ? 'bg-blue-600/20 text-blue-100'
                             : 'hover:bg-white/5',
@@ -354,12 +378,12 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
                             e.preventDefault()
                             setMenuId(key)
                           }}
-                          className="flex-1 min-w-0 flex items-center gap-2.5 text-left"
+                          className="w-full min-w-0 flex items-center gap-2.5 text-left pl-2 py-2 pr-9"
                         >
                           <div className="relative flex-shrink-0">
                             <CompositeAvatar
                               urls={avatarUrlsFor(item)}
-                              size={40}
+                              size={36}
                               title={item.title}
                             />
                             {item.pinned && (
@@ -380,6 +404,18 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
                             </div>
                           </div>
                         </button>
+                        {relTime && (
+                          <span
+                            className={clsx(
+                              'pointer-events-none absolute right-2 top-2 text-[10px] leading-none tabular-nums text-white/35 transition-opacity',
+                              menuOpen
+                                ? 'opacity-0'
+                                : 'opacity-100 group-hover/conv:opacity-0',
+                            )}
+                          >
+                            {relTime}
+                          </span>
+                        )}
                         <button
                           type="button"
                           title="更多"
@@ -388,14 +424,18 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
                             setMenuId((cur) => (cur === key ? null : key))
                           }}
                           className={clsx(
-                            'flex-shrink-0 p-1 rounded text-white/25 hover:text-white/70 hover:bg-white/10 transition-opacity',
-                            menuId === key ? 'opacity-100 text-white/70' : 'opacity-0 group-hover/conv:opacity-100',
+                            'absolute right-1 top-1/2 z-10 -translate-y-1/2 p-1 rounded-md',
+                            'bg-black/55 text-white/70 hover:text-white hover:bg-black/70',
+                            'shadow-sm backdrop-blur-[2px] transition-opacity',
+                            menuOpen
+                              ? 'opacity-100'
+                              : 'opacity-0 pointer-events-none group-hover/conv:opacity-100 group-hover/conv:pointer-events-auto',
                           )}
                         >
                           <MoreHorizontal className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      {menuId === key && (
+                      {menuOpen && (
                         <>
                           <button
                             type="button"
