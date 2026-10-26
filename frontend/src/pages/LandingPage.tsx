@@ -8,21 +8,56 @@ import {
   Eye,
   Globe2,
   KeyRound,
+  MemoryStick,
   Minimize2,
+  Network,
   Pin,
+  ShieldCheck,
   Sparkles,
   Terminal,
   Workflow,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
+import { CollabStoryReel } from '../components/landing/CollabStoryReel'
 
 const NAV: { label: string; href?: string; to?: string }[] = [
   { href: '#compress', label: '上下文压缩' },
   { href: '#hire', label: 'Agent 招聘' },
   { href: '#soul', label: 'Soul 记忆' },
+  { href: '#collab', label: '团队协作' },
   { href: '#runtime', label: '运行时' },
   { href: '#observe', label: '可观测' },
   { to: '/emergence', label: '智能涌现' },
+]
+
+/** 叙事主线：人 + 专属 AI = 协作体；功能点只作支撑 */
+const COLLAB_STORY = [
+  {
+    k: '01',
+    phase: '组成',
+    title: '人 + 专属 AI = 协作体',
+    desc: '经验、人格、工具偏好、本机能力跟「你」绑定。进群的不是公共机器人，而是你的延伸。',
+  },
+  {
+    k: '02',
+    phase: '相遇',
+    title: '群里流动的是协作体',
+    desc: '话给人听，也给背后的 AI。意图被送到对的那一对，而不是广播给所有模型。',
+  },
+  {
+    k: '03',
+    phase: '边界',
+    title: 'AI 可互调，调用须许可',
+    desc: '你可以请对方的 AI 出手；对方也可以拒绝。协作有协议，不是无闸代执行。',
+  },
+]
+
+/** 能力底座：短句支撑，不抢叙事 */
+const COLLAB_PILLARS = [
+  { icon: Network, label: '智能调度', hint: '意图送到正确协作体' },
+  { icon: Workflow, label: '完整现场', hint: '引用 · @ · 已读进上下文' },
+  { icon: MemoryStick, label: '群记忆', hint: '约定可沉淀、可召回' },
+  { icon: ShieldCheck, label: '许可边界', hint: '跨体调用 · 可拒可准' },
 ]
 
 const COMPRESS_LAYERS = [
@@ -463,8 +498,66 @@ export function LandingPage() {
         </Reveal>
       </section>
 
+      {/* Team collaboration — 叙事优先，功能只作支撑 */}
+      <section id="collab" className="agent-land__section agent-land__section--alt">
+        <Reveal>
+          <div className="agent-land__section-head agent-land__section-head--collab">
+            <p className="agent-land__eye">Team Collaboration</p>
+            <h2>协作的最小单位，是「人 + AI」</h2>
+            <p className="agent-land__collab-lead">
+              每个人带着自己的专属 Agent 进场。群里不再是人对人、或人喊公共机器人，
+              而是<strong>协作体与协作体</strong>的配合——AI 之间可以互相调度，跨体调用须对方许可。
+            </p>
+            <p className="agent-land__collab-equation" aria-hidden="true">
+              <span>人</span>
+              <span className="agent-land__collab-equation-op">+</span>
+              <span>专属 AI</span>
+              <span className="agent-land__collab-equation-op">=</span>
+              <span className="agent-land__collab-equation-result">协作体</span>
+            </p>
+          </div>
+        </Reveal>
+
+        <Reveal>
+          <CollabStoryReel />
+        </Reveal>
+
+        <ol className="agent-land__collab-story">
+          {COLLAB_STORY.map((s, i) => (
+            <li key={s.k} className="agent-land__collab-story-item">
+              <Reveal style={{ transitionDelay: `${i * 80}ms` } as CSSProperties}>
+                <div className="agent-land__collab-story-meta">
+                  <span className="agent-land__mono">{s.k}</span>
+                  <span className="agent-land__collab-story-phase">{s.phase}</span>
+                </div>
+                <h3>{s.title}</h3>
+                <p>{s.desc}</p>
+              </Reveal>
+            </li>
+          ))}
+        </ol>
+
+        <Reveal>
+          <div className="agent-land__collab-pillars">
+            <p className="agent-land__collab-pillars-label">能力底座 · 支撑上述协作，不抢戏</p>
+            <ul className="agent-land__collab-pillar-list">
+              {COLLAB_PILLARS.map((p) => {
+                const Icon = p.icon
+                return (
+                  <li key={p.label} className="agent-land__collab-pillar">
+                    <Icon className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                    <span className="agent-land__collab-pillar-label">{p.label}</span>
+                    <span className="agent-land__collab-pillar-hint">{p.hint}</span>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        </Reveal>
+      </section>
+
       {/* Runtime */}
-      <section id="runtime" className="agent-land__section agent-land__section--alt">
+      <section id="runtime" className="agent-land__section">
         <Reveal>
           <div className="agent-land__section-head">
             <p className="agent-land__eye">Runtime</p>
@@ -491,7 +584,7 @@ export function LandingPage() {
       </section>
 
       {/* Observe */}
-      <section id="observe" className="agent-land__section">
+      <section id="observe" className="agent-land__section agent-land__section--alt">
         <Reveal>
           <div className="agent-land__section-head">
             <p className="agent-land__eye">Observability</p>
