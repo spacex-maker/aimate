@@ -63,6 +63,8 @@ export interface AgentInputBoxProps {
   mentionCandidates?: MentionCandidate[]
   /** 输入区顶部插槽（如引用条） */
   topSlot?: ReactNode
+  /** 输入框右上角外侧浮层（如「N 条新消息」气泡） */
+  aboveComposerRight?: ReactNode
 }
 
 /**
@@ -90,6 +92,7 @@ export function AgentInputBox({
   variant = 'agent',
   mentionCandidates = [],
   topSlot,
+  aboveComposerRight,
 }: AgentInputBoxProps) {
   const plain = variant === 'plain'
   const [images, setImages] = useState<string[]>([])
@@ -408,7 +411,12 @@ export function AgentInputBox({
       // 全宽 fixed 只负责居中；两侧（含列表滚动条）必须可点穿，否则滚到底时拖不动滚动条
       className={`pointer-events-none fixed bottom-0 left-[var(--sidebar-width,0)] right-0 z-30 px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6 flex justify-center ${className ?? ''}`}
     >
-      <div className="pointer-events-auto max-w-3xl w-full flex flex-col items-center min-w-0">
+      <div className="pointer-events-auto max-w-3xl w-full flex flex-col items-center min-w-0 relative">
+        {aboveComposerRight ? (
+          <div className="pointer-events-auto absolute right-1 bottom-full mb-2 z-40">
+            {aboveComposerRight}
+          </div>
+        ) : null}
         <div
           ref={composerShellRef}
           className={`relative rounded-3xl bg-white/[0.06] backdrop-blur-xl border border-white/10 shadow-xl focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10 transition-all overflow-visible flex flex-col min-h-[128px] w-full ${glow ? 'animate-input-glow border-white/20' : ''}`}

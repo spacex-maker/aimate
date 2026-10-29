@@ -32,6 +32,8 @@ interface PaySession {
 
 interface UserCenterModalProps {
   onClose: () => void
+  /** 打开时默认落在哪一栏（如引导完善画像 → profile） */
+  initialTab?: Tab
 }
 
 /** 优先用虎皮椒返回的二维码图；若只有支付链接则编码成二维码图（不跳转页面） */
@@ -43,8 +45,8 @@ function resolveQrImageUrl(checkout: { url: string | null; urlQrcode: string | n
   return null
 }
 
-export function UserCenterModal({ onClose }: UserCenterModalProps) {
-  const [tab, setTab] = useState<Tab>('overview')
+export function UserCenterModal({ onClose, initialTab = 'overview' }: UserCenterModalProps) {
+  const [tab, setTab] = useState<Tab>(initialTab)
   const [paySession, setPaySession] = useState<PaySession | null>(null)
   const queryClient = useQueryClient()
   const { user } = useAuth()
@@ -384,8 +386,8 @@ function ProfilePane() {
         gender,
         bio,
       }),
-    onSuccess: () => {
-      toast.success(data?.completed ? '画像已更新' : '画像已保存，正在生成秘书…')
+    onSuccess: (saved) => {
+      toast.success(saved?.completed ? '画像已完成，正在生成默认秘书…' : '画像已保存（还需职业、年龄、性别）')
       qc.invalidateQueries({ queryKey: ['user-profile'] })
       qc.invalidateQueries({ queryKey: ['my-agents'] })
     },

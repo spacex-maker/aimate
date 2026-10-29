@@ -106,8 +106,15 @@ function closeThinking(blocks: StreamBlock[]): StreamBlock[] {
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export function SessionPage() {
-  const { sessionId } = useParams<{ sessionId: string }>()
+export function SessionPage({
+  sessionId: sessionIdProp,
+  active: _active = true,
+}: {
+  sessionId?: string
+  active?: boolean
+} = {}) {
+  const params = useParams<{ sessionId: string }>()
+  const sessionId = sessionIdProp || params.sessionId
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [blocks, dispatch] = useReducer(reducer, [])

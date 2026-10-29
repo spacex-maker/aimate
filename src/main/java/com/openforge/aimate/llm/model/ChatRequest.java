@@ -4,20 +4,20 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Builder;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The request body sent to an OpenAI-compatible /chat/completions endpoint.
  *
- * toolChoice accepts:
+ * toolChoice accepts (OpenAI-compatible):
  *   "none"     — model will not call any tool
  *   "auto"     — model decides (default)
  *   "required" — model MUST call at least one tool
+ *   {"type":"function","function":{"name":"..."}} — force a specific tool
  *
- * 字段名严格按 OpenAI 官方 snake_case：
- * - tools        → "tools"
- * - toolChoice   → "tool_choice"
- * - maxTokens    → "max_tokens"
+ * 字段名严格按 OpenAI 官方 snake_case。
  */
 @Builder
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -25,7 +25,7 @@ public record ChatRequest(
         String model,
         List<Message> messages,
         List<Tool> tools,
-        @JsonProperty("tool_choice") String toolChoice,
+        @JsonProperty("tool_choice") Object toolChoice,
         Double temperature,
         @JsonProperty("max_tokens") Integer maxTokens,
         /**
@@ -42,6 +42,16 @@ public record ChatRequest(
         }
     }
 
+    /** Force the model to call one named function tool. */
+    public static Object forceFunctionTool(String functionName) {
+        Map<String, Object> fn = new LinkedHashMap<>();
+        fn.put("name", functionName);
+        Map<String, Object> choice = new LinkedHashMap<>();
+        choice.put("type", "function");
+        choice.put("function", fn);
+        return choice;
+    }
+
     public static ChatRequest simple(String model, List<Message> messages) {
         return ChatRequest.builder()
                 .model(model)
@@ -53,11 +63,15 @@ public record ChatRequest(
 
     /** 带工具调用时提高 maxTokens，避免长命令（如大段 heredoc 脚本）在输出时被截断 */
     public static ChatRequest withTools(String model, List<Message> messages, List<Tool> tools) {
+        return withTools(model, messages, tools, "auto");
+    }
+
+    public static ChatRequest withTools(String model, List<Message> messages, List<Tool> tools, Object toolChoice) {
         return ChatRequest.builder()
                 .model(model)
                 .messages(messages)
                 .tools(tools)
-                .toolChoice("auto")
+                .toolChoice(toolChoice)
                 .temperature(0.7)
                 .maxTokens(16384)
                 .build();

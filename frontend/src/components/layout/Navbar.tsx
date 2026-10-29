@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -28,6 +28,7 @@ import {
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { useAuth } from '../../hooks/useAuth'
+import { OPEN_USER_CENTER_EVENT, type UserCenterTab } from '../../lib/userCenter'
 import { UserCenterModal } from '../billing/UserCenterModal'
 import { SystemSettingsModal } from '../settings/SystemSettingsModal'
 import { conversationsApi, type ConversationItem } from '../../api/conversations'
@@ -104,7 +105,23 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
   const qc = useQueryClient()
   const [systemSettingsOpen, setSystemSettingsOpen] = useState(false)
   const [userCenterOpen, setUserCenterOpen] = useState(false)
+  const [userCenterTab, setUserCenterTab] = useState<UserCenterTab>('overview')
   const [menuId, setMenuId] = useState<string | null>(null)
+
+  useEffect(() => {
+    const onOpen = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ tab?: UserCenterTab }>).detail
+      setUserCenterTab(detail?.tab ?? 'overview')
+      setUserCenterOpen(true)
+    }
+    window.addEventListener(OPEN_USER_CENTER_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_USER_CENTER_EVENT, onOpen)
+  }, [])
+
+  const openCenter = (tab: UserCenterTab = 'overview') => {
+    setUserCenterTab(tab)
+    setUserCenterOpen(true)
+  }
   const [createOpen, setCreateOpen] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
   const [renameTarget, setRenameTarget] = useState<ConversationItem | null>(null)
@@ -538,7 +555,7 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
           <div className={clsx('flex items-center py-1.5', collapsed ? 'flex-col gap-1' : 'gap-2.5 px-2')}>
             <button
               type="button"
-              onClick={() => setUserCenterOpen(true)}
+              onClick={() => openCenter('overview')}
               className="w-7 h-7 rounded-full bg-blue-600/30 border border-blue-500/30 flex items-center justify-center flex-shrink-0 hover:border-blue-400/50 overflow-hidden"
               title="用户中心"
             >
@@ -553,7 +570,7 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
             {!collapsed && (
               <button
                 type="button"
-                onClick={() => setUserCenterOpen(true)}
+                onClick={() => openCenter('overview')}
                 className="flex-1 min-w-0 text-left"
                 title="用户中心"
               >
@@ -578,7 +595,13 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
       </div>
 
       {systemSettingsOpen && <SystemSettingsModal onClose={() => setSystemSettingsOpen(false)} />}
-      {userCenterOpen && <UserCenterModal onClose={() => setUserCenterOpen(false)} />}
+      {userCenterOpen && (
+        <UserCenterModal
+          key={userCenterTab}
+          initialTab={userCenterTab}
+          onClose={() => setUserCenterOpen(false)}
+        />
+      )}
       {createOpen && <CreateConversationModal onClose={() => setCreateOpen(false)} />}
       {renameTarget && (
         <ConversationRenameModal

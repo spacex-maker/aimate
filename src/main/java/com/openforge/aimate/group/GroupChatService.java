@@ -3,6 +3,7 @@ package com.openforge.aimate.group;
 
 
 import com.openforge.aimate.agent.UserAgentIdentityService;
+import com.openforge.aimate.agent.UserAgentService;
 
 import com.openforge.aimate.domain.AgentExecutionMode;
 
@@ -91,6 +92,8 @@ public class GroupChatService {
     private final LocalBridgeTaskRepository localBridgeTaskRepository;
 
     private final UserAgentIdentityService identityService;
+
+    private final UserAgentService userAgentService;
 
     private final GroupAccessService access;
 
@@ -184,7 +187,7 @@ public class GroupChatService {
 
             userAgentRepository.findByUserIdAndKind(userId, UserAgent.Kind.SECRETARY)
 
-                    .filter(ua -> ua.getStatus() == UserAgent.Status.ACTIVE)
+                    .filter(userAgentService::isUsable)
 
                     .ifPresent(ua -> addAgentInternal(saved, userId, ua.getId(),
 
@@ -630,7 +633,7 @@ public class GroupChatService {
 
             userAgentRepository.findByUserIdAndKind(userId, UserAgent.Kind.SECRETARY)
 
-                    .filter(ua -> ua.getStatus() == UserAgent.Status.ACTIVE)
+                    .filter(userAgentService::isUsable)
 
                     .ifPresent(ua -> {
 
@@ -1025,9 +1028,9 @@ public class GroupChatService {
 
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Agent 不存在"));
 
-        if (ua.getStatus() != UserAgent.Status.ACTIVE) {
+        if (!userAgentService.isUsable(ua)) {
 
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Agent 不可用: " + ua.getName());
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Agent 不可用或已过期: " + ua.getName());
 
         }
 
@@ -1219,7 +1222,7 @@ public class GroupChatService {
 
         return userAgentRepository.findByUserIdAndKind(userId, UserAgent.Kind.SECRETARY)
 
-                .filter(ua -> ua.getStatus() == UserAgent.Status.ACTIVE)
+                .filter(userAgentService::isUsable)
 
                 .map(UserAgent::getId)
 

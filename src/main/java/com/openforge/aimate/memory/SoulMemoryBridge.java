@@ -16,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -34,6 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SoulMemoryBridge {
 
     private final SoulMemoryProperties props;
+    private final SoulPlatformClient soulPlatformClient;
     private final UserRepository userRepository;
     private final UserAgentRepository userAgentRepository;
     private final ObjectMapper objectMapper;
@@ -190,23 +192,107 @@ public class SoulMemoryBridge {
         if (!StringUtils.hasText(token)) {
             return;
         }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("content", content.trim());
+        body.put("kind", mapToSoulKind(kind));
+        body.put("importance", Math.max(0, Math.min(1, importance)));
+        if (StringUtils.hasText(project)) {
+            body.put("project", project.trim());
+        }
+        body.put("client", Map.of(
+                "app", "aimatex-chat",
+                "device", hostname()
+        ));
+        String url = trimSlash(props.getApiBase()) + "/memories";
         try {
-            Map<String, Object> body = new LinkedHashMap<>();
-            body.put("content", content.trim());
-            body.put("kind", mapToSoulKind(kind));
-            body.put("importance", Math.max(0, Math.min(1, importance)));
-            if (StringUtils.hasText(project)) {
-                body.put("project", project.trim());
-            }
-            body.put("client", Map.of(
-                    "app", "aimatex-chat",
-                    "device", hostname()
-            ));
-            String url = trimSlash(props.getApiBase()) + "/memories";
             http().exchange(url, HttpMethod.POST, authEntity(token, body), String.class);
+        } catch (HttpStatusCodeException e) {
+            if (e.getStatusCode().value() == 401 && userAgentId != null) {
+                String fresh = reissueAgentAccessToken(userId, userAgentId);
+                if (StringUtils.hasText(fresh)) {
+                    try {
+                        http().exchange(url, HttpMethod.POST, authEntity(fresh, body), String.class);
+                        return;
+                    } catch (Exception retryEx) {
+                        log.warn("[SoulMemory] store retry failed user={} agent={}: {}",
+                                userId, userAgentId, retryEx.toString());
+                        return;
+                    }
+                }
+            }
+            log.warn("[SoulMemory] store failed user={} agent={}: {}", userId, userAgentId, e.toString());
         } catch (Exception e) {
             log.warn("[SoulMemory] store failed user={} agent={}: {}", userId, userAgentId, e.toString());
         }
+    }
+
+    /**
+     * 重新签发 UserAgent 绑定的 Soul accessToken，并写回 DB + 本地缓存。
+     * @return 新 token；失败返回 null
+     */
+    public String reissueAgentAccessToken(Long userId, Long userAgentId) {
+        if (userId == null || userAgentId == null || !soulPlatformClient.isConfigured()) {
+            return null;
+        }
+        UserAgent ua = userAgentRepository.findById(userAgentId).orElse(null);
+        if (ua == null || !userId.equals(ua.getUserId())) {
+            return null;
+        }
+        if (ua.getSoulSeatId() == null || !StringUtils.hasText(ua.getExternalAgentKey())) {
+            log.warn("[SoulMemory] reissue skipped agent={}: missing seat or externalAgentKey", userAgentId);
+            return null;
+        }
+        User user = userRepository.findById(userId).orElse(null);
+        if (user == null || !StringUtils.hasText(user.getAimatexAccountSub())) {
+            return null;
+        }
+        try {
+            tokenByAgent.remove(userAgentId);
+            JsonNode soul = soulPlatformClient.reissueUserSoulToken(
+                    user.getAimatexAccountSub(),
+                    ua.getSoulSeatId(),
+                    ua.getExternalAgentKey(),
+                    ua.getName()
+            );
+            String token = soul.path("accessToken").asText(null);
+            if (!StringUtils.hasText(token)) {
+                log.warn("[SoulMemory] reissue returned empty token agent={}", userAgentId);
+                return null;
+            }
+            ua.setSoulAccessToken(token);
+            String keyId = soul.path("keyId").asText(null);
+            if (StringUtils.hasText(keyId)) {
+                ua.setSoulKeyId(keyId);
+            }
+            long agentId = soul.path("agentId").asLong(0);
+            if (agentId > 0) {
+                ua.setSoulAgentId(agentId);
+            }
+            userAgentRepository.save(ua);
+            tokenByAgent.put(userAgentId, token);
+            log.info("[SoulMemory] reissued accessToken agent={} keyId={}", userAgentId, ua.getSoulKeyId());
+            return token;
+        } catch (Exception e) {
+            log.warn("[SoulMemory] reissue failed agent={}: {}", userAgentId, e.toString());
+            return null;
+        }
+    }
+
+    /** API：手动修复某 Agent 的 Soul 令牌（不返回 token 明文）。 */
+    public Map<String, Object> repairAgentSoulToken(Long userId, Long userAgentId) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        String token = reissueAgentAccessToken(userId, userAgentId);
+        if (!StringUtils.hasText(token)) {
+            out.put("ok", false);
+            out.put("error", "无法重新签发 Soul 令牌");
+            return out;
+        }
+        UserAgent ua = userAgentRepository.findById(userAgentId).orElse(null);
+        out.put("ok", true);
+        out.put("soulBound", true);
+        out.put("soulKeyId", ua != null ? ua.getSoulKeyId() : null);
+        out.put("soulAgentId", ua != null ? ua.getSoulAgentId() : null);
+        return out;
     }
 
     private String resolveToken(Long userId, Long userAgentId) {
@@ -314,17 +400,27 @@ public class SoulMemoryBridge {
             out.put("error", "非法路径");
             return out;
         }
+        String url = trimSlash(props.getApiBase()) + path;
         try {
-            String url = trimSlash(props.getApiBase()) + path;
             ResponseEntity<String> resp = http().exchange(url, method, authEntity(token, body), String.class);
-            out.put("ok", true);
-            out.put("httpStatus", resp.getStatusCode().value());
-            if (StringUtils.hasText(resp.getBody())) {
-                JsonNode root = objectMapper.readTree(resp.getBody());
-                out.put("data", objectMapper.convertValue(root, Map.class));
-            } else {
-                out.put("data", Map.of());
+            return fillProxyOk(out, resp);
+        } catch (HttpStatusCodeException e) {
+            if (e.getStatusCode().value() == 401) {
+                String fresh = reissueAgentAccessToken(userId, userAgentId);
+                if (StringUtils.hasText(fresh)) {
+                    try {
+                        ResponseEntity<String> resp = http().exchange(url, method, authEntity(fresh, body), String.class);
+                        return fillProxyOk(out, resp);
+                    } catch (Exception retryEx) {
+                        log.warn("[SoulMemory] proxy retry failed agent={} path={}: {}",
+                                userAgentId, path, retryEx.toString());
+                    }
+                }
             }
+            log.warn("[SoulMemory] proxy failed agent={} path={}: {}", userAgentId, path, e.toString());
+            out.put("ok", false);
+            out.put("error", "Soul 代理请求失败");
+            out.put("httpStatus", e.getStatusCode().value());
             return out;
         } catch (Exception e) {
             log.warn("[SoulMemory] proxy failed agent={} path={}: {}", userAgentId, path, e.toString());
@@ -332,6 +428,19 @@ public class SoulMemoryBridge {
             out.put("error", "Soul 代理请求失败");
             return out;
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> fillProxyOk(Map<String, Object> out, ResponseEntity<String> resp) throws Exception {
+        out.put("ok", true);
+        out.put("httpStatus", resp.getStatusCode().value());
+        if (StringUtils.hasText(resp.getBody())) {
+            JsonNode root = objectMapper.readTree(resp.getBody());
+            out.put("data", objectMapper.convertValue(root, Map.class));
+        } else {
+            out.put("data", Map.of());
+        }
+        return out;
     }
 
     private HttpEntity<?> authEntity(String token, Object body) {

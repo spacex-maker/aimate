@@ -43,7 +43,7 @@ public class UserAgentService {
     private final UserAgentIdentityService identityService;
     private final ObjectMapper objectMapper;
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<Map<String, Object>> listMine(Long userId) {
         refreshExpired(userId);
         return userAgentRepository.findByUserIdOrderByUpdateTimeDesc(userId).stream()
@@ -51,9 +51,10 @@ public class UserAgentService {
                 .toList();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public Map<String, Object> detail(Long userId, Long id) {
         UserAgent ua = require(userId, id);
+        refreshOne(ua);
         Map<String, Object> m = briefView(ua);
         m.put("personality", ua.getPersonality());
         m.put("soulKeyId", ua.getSoulKeyId());
@@ -186,7 +187,7 @@ public class UserAgentService {
         return versionView(ver);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public UserAgent requireActive(Long userId, Long userAgentId) {
         UserAgent ua = require(userId, userAgentId);
         refreshOne(ua);
@@ -194,6 +195,33 @@ public class UserAgentService {
             throw new IllegalStateException("该 Agent 不可用（已过期或未激活）");
         }
         return ua;
+    }
+
+    /**
+     * 按租期刷新状态后判断是否仍可用（群聊 / 本机桥等入口共用）。
+     * 过期会落库 EXPIRED，避免仅看 status 字段漏拦。
+     */
+    @Transactional
+    public boolean isUsable(UserAgent ua) {
+        if (ua == null) return false;
+        refreshOne(ua);
+        return ua.getStatus() == UserAgent.Status.ACTIVE;
+    }
+
+    /** 扫描 ACTIVE 且已过 expiresAt 的雇佣 Agent，标记 EXPIRED。返回本轮更新条数。 */
+    @Transactional
+    public int sweepExpiredAgents() {
+        LocalDateTime now = LocalDateTime.now();
+        int n = 0;
+        for (UserAgent ua : userAgentRepository.findByStatus(UserAgent.Status.ACTIVE)) {
+            if (ua.getKind() == UserAgent.Kind.SECRETARY) continue;
+            if (ua.getExpiresAt() != null && ua.getExpiresAt().isBefore(now)) {
+                ua.setStatus(UserAgent.Status.EXPIRED);
+                userAgentRepository.save(ua);
+                n++;
+            }
+        }
+        return n;
     }
 
     /**
@@ -246,7 +274,7 @@ public class UserAgentService {
         );
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public UserAgent requireSecretaryOrDefault(Long userId, Long userAgentId) {
         if (userAgentId != null) {
             return requireActive(userId, userAgentId);
@@ -266,8 +294,8 @@ public class UserAgentService {
         }
     }
 
-    private void refreshOne(UserAgent ua) {
-        if (ua.getKind() == UserAgent.Kind.SECRETARY) return;
+    void refreshOne(UserAgent ua) {
+        if (ua == null || ua.getKind() == UserAgent.Kind.SECRETARY) return;
         if (ua.getExpiresAt() != null && ua.getExpiresAt().isBefore(LocalDateTime.now())
                 && ua.getStatus() == UserAgent.Status.ACTIVE) {
             ua.setStatus(UserAgent.Status.EXPIRED);

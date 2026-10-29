@@ -37,6 +37,7 @@ import com.openforge.aimate.memory.MemoryType;
 import com.openforge.aimate.memory.SoulMemoryBridge;
 import com.openforge.aimate.repository.AgentSessionRepository;
 import com.openforge.aimate.repository.AgentToolRepository;
+import com.openforge.aimate.repository.LocalBridgeTaskRepository;
 import com.openforge.aimate.repository.UserAgentRepository;
 import com.openforge.aimate.repository.UserApiKeyRepository;
 import com.openforge.aimate.repository.UserDefaultModelRepository;
@@ -154,6 +155,7 @@ public class AgentLoopService {
     private final OfficeRentalService        officeRentalService;
     private final OfficeRemoteExecutor       officeRemoteExecutor;
     private final LocalBridgeService         localBridgeService;
+    private final LocalBridgeTaskRepository  localBridgeTaskRepository;
     private final UserAgentRepository        userAgentRepository;
 
     // Tracks which exact contents have already been stored via store_memory
@@ -484,7 +486,6 @@ public class AgentLoopService {
             publisher.publish(AgentEvent.stepStart(sessionId, 2, EXECUTION_PLAN.get(1)));
 
             RunResult result = runThinkAndActLoopForPlaceholder(session, sessionId, placeholderId, context, llmCaller, userId);
-
             publisher.publish(AgentEvent.stepComplete(sessionId, 2, EXECUTION_PLAN.get(1),
                     result.finalAnswer() != null ? "完成推理" : "达到最大迭代或已中断"));
             publisher.publish(AgentEvent.stepStart(sessionId, 3, EXECUTION_PLAN.get(2)));
@@ -494,6 +495,8 @@ public class AgentLoopService {
                         ? result.finalAnswer()
                         : (result.thinkingContent() != null && !result.thinkingContent().isEmpty() ? FALLBACK_EMPTY_ANSWER : "");
                 displayAnswer = persistReplyImages(displayAnswer);
+                // 标准：绝不展示库中不存在的 taskId（副作用只认工具回执）
+                displayAnswer = scrubFabricatedTaskIds(displayAnswer);
                 sessionMessageService.saveNewVersion(placeholderId, displayAnswer, result.thinkingContent(), result.thinkingBlocks());
                 session = sessionRepository.findBySessionId(sessionId).orElseThrow();
                 session.setResult(displayAnswer);
@@ -580,6 +583,7 @@ public class AgentLoopService {
                         ? result.finalAnswer()
                         : (result.thinkingContent() != null && !result.thinkingContent().isEmpty() ? FALLBACK_EMPTY_ANSWER : "");
                 displayAnswer = persistReplyImages(displayAnswer);
+                displayAnswer = scrubFabricatedTaskIds(displayAnswer);
                 sessionMessageService.saveNewVersion(assistantId, displayAnswer, result.thinkingContent(), result.thinkingBlocks());
                 session = sessionRepository.findBySessionId(sessionId).orElseThrow();
                 session.setResult(displayAnswer);
@@ -706,7 +710,13 @@ public class AgentLoopService {
 
     /** 单条回复的 think 循环返回：最终回答 + 思考过程文本 + 标准化时间线（供入库与回放）。 */
     private record RunResult(String finalAnswer, String thinkingContent,
-                             java.util.List<com.openforge.aimate.agent.dto.StreamBlockDto> thinkingBlocks) {}
+                             java.util.List<com.openforge.aimate.agent.dto.StreamBlockDto> thinkingBlocks,
+                             boolean dispatchedLocal) {
+        RunResult(String finalAnswer, String thinkingContent,
+                  java.util.List<com.openforge.aimate.agent.dto.StreamBlockDto> thinkingBlocks) {
+            this(finalAnswer, thinkingContent, thinkingBlocks, false);
+        }
+    }
 
     /**
      * 单条回复的 think 循环：context 来自消息表且可变，追加写回 appendToRun；每轮检查占位条是否被中断。
@@ -721,6 +731,10 @@ public class AgentLoopService {
         java.util.List<com.openforge.aimate.agent.dto.StreamBlockDto> blocks = new java.util.ArrayList<>();
         int iteration = 0;
         Set<String> toolsCreatedThisRun = new java.util.LinkedHashSet<>();
+        boolean dispatchedLocal = false;
+        boolean forceDispatchTool = false;
+        int forcedDispatchAttempts = 0;
+        final boolean localAssist = isDmLocalAssistSession(session);
         while (true) {
             SessionMessage p = sessionMessageService.findById(placeholderId).orElse(null);
             if (p == null || !SessionMessage.STATUS_ANSWERING.equals(p.getMessageStatus())) {
@@ -728,7 +742,8 @@ public class AgentLoopService {
                 return new RunResult(
                         null,
                         thinkingContent.isEmpty() ? null : thinkingContent.toString(),
-                        blocks
+                        blocks,
+                        dispatchedLocal
                 );
             }
 
@@ -752,7 +767,7 @@ public class AgentLoopService {
                 context = context.stream().map(Message::withoutImages).toList();
             }
             String queryForTools = lastUserMessageFrom(context, session.getTaskDescription());
-            List<Tool> tools = loadRelevantTools(queryForTools, TOP_K_TOOLS, userId, session);
+            List<Tool> tools = new ArrayList<>(loadRelevantTools(queryForTools, TOP_K_TOOLS, userId, session));
             java.util.Set<String> haveNames = new java.util.HashSet<>();
             for (Tool t : tools) haveNames.add(t.function().name());
             for (String name : toolsCreatedThisRun) {
@@ -763,7 +778,29 @@ public class AgentLoopService {
                     });
                 }
             }
-            ChatRequest request = ChatRequest.withTools("", context, tools.isEmpty() ? null : tools);
+            // 编造 taskId 后强制派发：DeepSeek Thinking 不支持 tool_choice=具体函数，
+            // 本轮必须 thinking=disabled，且只用 dispatch 工具 + tool_choice=required。
+            boolean forcingDispatch = forceDispatchTool && localAssist;
+            Object toolChoice = "auto";
+            ChatRequest.Thinking thinkingMode = null;
+            if (forcingDispatch) {
+                tools.clear();
+                tools.add(buildDispatchLocalTaskTool());
+                haveNames.clear();
+                haveNames.add("dispatch_local_task");
+                toolChoice = "required";
+                thinkingMode = ChatRequest.Thinking.disabled();
+                forceDispatchTool = false;
+            }
+            ChatRequest request = ChatRequest.builder()
+                    .model("")
+                    .messages(context)
+                    .tools(tools.isEmpty() ? null : tools)
+                    .toolChoice(tools.isEmpty() ? "none" : toolChoice)
+                    .temperature(0.7)
+                    .maxTokens(16384)
+                    .thinking(thinkingMode)
+                    .build();
             final int finalIter = iteration;
             StringBuilder currentIterReasoning = new StringBuilder();
 
@@ -775,7 +812,24 @@ public class AgentLoopService {
                         thinkingContent.append(t);
                     }
             );
-            ChatResponse response = llmCaller.apply(request, callbacks);
+            ChatResponse response;
+            try {
+                response = llmCaller.apply(request, callbacks);
+            } catch (Exception llmEx) {
+                // Thinking+强制 tool_choice 仍可能 400：服务端直接 enqueue，保证本机控制不中断
+                if (forcingDispatch) {
+                    log.warn("[Agent:{}] forced dispatch LLM failed ({}), server enqueue fallback",
+                            sessionId, llmEx.getMessage());
+                    String fallback = serverEnqueueLocalDispatch(session, context, placeholderId);
+                    return new RunResult(
+                            fallback,
+                            thinkingContent.isEmpty() ? null : thinkingContent.toString(),
+                            blocks,
+                            fallback != null && fallback.contains("taskId=")
+                    );
+                }
+                throw llmEx;
+            }
 
             Message assistantMessage = response.firstMessage();
 
@@ -816,6 +870,12 @@ public class AgentLoopService {
                             toolIndexService.indexToolByName(createdName, userId);
                         }
                     }
+                    if ("dispatch_local_task".equals(toolCall.function().name())
+                            && toolResult != null
+                            && toolResult.contains("taskId=")
+                            && !toolResult.startsWith("[ToolError]")) {
+                        dispatchedLocal = true;
+                    }
                     publisher.publish(AgentEvent.toolResult(
                             sessionId, toolCall.function().name(), toolResult, finalIter, durationMs));
                     toAppend.add(Message.toolResult(toolCall.id(), toolResult));
@@ -855,6 +915,38 @@ public class AgentLoopService {
                     log.debug("[Agent:{}] LLM returned empty content but had reasoning ({} chars), using fallback.", sessionId, thinkingContent.length());
                     answer = FALLBACK_EMPTY_ANSWER;
                 }
+                // 无工具却编造 taskId → 先强制 tool 一轮；仍失败则服务端入队（不中断本机控制）
+                if (localAssist && !dispatchedLocal && answerClaimsMissingTaskId(answer) && forcedDispatchAttempts < 1) {
+                    forcedDispatchAttempts++;
+                    forceDispatchTool = true;
+                    log.warn("[Agent:{}] fabricated taskId without tool; forcing dispatch_local_task", sessionId);
+                    context.add(Message.system("""
+                            PROTOCOL VIOLATION: you claimed a local taskId without calling dispatch_local_task.
+                            Call tool dispatch_local_task now with a clear instruction for the local Workbuddy/Cursor device.
+                            Do NOT invent taskId. Quote only the taskId from the tool result.
+                            """.stripIndent()));
+                    continue;
+                }
+                if (localAssist && !dispatchedLocal && answerClaimsMissingTaskId(answer)) {
+                    String fallback = serverEnqueueLocalDispatch(session, context, placeholderId);
+                    if (fallback != null) {
+                        answer = fallback;
+                        dispatchedLocal = true;
+                    } else {
+                        answer = scrubFabricatedTaskIds(answer);
+                        if (answer.isBlank()) {
+                            answer = "未能派发本机任务：模型未调用 dispatch_local_task。请再发一次具体指令。";
+                        }
+                    }
+                }
+                // 强制 tool 轮却仍无 tool_calls：服务端入队兜底
+                if (forcingDispatch && localAssist && !dispatchedLocal) {
+                    String fallback = serverEnqueueLocalDispatch(session, context, placeholderId);
+                    if (fallback != null) {
+                        answer = fallback;
+                        dispatchedLocal = true;
+                    }
+                }
                 // 最终回答作为 finalAnswer block 追加
                 if (answer != null && !answer.isBlank()) {
                     blocks.add(new com.openforge.aimate.agent.dto.StreamBlockDto(
@@ -873,7 +965,8 @@ public class AgentLoopService {
                 return new RunResult(
                         answer,
                         thinkingContent.isEmpty() ? null : thinkingContent.toString(),
-                        blocks
+                        blocks,
+                        dispatchedLocal
                 );
             }
         }
@@ -893,6 +986,82 @@ public class AgentLoopService {
             log.warn("[Agent] persist reply images failed: {}", e.getMessage());
             return answer;
         }
+    }
+
+    private boolean isDmLocalAssistSession(AgentSession session) {
+        if (session == null || session.getUserAgentId() == null) return false;
+        return userAgentRepository.findById(session.getUserAgentId())
+                .map(LocalBridgeService::isDmLocalAssistEnabled)
+                .orElse(false);
+    }
+
+    /**
+     * 模型拒绝/无法调用工具时的服务端入队：instruction = 用户最新原话（任意语言），不靠关键词表。
+     * @return 展示给用户的回执；失败返回 null
+     */
+    private String serverEnqueueLocalDispatch(AgentSession session, List<Message> context, long placeholderId) {
+        if (session == null || session.getUserAgentId() == null) return null;
+        UserAgent ua = userAgentRepository.findById(session.getUserAgentId()).orElse(null);
+        if (!LocalBridgeService.isDmLocalAssistEnabled(ua)) return null;
+        String userText = lastUserMessageFrom(context, "");
+        if (userText == null || userText.isBlank()) {
+            userText = "Retry local device control as requested by the user.";
+        }
+        String instruction = "On the local desktop app bound to this agent (Workbuddy/Cursor), "
+                + "fulfill the user's latest request. User said: " + userText.trim();
+        if (instruction.length() > 1500) instruction = instruction.substring(0, 1500);
+        String idem = "dm_srv_" + placeholderId;
+        try {
+            Map<String, Object> r = localBridgeService.enqueueFromSession(ua, session, instruction, idem);
+            if (!Boolean.TRUE.equals(r.get("ok"))) {
+                log.warn("[Agent:{}] serverEnqueue failed: {}", session.getSessionId(), r.get("error"));
+                return "本机任务入队失败：" + r.getOrDefault("error", "未知错误");
+            }
+            String taskId = String.valueOf(r.get("taskId"));
+            log.info("[Agent:{}] serverEnqueue taskId={} idem={}", session.getSessionId(), taskId, idem);
+            return "已派发本机任务：\n"
+                    + "- taskId：`" + taskId + "`\n"
+                    + "- 指令：" + instruction + "\n"
+                    + "等待本机 Connector 领取并回传。";
+        } catch (Exception e) {
+            log.warn("[Agent:{}] serverEnqueue exception: {}", session.getSessionId(), e.getMessage());
+            return "本机任务入队异常：" + e.getMessage();
+        }
+    }
+
+    /** 回复里是否引用了库中不存在的 local-bridge taskId（模型编造）。 */
+    private boolean answerClaimsMissingTaskId(String answer) {
+        if (answer == null || answer.isBlank()) return false;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("lbt_[a-fA-F0-9]{16,40}")
+                .matcher(answer);
+        while (m.find()) {
+            if (localBridgeTaskRepository.findByPublicId(m.group()).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 删掉不存在的 lbt_…，禁止把假 ID 展示给用户。 */
+    private String scrubFabricatedTaskIds(String answer) {
+        if (answer == null || answer.isBlank()) return answer;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("lbt_[a-fA-F0-9]{16,40}")
+                .matcher(answer);
+        StringBuffer sb = new StringBuffer();
+        boolean scrubbed = false;
+        while (m.find()) {
+            String id = m.group();
+            if (localBridgeTaskRepository.findByPublicId(id).isEmpty()) {
+                m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement("`(invalid taskId removed)`"));
+                scrubbed = true;
+            } else {
+                m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(id));
+            }
+        }
+        m.appendTail(sb);
+        return scrubbed ? sb.toString() : answer;
     }
 
     private boolean sessionSupportsVision(AgentSession session) {
@@ -919,13 +1088,13 @@ public class AgentLoopService {
             persona = agentPromptService.activePersonaPrompt(session.getUserAgentId());
             UserAgent ua = userAgentRepository.findById(session.getUserAgentId()).orElse(null);
             if (LocalBridgeService.isDmLocalAssistEnabled(ua)) {
-                tools = tools + """
+                tools = tools + "\n\n" + LocalBridgeService.agentArchitecturePrompt(true) + """
                         
-                        Local device (DM):
-                        - You chat normally in the cloud first (greet, clarify, explain).
-                        - Only when the user wants you to operate their local machine (edit code, run commands, open projects, local files), call dispatch_local_task with a clear instruction.
-                        - Pure chat / knowledge Q&A → do NOT call dispatch_local_task.
-                        - After dispatch, tell the user the task was sent to their local client or prompt-linked worker.
+                        ## 单聊执行细则
+                        - 副作用只能经工具 `dispatch_local_task`；instruction 写清：要操作哪个本机应用、输入什么、是否发送。
+                        - Draft vs send：只填不发 / 填入并发送，必须写进 instruction。
+                        - NEVER invent taskId；只引用工具回执里的 `taskId=lbt_…`。
+                        - 纯聊天 / 知识问答：不要调用 dispatch_local_task。
                         """.stripIndent();
             }
         }
@@ -961,7 +1130,8 @@ public class AgentLoopService {
             String idemNote = Boolean.TRUE.equals(r.get("idempotent")) ? "（幂等：已有进行中任务）" : "";
             return "本机任务已入队 taskId=" + r.get("taskId") + idemNote + "。"
                     + String.valueOf(r.getOrDefault("hint", "等待本机设备领取"))
-                    + "。请先用自然语言告知用户已派发，不要假装已经在本机执行完毕。";
+                    + "。务必把上述真实 taskId 原样告诉用户；禁止编造其它 taskId；"
+                    + "在本机 Connector 回传之前，不要声称已在 Workbuddy/Cursor 里输入或发送成功。";
         } catch (Exception e) {
             return "[ToolError] dispatch_local_task 失败: " + e.getMessage();
         }
@@ -987,7 +1157,12 @@ public class AgentLoopService {
         try {
             return Tool.ofFunction(new ToolFunction(
                     "dispatch_local_task",
-                    "After normal chat, dispatch a task to the user's local device (desktop Connector or prompt-linked worker). Use ONLY when local machine control is required. Do not use for pure conversation. Pass idempotency_key when retrying the same intent.",
+                    "You are the user's proxy: enqueue work for Aimate Connector on their PC, "
+                            + "which then drives local Cursor/Workbuddy (type/send/click/run). "
+                            + "Cloud you cannot reach the LAN directly — this tool is the only bridge. "
+                            + "Use for local machine control; not for pure chat. "
+                            + "Pass idempotency_key when retrying the same intent. "
+                            + "Never invent taskId — quote only the id from this tool's result.",
                     objectMapper.readTree(schema)
             ));
         } catch (Exception e) {

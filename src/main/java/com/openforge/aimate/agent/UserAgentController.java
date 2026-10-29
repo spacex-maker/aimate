@@ -166,6 +166,22 @@ public class UserAgentController {
         }
     }
 
+    /** 重新签发该 Agent 的 Soul accessToken（令牌 401 时修复；不返回明文） */
+    @PostMapping("/me/agents/{id}/soul/reissue-token")
+    public Map<String, Object> reissueSoulToken(@PathVariable Long id) {
+        try {
+            userAgentService.detail(requireUserId(), id);
+            Map<String, Object> out = soulMemoryBridge.repairAgentSoulToken(requireUserId(), id);
+            if (!Boolean.TRUE.equals(out.get("ok"))) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        String.valueOf(out.getOrDefault("error", "重新签发失败")));
+            }
+            return out;
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        }
+    }
+
     private Long requireUserId() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth != null && auth.getPrincipal() instanceof Long id) return id;

@@ -92,6 +92,18 @@ public class SoulPlatformClient {
         return post("/create-user", body);
     }
 
+    /**
+     * 为已存在的 USER 魂重新签发 accessToken（席位已绑定时也会成功）。
+     */
+    public JsonNode reissueUserSoulToken(
+            String accountSub,
+            long seatId,
+            String externalAgentKey,
+            String name
+    ) {
+        return createUserSoul(accountSub, seatId, externalAgentKey, name, null, true);
+    }
+
     private JsonNode post(String path, Map<String, Object> body) {
         if (!isConfigured()) {
             throw new IllegalStateException("Soul 平台密钥或地址未配置");

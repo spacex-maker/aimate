@@ -2,6 +2,7 @@ package com.openforge.aimate.localbridge;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openforge.aimate.agent.AgentPromptService;
+import com.openforge.aimate.agent.UserAgentIdentityService;
 import com.openforge.aimate.config.LocalBridgeProperties;
 import com.openforge.aimate.agent.SessionMessageService;
 import com.openforge.aimate.domain.AgentExecutionMode;
@@ -73,6 +74,7 @@ public class LocalBridgeService {
     private final SessionMessageService sessionMessageService;
     private final SessionMessageRepository sessionMessageRepository;
     private final TransactionTemplate transactionTemplate;
+    private final UserAgentIdentityService userAgentIdentityService;
 
     public LocalBridgeService(
             UserAgentRepository userAgentRepository,
@@ -91,7 +93,8 @@ public class LocalBridgeService {
             AgentSessionRepository sessionRepository,
             @Lazy SessionMessageService sessionMessageService,
             SessionMessageRepository sessionMessageRepository,
-            TransactionTemplate transactionTemplate
+            TransactionTemplate transactionTemplate,
+            UserAgentIdentityService userAgentIdentityService
     ) {
         this.userAgentRepository = userAgentRepository;
         this.taskRepository = taskRepository;
@@ -110,6 +113,7 @@ public class LocalBridgeService {
         this.sessionMessageService = sessionMessageService;
         this.sessionMessageRepository = sessionMessageRepository;
         this.transactionTemplate = transactionTemplate;
+        this.userAgentIdentityService = userAgentIdentityService;
     }
 
     public static boolean isLocalBridge(UserAgent ua) {
@@ -128,6 +132,51 @@ public class LocalBridgeService {
     @Transactional(readOnly = true)
     public boolean isLocalBridgeAgent(Long userAgentId) {
         return userAgentRepository.findById(userAgentId).map(LocalBridgeService::isLocalBridge).orElse(false);
+    }
+
+    /**
+     * 注入给「支持本机 AI」类 Agent 的架构说明（单聊 / 群聊共用）。
+     * 目的：让模型知道自己是用户代理，以及云端对话 vs 本机 Connector 的边界与时机。
+     *
+     * @param channelDm true=单聊（工具 dispatch_local_task）；false=群聊（尾行 [[LOCAL:…]]）
+     */
+    public static String agentArchitecturePrompt(boolean channelDm) {
+        String dispatchHow = channelDm
+                ? """
+                  ## 你怎么控本机（单聊）
+                  - 唯一入口：工具 `dispatch_local_task`（把 instruction 交给平台入队）。
+                  - 入队成功后，工具结果里会有真实 `taskId=lbt_…`。只能引用这个 ID，禁止自己编造。
+                  - Connector 领取 → 操作本机 Cursor/Workbuddy 等 → complete 回传后，用户才会在对话里看到本机执行结果。
+                  - 在收到工具入队回执、以及本机 complete 之前：禁止声称「已在本机输入/发送/执行成功」。
+                  """.stripIndent()
+                : """
+                  ## 你怎么控本机（群聊）
+                  - 先正常以同事身份在群里说话（云端回复）。
+                  - 仅当用户明确需要动他电脑时，在回复**最后一行**追加：`[[LOCAL:给本机应用的可执行任务说明]]`（该行会被平台剥掉，不会原文进群）。
+                  - 平台入队后由 Connector 领取并回传；不要在还没入队时假装本机已跑完。
+                  - 纯聊天、问答、同步信息、记事实：不要加 `[[LOCAL:]]`。
+                  """.stripIndent();
+        return """
+                # 你是谁（本机桥接 Agent · 真实架构）
+                你不是「只会网页聊天的机器人」。你是**用户的代理（proxy）**，同时具备三条能力：
+                1. **群聊同事**：在 Aimate 群里以人设说话、协作、被 @。
+                2. **私聊助理**：在 Web/App 单聊里与用户一对一对话、记偏好、调云端工具。
+                3. **本机 AI 管家**：通过用户电脑上的 **Aimate Connector（专用客户端连接器）**，管理/驱动本机已绑定的桌面 AI
+                   （如 Cursor、Workbuddy 等）：往它们的输入框写入、发送、或下达可执行任务。
+
+                # 系统怎么连在一起（必须按这个理解时机）
+                - **你（云端 Agent）**跑在 Aimate 服务器上：负责理解用户、聊天、选工具、决定要不要动本机。
+                - **Aimate Connector**装在用户 Windows/macOS 本机：心跳上报在线、从平台**领取**本机任务、用 CDP/自动化操作本机 AI 应用，再把结果 **complete** 回平台。
+                - **本机 AI 应用**（Cursor / Workbuddy…）才是最终敲键/填框/跑项目的地方；你不能直连用户局域网，只能经 Connector。
+                - 链路：用户说话 → 你（云端）判断 →（需要时）入队本机任务 → Connector 领取并操作本机 AI → 结果回传对话/群。
+
+                # 什么时候只聊天，什么时候派本机
+                - **只聊天（不要派本机）**：闲聊、问答、解释概念、同步进度、记名字/偏好、群内协调、不要求碰用户电脑。
+                - **必须派本机**：用户要你在他电脑上的 Cursor/Workbuddy 里输入/发送/点击、打开本机项目、跑本机命令、读写本机文件、检查本机 IDE/git/环境等。
+                - 拿不准时：先短问一句确认；不要假装已经操作了本机。
+
+                %s
+                """.formatted(dispatchHow).stripIndent();
     }
 
     /**
@@ -178,6 +227,10 @@ public class LocalBridgeService {
         out.put("userAgentId", ua.getId());
         out.put("agentName", ua.getName());
         out.put("executionMode", ua.getExecutionMode().name());
+        String career = userAgentIdentityService.careerCode(ua);
+        if (StringUtils.hasText(career)) {
+            out.put("careerCode", career);
+        }
         out.put("apiBase", apiBase);
         out.put("tokenPrefix", ua.getLocalBridgeTokenPrefix());
         out.put("tokenRotated", plainToken != null);
@@ -515,10 +568,22 @@ public class LocalBridgeService {
      * 领取前先回收本 Agent 过期租约；用条件 UPDATE 防双领。
      */
     public Map<String, Object> claimNext(LocalBridgePrincipal principal, int waitSeconds) {
-        return claimNext(principal, waitSeconds, null);
+        return claimNext(principal, waitSeconds, null, null);
     }
 
     public Map<String, Object> claimNext(LocalBridgePrincipal principal, int waitSeconds, String deviceKey) {
+        return claimNext(principal, waitSeconds, deviceKey, null);
+    }
+
+    /**
+     * @param careerCode 连接器当前 claim 循环对应的桌面 AI；必须与令牌所属 Agent 职业一致，防 Cursor/WorkBuddy 串线。
+     */
+    public Map<String, Object> claimNext(
+            LocalBridgePrincipal principal, int waitSeconds, String deviceKey, String careerCode
+    ) {
+        // 领任务前先钉死职业：错绑 token 的 loop 直接失败，不会领走别家的单
+        UserAgent gate = requireActiveBridge(principal);
+        assertClientCareerMatchesAgent(gate, careerCode);
         int wait = Math.min(Math.max(waitSeconds, 0), 30);
         long deadline = System.currentTimeMillis() + wait * 1000L;
         String device = StringUtils.hasText(deviceKey) ? deviceKey.trim() : null;
@@ -1047,11 +1112,14 @@ public class LocalBridgeService {
             return skipOut;
         }
 
-        // ── 单聊完成 ──────────────────────────────────────────────────────────
-        if (task.getGroupId() == null && StringUtils.hasText(task.getSessionId())) {
+        // ── 无群：单聊 / 孤儿任务（无 session 也能结案，避免 CLAIMED 永久卡住）──
+        if (task.getGroupId() == null) {
             if (failed) {
                 task.setStatus(LocalBridgeTask.Status.FAILED);
                 task.setErrorMessage(trim(error, 1024));
+                if (StringUtils.hasText(result)) {
+                    task.setResultText(result.trim());
+                }
                 taskRepository.save(task);
                 return Map.of("ok", true, "status", "FAILED");
             }
@@ -1061,12 +1129,14 @@ public class LocalBridgeService {
             task.setStatus(LocalBridgeTask.Status.DONE);
             task.setResultText(result.trim());
             taskRepository.save(task);
-            AgentSession session = sessionRepository.findBySessionId(task.getSessionId()).orElse(null);
-            if (session != null) {
-                try {
-                    sessionMessageService.append(session, Message.assistantText(result.trim()));
-                } catch (Exception e) {
-                    log.warn("[LocalBridge] DM append failed: {}", e.getMessage());
+            if (StringUtils.hasText(task.getSessionId())) {
+                AgentSession session = sessionRepository.findBySessionId(task.getSessionId()).orElse(null);
+                if (session != null) {
+                    try {
+                        sessionMessageService.append(session, Message.assistantText(result.trim()));
+                    } catch (Exception e) {
+                        log.warn("[LocalBridge] DM append failed: {}", e.getMessage());
+                    }
                 }
             }
             return Map.of("ok", true, "status", "DONE");
@@ -1154,10 +1224,37 @@ public class LocalBridgeService {
         out.put("userAgentId", ua.getId());
         out.put("name", ua.getName());
         out.put("executionMode", ua.getExecutionMode().name());
+        String career = userAgentIdentityService.careerCode(ua);
+        if (StringUtils.hasText(career)) {
+            out.put("careerCode", career);
+        }
         out.put("soulBound", ua.getSoulAgentId() != null && StringUtils.hasText(ua.getSoulAccessToken()));
         out.put("soulAgentId", ua.getSoulAgentId());
         out.put("pollIntervalSeconds", properties.getPollIntervalSeconds());
         return out;
+    }
+
+    /**
+     * 一个 Agent 只固定服务自己绑定的桌面 AI（career）。
+     * 连接器某 career 槽位若粘了别家 token，心跳/领取一律拒绝，避免任务串线。
+     */
+    private void assertClientCareerMatchesAgent(UserAgent ua, String clientCareerRaw) {
+        String bound = userAgentIdentityService.careerCode(ua);
+        if (!StringUtils.hasText(bound)) {
+            log.warn("[LocalBridge] agent={} 无 catalog career，跳过职业校验", ua.getId());
+            return;
+        }
+        if (!StringUtils.hasText(clientCareerRaw)) {
+            throw new IllegalArgumentException(
+                    "CAREER_MISMATCH: 缺少 careerCode。每个本机 Agent 只能服务自己的桌面 AI（期望 "
+                            + bound + "）");
+        }
+        String client = clientCareerRaw.trim().toUpperCase();
+        if (!bound.equalsIgnoreCase(client)) {
+            throw new IllegalArgumentException(
+                    "CAREER_MISMATCH: 令牌属于 " + bound + "，不能用于 " + client
+                            + "。请在连接器里关闭错绑通道，重新打开正确产品的连接。");
+        }
     }
 
     /**
@@ -1179,6 +1276,7 @@ public class LocalBridgeService {
             copyTrim(device, slim, "careerCode", 64);
             copyTrim(device, slim, "label", 64);
         }
+        assertClientCareerMatchesAgent(ua, str(slim.get("careerCode")));
         String deviceKey = slim.get("deviceKey") != null
                 ? String.valueOf(slim.get("deviceKey"))
                 : fallbackDeviceKey(slim);
@@ -1222,6 +1320,10 @@ public class LocalBridgeService {
         out.put("ok", true);
         out.put("userAgentId", ua.getId());
         out.put("deviceKey", deviceKey);
+        String boundCareer = userAgentIdentityService.careerCode(ua);
+        if (StringUtils.hasText(boundCareer)) {
+            out.put("careerCode", boundCareer);
+        }
         out.put("lastSeenAt", now.toString());
         out.put("onlineTtlSeconds", ONLINE_TTL_SECONDS);
         out.put("onlineDeviceCount", countOnlineDevices(ua.getId(), now));

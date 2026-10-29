@@ -11,6 +11,7 @@ import { useAuth } from '../hooks/useAuth'
 import { useModelSelection } from '../state/modelSelection.ts'
 import { AgentInputBox } from '../components/agent/AgentInputBox'
 import { AgentAvatar, formatAgentDisplayTitle } from '../components/agent/AgentAvatar'
+import { openUserCenter } from '../lib/userCenter'
 
 const EXAMPLES = [
   '用 Python 写一个能批量压缩图片的脚本，并解释每一步',
@@ -52,6 +53,19 @@ export function HomePage() {
     const sec = myAgents.find((a) => a.kind === 'SECRETARY' && a.status === 'ACTIVE')
     if (sec) setUserAgentId(sec.id)
   }, [myAgents, userAgentId])
+
+  // 画像未完成：本会话自动打开一次「画像」引导
+  useEffect(() => {
+    if (!user?.userId || !profile || profile.completed) return
+    const key = `aimate_profile_guide_${user.userId}`
+    try {
+      if (sessionStorage.getItem(key) === '1') return
+      sessionStorage.setItem(key, '1')
+    } catch {
+      /* ignore */
+    }
+    openUserCenter('profile')
+  }, [user?.userId, profile])
 
   const openThenMaybeSend = useMutation({
     mutationFn: async (payload: {
@@ -95,14 +109,19 @@ export function HomePage() {
         </div>
 
         {profile && !profile.completed && (
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-100/90">
-            请先在个人中心完善职业、年龄、性别等画像，以生成默认秘书 Agent。
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3.5 text-sm text-amber-100/90 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-medium text-amber-100">还差一步：完善个人画像</p>
+              <p className="mt-0.5 text-xs text-amber-100/65">
+                填写职业、年龄、性别后，系统会自动为你生成默认秘书 Agent（含独立 Soul）。
+              </p>
+            </div>
             <button
               type="button"
-              className="ml-2 text-amber-300 underline"
-              onClick={() => navigate('/agents/mine')}
+              className="shrink-0 rounded-lg bg-amber-400/90 px-3.5 py-2 text-xs font-semibold text-black hover:bg-amber-300"
+              onClick={() => openUserCenter('profile')}
             >
-              查看我的 Agent
+              去完善画像
             </button>
           </div>
         )}

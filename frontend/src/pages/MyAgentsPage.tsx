@@ -35,6 +35,7 @@ import {
 import { AgentAvatar, formatAgentDisplayTitle } from '../components/agent/AgentAvatar'
 import { fileToChatImage } from '../lib/chatImage'
 import { soulConsoleUrl } from '../lib/host'
+import { openUserCenter } from '../lib/userCenter'
 import { AppToggle } from '../ui/AppToggle'
 import clsx from 'clsx'
 
@@ -335,8 +336,26 @@ export function MyAgentsPage() {
       {isLoading ? (
         <div className="mt-8 text-sm text-white/40">加载中…</div>
       ) : agents.length === 0 ? (
-        <div className="mt-10 rounded-2xl border border-dashed border-white/10 p-10 text-center text-sm text-white/40">
-          暂无 Agent。请先完善个人画像生成秘书，或前往招聘。
+        <div className="mt-10 rounded-2xl border border-dashed border-white/10 p-10 text-center space-y-4">
+          <p className="text-sm text-white/45">
+            暂无 Agent。请先完善个人画像生成默认秘书，或前往招聘雇佣伙伴。
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => openUserCenter('profile')}
+              className="rounded-lg bg-cyan-500/90 px-4 py-2 text-sm font-medium text-black hover:bg-cyan-400"
+            >
+              去完善画像
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/agents/hire')}
+              className="rounded-lg border border-white/15 px-4 py-2 text-sm text-white/70 hover:bg-white/5"
+            >
+              去招聘
+            </button>
+          </div>
         </div>
       ) : (
         <div className="mt-6 grid gap-4 lg:grid-cols-[280px_1fr]">

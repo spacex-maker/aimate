@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openforge.aimate.agent.AgentPromptService;
 import com.openforge.aimate.agent.SystemModelChatHelper;
 import com.openforge.aimate.agent.UserAgentIdentityService;
+import com.openforge.aimate.agent.UserAgentService;
 import com.openforge.aimate.domain.ChatGroup;
 import com.openforge.aimate.domain.GroupMember;
 import com.openforge.aimate.domain.GroupMessage;
@@ -92,6 +93,7 @@ public class GroupAgentDispatcher {
     private final GroupMemoryCaptureService groupMemoryCaptureService;
     private final GroupAgentToolService groupAgentToolService;
     private final UserAgentIdentityService userAgentIdentityService;
+    private final UserAgentService userAgentService;
     private final ObjectMapper objectMapper;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     /** 单 Agent 串行：避免叠话 */
@@ -114,6 +116,7 @@ public class GroupAgentDispatcher {
             GroupMemoryCaptureService groupMemoryCaptureService,
             GroupAgentToolService groupAgentToolService,
             UserAgentIdentityService userAgentIdentityService,
+            UserAgentService userAgentService,
             ObjectMapper objectMapper
     ) {
         this.memberRepository = memberRepository;
@@ -132,6 +135,7 @@ public class GroupAgentDispatcher {
         this.groupMemoryCaptureService = groupMemoryCaptureService;
         this.groupAgentToolService = groupAgentToolService;
         this.userAgentIdentityService = userAgentIdentityService;
+        this.userAgentService = userAgentService;
         this.objectMapper = objectMapper;
     }
 
@@ -165,9 +169,9 @@ public class GroupAgentDispatcher {
             if (isSameAgent(sender, am)) {
                 continue;
             }
-            // 停用/过期 Agent 不进意图识别与生成
+            // 停用/租期过期 Agent 不进意图识别与生成（按 expiresAt 落库 EXPIRED）
             UserAgent uaStatus = userAgentRepository.findById(am.getUserAgentId()).orElse(null);
-            if (uaStatus == null || uaStatus.getStatus() != UserAgent.Status.ACTIVE) {
+            if (!userAgentService.isUsable(uaStatus)) {
                 continue;
             }
             GroupMember.AgentReplyMode mode = effectiveMode(am);
@@ -289,6 +293,9 @@ public class GroupAgentDispatcher {
         long analyzedPoints = Math.max(0L, priorPoints);
         try {
             UserAgent uaEarly = userAgentRepository.findById(agentMember.getUserAgentId()).orElse(null);
+            if (!userAgentService.isUsable(uaEarly)) {
+                return;
+            }
             boolean localBridge = LocalBridgeService.isLocalBridge(uaEarly);
             GroupMember.AgentReplyMode mode = effectiveMode(agentMember);
 
@@ -411,7 +418,7 @@ public class GroupAgentDispatcher {
             "CLINE", List.of("cline")
     );
 
-    /** 任意本机桥共享弱别名（群里只有一个本机桥时更有用）。 */
+    /** 共享弱别名：仅当群里只有一只本机桥时可用，多桥并存时禁止，避免互相抢单。 */
     private static final List<String> LOCAL_DESKTOP_SHARED_ALIASES = List.of("本机", "connector");
 
     /**
@@ -436,8 +443,21 @@ public class GroupAgentDispatcher {
         return false;
     }
 
+    /** 群内 LOCAL_BRIDGE Agent 数量；>1 时禁用「本机/connector」共享别名。 */
+    private int countLocalBridgeAgentsInGroup(Long groupId) {
+        if (groupId == null) return 0;
+        int n = 0;
+        for (GroupMember m : memberRepository.findByGroupIdOrderByIdAsc(groupId)) {
+            if (m.getMemberType() != GroupMember.MemberType.AGENT || m.getUserAgentId() == null) continue;
+            UserAgent ua = userAgentRepository.findById(m.getUserAgentId()).orElse(null);
+            if (LocalBridgeService.isLocalBridge(ua)) n++;
+        }
+        return n;
+    }
+
     /**
      * 可被点名的别名：真名、群昵称、人设里的桌面工具名、本机桥「按职业」花名。
+     * 原则：一只本机 Agent 只认自己的 career 花名，不与其它桌面 AI 混淆。
      */
     private List<String> addressAliases(GroupMember agentMember, UserAgent ua) {
         List<String> out = new ArrayList<>();
@@ -470,8 +490,12 @@ public class GroupAgentDispatcher {
             }
         }
         if (localBridge) {
-            for (String alias : LOCAL_DESKTOP_SHARED_ALIASES) {
-                add.accept(alias);
+            // 多只本机桥并存时，禁止共享「本机」——必须 @Cursor / @WorkBuddy 等专属名
+            Long gid = agentMember != null ? agentMember.getGroupId() : null;
+            if (countLocalBridgeAgentsInGroup(gid) <= 1) {
+                for (String alias : LOCAL_DESKTOP_SHARED_ALIASES) {
+                    add.accept(alias);
+                }
             }
         } else {
             for (List<String> aliases : CAREER_DESKTOP_ALIASES.values()) {
@@ -775,17 +799,12 @@ public class GroupAgentDispatcher {
         String rosterBlock = StringUtils.hasText(roster) ? roster.trim() : "（暂无花名册）";
         String localBlock = "";
         if (LocalBridgeService.isGroupLocalAssistEnabled(ua)) {
-            localBlock = """
+            localBlock = "\n" + LocalBridgeService.agentArchitecturePrompt(false) + """
 
-                # Local device
-                You are bound to the user's local desktop Connector, but most group messages are cloud chat only.
-                Append ONE final line ONLY when the user clearly needs local machine work
-                (read/write files, run commands, inspect local env/IDE/git on their PC):
-                   [[LOCAL:executable task for the local app]]
-                That line is stripped from the group message.
-                NEVER append [[LOCAL:]] for: pure chat, Q&A, greetings, info sync, roster, remembering facts,
-                group coordination, or explaining something without asking to touch the machine.
-                When unsure → do not append; chat reply alone is enough.
+                ## 群聊执行细则
+                多数群消息只需云端同事式回复。仅当用户明确要动本机时，在正文最后追加一行：
+                   [[LOCAL:给本机应用的可执行任务说明]]
+                该行会被平台剥掉，不会原文进群。不确定就不要加，只聊天即可。
                 """.stripIndent();
         }
         return """

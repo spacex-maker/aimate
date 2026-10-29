@@ -40,7 +40,7 @@ public class LocalBridgeController {
         try {
             return localBridgeService.heartbeat(requirePrincipal(), body);
         } catch (IllegalArgumentException e) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+            throw careerOrNotFound(e);
         } catch (IllegalStateException e) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
         }
@@ -49,17 +49,29 @@ public class LocalBridgeController {
     /**
      * @param waitSeconds 可选长轮询秒数 0–30；有任务立即返回，无任务挂起至超时。
      *                    替代高频短轮询，仍兼容 curl/bat，无需 WebSocket。
+     * @param careerCode  连接器当前循环对应的桌面 AI；必须与令牌 Agent 职业一致。
      */
     @PostMapping("/tasks/claim")
     public Map<String, Object> claim(
             @RequestParam(value = "waitSeconds", required = false, defaultValue = "0") int waitSeconds,
-            @RequestParam(value = "deviceKey", required = false) String deviceKey
+            @RequestParam(value = "deviceKey", required = false) String deviceKey,
+            @RequestParam(value = "careerCode", required = false) String careerCode
     ) {
         try {
-            return localBridgeService.claimNext(requirePrincipal(), waitSeconds, deviceKey);
+            return localBridgeService.claimNext(requirePrincipal(), waitSeconds, deviceKey, careerCode);
+        } catch (IllegalArgumentException e) {
+            throw careerOrNotFound(e);
         } catch (IllegalStateException e) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
         }
+    }
+
+    private static ResponseStatusException careerOrNotFound(IllegalArgumentException e) {
+        String msg = e.getMessage();
+        if (msg != null && msg.startsWith("CAREER_MISMATCH")) {
+            return new ResponseStatusException(HttpStatus.FORBIDDEN, msg);
+        }
+        return new ResponseStatusException(HttpStatus.NOT_FOUND, msg);
     }
 
     @GetMapping("/tasks/{taskId}/context")

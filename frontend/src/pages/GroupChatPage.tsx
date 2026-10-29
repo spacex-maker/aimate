@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 // qrcode 动态 import 用于群二维码
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -59,8 +59,16 @@ function formatMessageTime(raw?: string | null): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`
 }
 
-export function GroupChatPage() {
-  const { publicId = '' } = useParams()
+export function GroupChatPage({
+  publicId: publicIdProp,
+  active = true,
+}: {
+  publicId?: string
+  /** 保活隐藏时为 false：不改 scrollTop，避免 display:none 下尺寸错乱 */
+  active?: boolean
+} = {}) {
+  const params = useParams()
+  const publicId = publicIdProp || params.publicId || ''
   const { user } = useAuth()
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -77,6 +85,31 @@ export function GroupChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 是否贴底：贴底时新消息自动跟上；离开底部则累计新消息气泡 */
+  const stickToBottomRef = useRef(true)
+  const initialScrollDoneRef = useRef(false)
+  const lastSeenMsgIdRef = useRef<number | null>(null)
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const [newMsgCount, setNewMsgCount] = useState(0)
+
+  const isNearBottom = useCallback((el: HTMLElement, threshold = 96) => {
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
+  }, [])
+
+  const jumpToBottom = useCallback((instant = true) => {
+    const el = listRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: instant ? 'auto' : 'smooth' })
+    stickToBottomRef.current = true
+    const lastId = messagesRef.current.length
+      ? messagesRef.current[messagesRef.current.length - 1].id
+      : null
+    lastSeenMsgIdRef.current = lastId
+    setNewMsgCount(0)
+  }, [])
 
   const jumpToMessage = useCallback((id: number) => {
     const el = document.getElementById(`gm-${id}`)
@@ -106,9 +139,74 @@ export function GroupChatPage() {
     loadMessages().catch((e: Error) => toast.error(e.message))
   }, [loadMessages])
 
+  // 首次进入本实例：瞬移到底；之后保活切走/切回不再动 scroll（DOM 自己记得）
+  useLayoutEffect(() => {
+    if (initialScrollDoneRef.current) return
+    if (!messages.length || !listRef.current) return
+    listRef.current.scrollTop = listRef.current.scrollHeight
+    stickToBottomRef.current = true
+    lastSeenMsgIdRef.current = messages[messages.length - 1]?.id ?? null
+    initialScrollDoneRef.current = true
+  }, [messages])
+
+  // 新消息 / 思考面板：仅在当前可见会话贴底跟随；隐藏时只更新气泡计数
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length, liveThinking])
+    if (!initialScrollDoneRef.current) return
+    const el = listRef.current
+    if (!el) return
+    const lastId = messages.length ? messages[messages.length - 1].id : null
+
+    if (active && (stickToBottomRef.current || isNearBottom(el))) {
+      el.scrollTop = el.scrollHeight
+      stickToBottomRef.current = true
+      lastSeenMsgIdRef.current = lastId
+      setNewMsgCount(0)
+      return
+    }
+
+    if (!active && stickToBottomRef.current) {
+      // 隐藏且原本贴底：回来时再滚到底，避免 hidden 时量错高度
+      lastSeenMsgIdRef.current = lastId
+      setNewMsgCount(0)
+      return
+    }
+
+    if (lastId != null && lastSeenMsgIdRef.current != null) {
+      setNewMsgCount(messages.filter((m) => m.id > lastSeenMsgIdRef.current!).length)
+    } else if (lastId != null && lastSeenMsgIdRef.current == null) {
+      setNewMsgCount(1)
+    }
+  }, [messages, liveThinking, isNearBottom, active])
+
+  // 从隐藏切回可见：若离开前贴底，补一次贴底
+  useLayoutEffect(() => {
+    if (!active) return
+    const el = listRef.current
+    if (!el || !initialScrollDoneRef.current) return
+    if (stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight
+      setNewMsgCount(0)
+    }
+  }, [active])
+
+  // 滚动时更新贴底状态
+  useEffect(() => {
+    const el = listRef.current
+    if (!el) return
+    const onScroll = () => {
+      if (!activeRef.current) return
+      const near = isNearBottom(el)
+      stickToBottomRef.current = near
+      if (near) {
+        lastSeenMsgIdRef.current = messagesRef.current.length
+          ? messagesRef.current[messagesRef.current.length - 1].id
+          : null
+        setNewMsgCount(0)
+      }
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [isNearBottom])
 
   const onWs = useCallback(
     (ev: GroupWsEvent) => {
@@ -348,6 +446,7 @@ export function GroupChatPage() {
         onChange={setDraft}
         onSubmit={(opts) => {
           if ((!draft.trim() && !(opts?.images && opts.images.length > 0)) || sendMut.isPending) return
+          stickToBottomRef.current = true
           sendMut.mutate({ images: opts?.images })
         }}
         mentionCandidates={mentionCandidates}
@@ -357,6 +456,17 @@ export function GroupChatPage() {
         pendingLabel="发送中"
         submitTitle="发送"
         disabled={!publicId}
+        aboveComposerRight={
+          newMsgCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => jumpToBottom(false)}
+              className="pointer-events-auto rounded-full bg-sky-500/90 hover:bg-sky-400 text-white text-xs font-medium px-3 py-1.5 shadow-lg shadow-sky-900/40 border border-white/20 backdrop-blur-sm transition-colors"
+            >
+              {newMsgCount > 99 ? '99+' : newMsgCount} 条新消息
+            </button>
+          ) : null
+        }
         topSlot={
           quoting ? (
             <QuoteComposerBar

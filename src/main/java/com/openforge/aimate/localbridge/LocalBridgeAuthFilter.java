@@ -1,6 +1,7 @@
 package com.openforge.aimate.localbridge;
 
 import com.openforge.aimate.domain.UserAgent;
+import com.openforge.aimate.agent.UserAgentService;
 import com.openforge.aimate.repository.UserAgentRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -35,6 +36,7 @@ public class LocalBridgeAuthFilter extends OncePerRequestFilter {
     public static final String AUTHORITY = "LOCAL_BRIDGE";
 
     private final UserAgentRepository userAgentRepository;
+    private final UserAgentService userAgentService;
 
     @Override
     protected boolean shouldNotFilter(@NonNull HttpServletRequest request) {
@@ -63,7 +65,7 @@ public class LocalBridgeAuthFilter extends OncePerRequestFilter {
     private void authenticate(HttpServletRequest request, String token) {
         String hash = sha256Hex(token);
         UserAgent ua = userAgentRepository.findByLocalBridgeTokenHash(hash).orElse(null);
-        if (ua == null || ua.getStatus() != UserAgent.Status.ACTIVE) {
+        if (!userAgentService.isUsable(ua)) {
             return;
         }
         var principal = new LocalBridgePrincipal(ua.getId(), ua.getUserId());
