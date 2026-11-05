@@ -396,6 +396,8 @@ export function SessionPage({
           const status = p.status as string
           if (status === 'IDLE' || status === 'COMPLETED') {
             setRetryTargetUserMessageId(null)
+            // 空输出/漏 FINAL_ANSWER 时清掉残留思考流，避免底部「假新消息」刷完还在
+            dispatch({ type: 'CLEAR' })
             queryClient.refetchQueries({ queryKey: ['session-messages', sessionId] })
           } else if (status === 'ACTIVE' || status === 'RUNNING') {
             // 后端刚进入执行，拉一次消息列表以显示「回答中」占位（避免漏显）

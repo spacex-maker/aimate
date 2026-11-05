@@ -226,7 +226,19 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
     : -1
   const nextSlotIsAssistant = retryIndex >= 0 && historyMessages![retryIndex + 1]?.role === 'assistant'
   const showBlocksInline = retryTargetUserMessageId != null && retryIndex >= 0 && blocks.length > 0
-  const showBlocksAtBottom = blocks.length > 0 && !showBlocksInline
+  /** 正在回答的助手气泡：把实时思考贴进去，避免底部再冒一条「新消息」 */
+  const lastAnsweringIndex = hasHistory
+    ? (() => {
+        const list = historyMessages!
+        for (let i = list.length - 1; i >= 0; i--) {
+          const m = list[i]
+          if (m.role === 'assistant' && m.messageStatus === 'ANSWERING') return i
+        }
+        return -1
+      })()
+    : -1
+  const attachLiveToAnswering = lastAnsweringIndex >= 0 && blocks.length > 0 && !showBlocksInline
+  const showBlocksAtBottom = blocks.length > 0 && !showBlocksInline && !attachLiveToAnswering
 
   // 监听外层对话区域的滚动，仅在用户本来就在底部附近时才自动滚到底，避免打断用户上滑查看历史
   useEffect(() => {
@@ -305,6 +317,11 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
                 >
                   <div className={`min-w-0 w-full flex flex-col gap-1.5 max-w-[85%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                   {msg.role === 'assistant' && agent && <AgentBubbleHeader agent={agent} />}
+                  {attachLiveToAnswering && i === lastAnsweringIndex && (
+                    <div className="w-full min-w-0 mb-1">
+                      <BlocksArea blocks={blocks} isRunning={isRunning} />
+                    </div>
+                  )}
                   {/* AI 回复消息卡上方：思考（展开后含思考文字 + 工具调用，工具显示在思考内容下方） */}
                   {msg.role === 'assistant' && (
                     (msg.thinkingBlocks && msg.thinkingBlocks.length > 0) ||
@@ -501,11 +518,10 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
           </div>
         )}
 
-        {/* 非重试时：助手回复区域在列表最底部；重试时已在上面插到对应位置 */}
+        {/* 占位条尚未到位时：只露思考卡，不重复 Agent 头像名条（否则像又一条新消息） */}
         {showBlocksAtBottom && (
           <div className="flex justify-start">
             <div className="flex flex-col items-start gap-1.5 max-w-[85%] w-full min-w-0">
-              {agent && <AgentBubbleHeader agent={agent} />}
               <BlocksArea blocks={blocks} isRunning={isRunning} />
             </div>
           </div>
