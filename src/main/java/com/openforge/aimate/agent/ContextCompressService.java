@@ -37,11 +37,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ContextCompressService {
 
-    /** 近期原文至少保留条数 */
-    private static final int KEEP_RECENT_MIN = 14;
-    /** 尽量覆盖的完整 tool 轮次数 */
+    /** 尽量覆盖的完整 tool 轮次数（与压力自适应 keepFloor 叠加） */
     private static final int KEEP_TOOL_ROUNDS = 3;
-    private static final int MIN_COMPRESSIBLE = 6;
     private static final int TRANSCRIPT_MAX_CHARS = 28_000;
     private static final int SUMMARY_MAX_CHARS = 6_000;
 
@@ -72,37 +69,41 @@ public class ContextCompressService {
         session = sessionRepository.findById(session.getId())
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
 
-        ContextUsageDto before = contextUsageService.estimate(session, systemModelId);
+        ContextUsageDto before = contextUsageService.estimateRaw(session, systemModelId);
 
         List<SessionMessage> all = messageRepository.findByAgentSession_IdOrderBySeqAsc(session.getId());
         List<SessionMessage> active = all.stream()
                 .filter(m -> !m.isExcludeFromContext())
                 .toList();
 
-        List<SessionMessage> systems = new ArrayList<>();
         List<SessionMessage> rest = new ArrayList<>();
         for (SessionMessage m : active) {
-            if ("system".equalsIgnoreCase(m.getRole())) {
-                systems.add(m);
-            } else {
+            if (!"system".equalsIgnoreCase(m.getRole())) {
                 rest.add(m);
             }
         }
 
-        int keepCount = computeKeepRecentCount(rest);
-        if (rest.size() <= keepCount + MIN_COMPRESSIBLE) {
+        ContextCompressPolicy.Plan plan = ContextCompressPolicy.analyze(rest, before, KEEP_TOOL_ROUNDS);
+        before = before.withCompressPolicy(plan.recommended(), plan.available(), plan.urgency(), plan.hint());
+
+        if (!plan.available()) {
             return new ContextCompressResultDto(
                     false, 0, rest.size(), 0, before, before,
-                    "对话轮次尚少，暂无需压缩（建议对话更长后再试）"
+                    plan.hint() != null ? plan.hint() : "暂不可压缩"
             );
         }
 
-        List<SessionMessage> recent = new ArrayList<>(rest.subList(rest.size() - keepCount, rest.size()));
-        List<SessionMessage> old = new ArrayList<>(rest.subList(0, rest.size() - keepCount));
+        int keepCount = Math.min(rest.size(), Math.max(1, plan.keepRecent()));
+        List<SessionMessage> recent = keepCount >= rest.size()
+                ? new ArrayList<>(rest)
+                : new ArrayList<>(rest.subList(rest.size() - keepCount, rest.size()));
+        List<SessionMessage> old = keepCount >= rest.size()
+                ? new ArrayList<>()
+                : new ArrayList<>(rest.subList(0, rest.size() - keepCount));
 
         // 避免切断 tool 链
         int adjust = 0;
-        while (!old.isEmpty() && adjust < 8) {
+        while (!old.isEmpty() && !recent.isEmpty() && adjust < 8) {
             SessionMessage head = recent.get(0);
             if ("tool".equalsIgnoreCase(head.getRole())
                     || (head.getReplyToMessageId() != null)
@@ -127,10 +128,11 @@ public class ContextCompressService {
             return false;
         });
 
-        if (old.size() < MIN_COMPRESSIBLE) {
+        int minFold = plan.minFoldable();
+        if (old.size() < minFold) {
+            String hint = plan.hint() != null ? plan.hint() : "可压缩段落不足（含钉住消息），请稍后再试";
             return new ContextCompressResultDto(
-                    false, 0, recent.size() + pinnedKept.size(), 0, before, before,
-                    "可压缩段落不足（含钉住消息），请稍后再试"
+                    false, 0, recent.size() + pinnedKept.size(), 0, before, before, hint
             );
         }
 
@@ -172,40 +174,27 @@ public class ContextCompressService {
         );
     }
 
-    /**
-     * 保留窗口：至少 KEEP_RECENT_MIN，并尽量覆盖最近 KEEP_TOOL_ROUNDS 个完整 tool 轮次。
-     */
+    /** @deprecated use {@link ContextCompressPolicy#computeKeepRecentCount} */
     static int computeKeepRecentCount(List<SessionMessage> rest) {
-        if (rest == null || rest.isEmpty()) return KEEP_RECENT_MIN;
-        int n = rest.size();
-        int rounds = 0;
-        int i = n - 1;
-        while (i >= 0 && rounds < KEEP_TOOL_ROUNDS) {
-            SessionMessage m = rest.get(i);
-            if ("tool".equalsIgnoreCase(m.getRole()) || m.getReplyToMessageId() != null) {
-                // 向前找到发起 tool_calls 的 assistant
-                while (i >= 0) {
-                    SessionMessage cur = rest.get(i);
-                    if ("assistant".equalsIgnoreCase(cur.getRole())
-                            && cur.getToolCallsJson() != null
-                            && !cur.getToolCallsJson().isBlank()
-                            && cur.getReplyToMessageId() == null) {
-                        rounds++;
-                        i--;
-                        break;
-                    }
-                    i--;
-                }
-            } else if ("assistant".equalsIgnoreCase(m.getRole()) || "user".equalsIgnoreCase(m.getRole())) {
-                // 非 tool 轮：计半轮推进
-                rounds++;
-                i--;
-            } else {
-                i--;
-            }
+        return ContextCompressPolicy.computeKeepRecentCount(
+                rest, ContextCompressPolicy.keepFloor(ContextCompressPolicy.Band.NORMAL), KEEP_TOOL_ROUNDS);
+    }
+
+    /**
+     * 为占用估算补全压缩策略字段（只读分析，不改库）。
+     */
+    @Transactional(readOnly = true)
+    public ContextUsageDto enrichUsage(AgentSession session, ContextUsageDto raw) {
+        if (raw == null) return null;
+        List<SessionMessage> all = messageRepository.findByAgentSession_IdOrderBySeqAsc(session.getId());
+        List<SessionMessage> rest = new ArrayList<>();
+        for (SessionMessage m : all) {
+            if (m.isExcludeFromContext()) continue;
+            if ("system".equalsIgnoreCase(m.getRole())) continue;
+            rest.add(m);
         }
-        int fromToolRounds = n - 1 - i;
-        return Math.max(KEEP_RECENT_MIN, Math.min(n, Math.max(fromToolRounds, KEEP_RECENT_MIN)));
+        ContextCompressPolicy.Plan plan = ContextCompressPolicy.analyze(rest, raw, KEEP_TOOL_ROUNDS);
+        return raw.withCompressPolicy(plan.recommended(), plan.available(), plan.urgency(), plan.hint());
     }
 
     private String buildTranscript(SessionState prior, List<SessionMessage> old) {
@@ -302,16 +291,8 @@ public class ContextCompressService {
         }
     }
 
-    /** 供前端 / 占用接口：仅当 token 占用 ≥ 72% 时建议压缩。 */
-    @Transactional(readOnly = true)
-    public boolean isCompressRecommended(AgentSession session) {
-        return false;
-    }
-
-    /** 占用比例 ≥ 72% 时建议压缩（与圆环百分比一致）。 */
+    /** 占用压力达阈值时建议压缩（最终以 enrichUsage / Plan.recommended 为准）。 */
     public boolean shouldSuggestCompress(ContextUsageDto usage, AgentSession session) {
-        return usage != null
-                && usage.limitTokens() > 0
-                && usage.usedTokens() >= (int) (usage.limitTokens() * ContextUsageDto.COMPRESS_SUGGEST_RATIO);
+        return usage != null && usage.compressRecommended();
     }
 }

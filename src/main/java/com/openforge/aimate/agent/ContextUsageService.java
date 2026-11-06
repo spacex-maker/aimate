@@ -2,9 +2,11 @@ package com.openforge.aimate.agent;
 
 import com.openforge.aimate.agent.dto.ContextUsageDto;
 import com.openforge.aimate.domain.AgentSession;
+import com.openforge.aimate.domain.SessionMessage;
 import com.openforge.aimate.domain.SystemModel;
 import com.openforge.aimate.llm.TokenCounter;
 import com.openforge.aimate.llm.model.Message;
+import com.openforge.aimate.repository.SessionMessageRepository;
 import com.openforge.aimate.repository.SystemModelRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -35,9 +37,24 @@ public class ContextUsageService {
 
     private final SessionMessageService sessionMessageService;
     private final SystemModelRepository systemModelRepository;
+    private final SessionMessageRepository sessionMessageRepository;
 
     @Transactional(readOnly = true)
     public ContextUsageDto estimate(AgentSession session, Long systemModelId) {
+        ContextUsageDto raw = estimateRaw(session, systemModelId);
+        List<SessionMessage> rest = new ArrayList<>();
+        for (SessionMessage m : sessionMessageRepository.findByAgentSession_IdOrderBySeqAsc(session.getId())) {
+            if (m.isExcludeFromContext()) continue;
+            if ("system".equalsIgnoreCase(m.getRole())) continue;
+            rest.add(m);
+        }
+        ContextCompressPolicy.Plan plan = ContextCompressPolicy.analyze(rest, raw, 3);
+        return raw.withCompressPolicy(plan.recommended(), plan.available(), plan.urgency(), plan.hint());
+    }
+
+    /** Token buckets only — no compress policy (avoids recursion from compress()). */
+    @Transactional(readOnly = true)
+    public ContextUsageDto estimateRaw(AgentSession session, Long systemModelId) {
         List<Message> context = sessionMessageService.load(session);
         int systemTokens = 0;
         List<Message> conversation = new ArrayList<>();

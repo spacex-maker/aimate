@@ -25,8 +25,14 @@ export interface ContextUsageRingProps {
   messageTokens?: number
   toolsTokens?: number
   draftTokens?: number
-  /** 服务端建议压缩（仅占用 ≥72%） */
+  /** 服务端建议压缩 */
   compressRecommended?: boolean
+  /** 当前能否真正执行压缩 */
+  compressAvailable?: boolean
+  /** none | suggest | urgent */
+  compressUrgency?: string
+  /** 策略说明 */
+  compressHint?: string | null
   /** 有会话时可手动压缩（单聊） */
   sessionId?: string | null
   systemModelId?: number | null
@@ -66,6 +72,9 @@ export function ContextUsageRing({
   toolsTokens = 0,
   draftTokens = 0,
   compressRecommended = false,
+  compressAvailable,
+  compressUrgency = 'none',
+  compressHint = null,
   sessionId = null,
   systemModelId = null,
   compressFn = null,
@@ -85,8 +94,10 @@ export function ContextUsageRing({
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
   const clamped = Math.min(100, Math.max(0, percent))
-  // 仅当占用 ≥72% 时提示；兼容旧接口误报的 compressRecommended
-  const suggest = percent >= 72 || (compressRecommended && percent >= 72)
+  const pressureSuggest = percent >= 72 || !!compressRecommended || compressUrgency === 'urgent' || compressUrgency === 'suggest'
+  const available = compressAvailable !== false
+  const suggest = pressureSuggest
+  const urgent = compressUrgency === 'urgent' || percent >= 90
   const visiblePct = usedTokens > 0 ? Math.max(clamped, 1.5) : 0
   const dash = (Math.min(100, visiblePct) / 100) * c
   const color = ringColor(percent)
@@ -94,6 +105,7 @@ export function ContextUsageRing({
   const sys = systemTokens
   const conv = conversationTokens > 0 ? conversationTokens : Math.max(0, messageTokens - systemTokens)
   const canCompress = !!(sessionId || compressFn)
+  const compressEnabled = canCompress && available
   const avatarInset = stroke + 1.5
 
   const compressMut = useMutation({
@@ -220,9 +232,24 @@ export function ContextUsageRing({
                 />
               </div>
               {suggest && (
-                <div className="mb-2 rounded-lg border border-amber-400/30 bg-amber-400/10 px-2 py-1.5 text-[10px] text-amber-100/90 leading-relaxed">
-                  建议压缩：占用已较高。将更早轮次收成结构化状态，近期原文与钉住消息保留。
+                <div className={`mb-2 rounded-lg px-2 py-1.5 text-[10px] leading-relaxed ${
+                  urgent
+                    ? 'border border-red-400/35 bg-red-500/10 text-red-100/90'
+                    : 'border border-amber-400/30 bg-amber-400/10 text-amber-100/90'
+                }`}>
+                  {compressHint
+                    || (urgent
+                      ? '上下文已近/超上限，建议立即压缩早期轮次。'
+                      : '建议压缩：占用已较高。将更早轮次收成结构化状态，近期原文与钉住消息保留。')}
                 </div>
+              )}
+              {!suggest && !!compressHint && (
+                <p className="mb-2 text-[10px] text-white/40 leading-relaxed">{compressHint}</p>
+              )}
+              {suggest && !available && (
+                <p className="mb-2 text-[10px] text-white/45 leading-relaxed">
+                  当前暂不可执行压缩（保留窗口或钉住限制）。
+                </p>
               )}
               <p className="mb-2 text-[10px] text-white/35 leading-relaxed">
                 按当前模型上限估算。压缩为结构化会话状态 + 近期原文；聊天记录不删。
@@ -261,16 +288,27 @@ export function ContextUsageRing({
               {canCompress && (
                 <button
                   type="button"
-                  disabled={compressMut.isPending}
+                  disabled={compressMut.isPending || !compressEnabled}
+                  title={!compressEnabled ? (compressHint || '暂不可压缩') : undefined}
                   onClick={() => compressMut.mutate()}
                   className={
-                    suggest
+                    urgent
+                      ? 'mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-red-500/20 py-2 text-xs font-medium text-red-100 hover:bg-red-500/30 disabled:opacity-40 transition-colors ring-1 ring-inset ring-red-400/30'
+                      : suggest
                       ? 'mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-amber-500/20 py-2 text-xs font-medium text-amber-100 hover:bg-amber-500/30 disabled:opacity-40 transition-colors ring-1 ring-inset ring-amber-400/25'
                       : 'mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-white/[0.06] py-2 text-xs font-medium text-white/75 hover:bg-white/[0.1] hover:text-white disabled:opacity-40 transition-colors'
                   }
                 >
                   <Minimize2 className="h-3.5 w-3.5" />
-                  {compressMut.isPending ? '正在压缩…' : suggest ? '建议压缩上下文' : '压缩上下文'}
+                  {compressMut.isPending
+                    ? '正在压缩…'
+                    : !compressEnabled
+                      ? '暂不可压缩'
+                      : urgent
+                        ? '立即压缩上下文'
+                        : suggest
+                          ? '建议压缩上下文'
+                          : '压缩上下文'}
                 </button>
               )}
             </div>

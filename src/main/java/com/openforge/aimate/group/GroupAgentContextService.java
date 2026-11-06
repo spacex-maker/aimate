@@ -2,6 +2,7 @@ package com.openforge.aimate.group;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openforge.aimate.agent.AgentPromptService;
+import com.openforge.aimate.agent.ContextCompressPolicy;
 import com.openforge.aimate.agent.ContextCompressService;
 import com.openforge.aimate.agent.ContextUsageService;
 import com.openforge.aimate.agent.dto.ContextCompressResultDto;
@@ -46,9 +47,6 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class GroupAgentContextService {
 
-    /** 与 ContextCompressService.KEEP_RECENT_MIN 对齐 */
-    private static final int KEEP_RECENT_MIN = 14;
-    private static final int MIN_COMPRESSIBLE = 6;
     private static final int SUMMARY_MAX_CHARS = 6_000;
     private static final int TRANSCRIPT_MAX_CHARS = 28_000;
     /** 扫描上限，避免一次拉全表 */
@@ -107,20 +105,26 @@ public class GroupAgentContextService {
         ContextUsageDto before = estimateForMember(g, am, systemModelId);
 
         List<GroupMessage> active = loadActiveChatMessages(g.getId(), ctx.getFoldedThroughMessageId());
-        if (active.size() <= KEEP_RECENT_MIN + MIN_COMPRESSIBLE) {
+        ContextCompressPolicy.Plan plan = ContextCompressPolicy.analyzeGroup(active.size(), 0, before);
+        before = before.withCompressPolicy(plan.recommended(), plan.available(), plan.urgency(), plan.hint());
+        if (!plan.available()) {
             return new ContextCompressResultDto(
                     false, 0, active.size(), 0, before, before,
-                    "对话轮次尚少，暂无需压缩（建议对话更长后再试）"
+                    plan.hint() != null ? plan.hint() : "暂不可压缩"
             );
         }
 
-        int keepCount = Math.min(active.size(), KEEP_RECENT_MIN);
-        List<GroupMessage> recent = new ArrayList<>(active.subList(active.size() - keepCount, active.size()));
-        List<GroupMessage> old = new ArrayList<>(active.subList(0, active.size() - keepCount));
-        if (old.size() < MIN_COMPRESSIBLE) {
+        int keepCount = Math.min(active.size(), Math.max(1, plan.keepRecent()));
+        List<GroupMessage> recent = keepCount >= active.size()
+                ? new ArrayList<>(active)
+                : new ArrayList<>(active.subList(active.size() - keepCount, active.size()));
+        List<GroupMessage> old = keepCount >= active.size()
+                ? new ArrayList<>()
+                : new ArrayList<>(active.subList(0, active.size() - keepCount));
+        if (old.size() < plan.minFoldable()) {
             return new ContextCompressResultDto(
                     false, 0, recent.size(), 0, before, before,
-                    "可压缩段落不足，请稍后再试"
+                    plan.hint() != null ? plan.hint() : "可压缩段落不足，请稍后再试"
             );
         }
 
@@ -274,7 +278,10 @@ public class GroupAgentContextService {
 
         // 群聊 CLOUD_LLM 无工具定义；Local Bridge 也不走平台 tools schema
         int toolsTokens = 0;
-        return ContextUsageDto.of(systemTokens, conversationTokens, toolsTokens, limit);
+        ContextUsageDto raw = ContextUsageDto.of(systemTokens, conversationTokens, toolsTokens, limit);
+        int activeApprox = structured != null ? structured.size() : 0;
+        ContextCompressPolicy.Plan plan = ContextCompressPolicy.analyzeGroup(activeApprox, 0, raw);
+        return raw.withCompressPolicy(plan.recommended(), plan.available(), plan.urgency(), plan.hint());
     }
 
     private List<GroupMessage> loadActiveChatMessages(Long groupId, Long foldedThroughId) {

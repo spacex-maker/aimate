@@ -836,7 +836,10 @@ export function AgentInputBox({
                 messageTokens={messageTokens}
                 toolsTokens={toolsTokens}
                 draftTokens={draftTokens}
-                compressRecommended={usagePercent >= 72}
+                compressRecommended={contextUsage?.compressRecommended ?? usagePercent >= 72}
+                compressAvailable={contextUsage?.compressAvailable}
+                compressUrgency={contextUsage?.compressUrgency}
+                compressHint={contextUsage?.compressHint}
                 sessionId={sessionId}
                 systemModelId={selectedSource === 'SYSTEM' ? selectedModelId : null}
               />

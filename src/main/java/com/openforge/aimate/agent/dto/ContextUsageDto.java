@@ -5,24 +5,26 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 
 /**
- * 会话上下文占用估算（对齐 Cursor context ring）：
- * 分母 = 当前模型 context window；分子 = 系统提示 + 对话 + 工具定义（+ 前端当前输入）。
+ * Session context usage estimate (Cursor-style ring).
+ * Compress policy fields filled by ContextCompressService from pressure + foldable turns + dialogue share.
  */
 @JsonNaming(PropertyNamingStrategies.LowerCamelCaseStrategy.class)
 public record ContextUsageDto(
         @JsonProperty("usedTokens") int usedTokens,
         @JsonProperty("limitTokens") int limitTokens,
         @JsonProperty("percent") double percent,
-        /** 兼容旧前端：系统 + 对话合计 */
         @JsonProperty("messageTokens") int messageTokens,
         @JsonProperty("toolsTokens") int toolsTokens,
         @JsonProperty("systemTokens") int systemTokens,
         @JsonProperty("conversationTokens") int conversationTokens,
-        /** 仅当占用 ≥72% 时建议压缩（与圆环百分比一致，不因消息条数误报） */
-        @JsonProperty("compressRecommended") boolean compressRecommended
+        @JsonProperty("compressRecommended") boolean compressRecommended,
+        @JsonProperty("compressAvailable") boolean compressAvailable,
+        /** none | suggest | urgent */
+        @JsonProperty("compressUrgency") String compressUrgency,
+        @JsonProperty("compressHint") String compressHint
 ) {
-    /** 与 ContextCompressService / 前端徽章一致 */
     public static final double COMPRESS_SUGGEST_RATIO = 0.72;
+    public static final double COMPRESS_URGENT_RATIO = 0.90;
 
     public static ContextUsageDto of(int systemTokens, int conversationTokens, int toolsTokens, int limitTokens) {
         int system = Math.max(0, systemTokens);
@@ -32,11 +34,25 @@ public record ContextUsageDto(
         int used = messages + tools;
         int limit = Math.max(1, limitTokens);
         double percent = Math.min(100.0, Math.round(used * 1000.0 / limit) / 10.0);
-        boolean suggest = used >= (int) (limit * COMPRESS_SUGGEST_RATIO);
-        return new ContextUsageDto(used, limit, percent, messages, tools, system, conversation, suggest);
+        double ratio = used * 1.0 / limit;
+        String urgency = (ratio >= 1.0 || ratio >= COMPRESS_URGENT_RATIO)
+                ? "urgent"
+                : (ratio >= COMPRESS_SUGGEST_RATIO ? "suggest" : "none");
+        boolean suggest = !"none".equals(urgency);
+        return new ContextUsageDto(
+                used, limit, percent, messages, tools, system, conversation,
+                suggest, false, urgency, null);
     }
 
-    /** @deprecated 忽略 messageVolume 开关；建议压缩只看占用比例 */
+    public ContextUsageDto withCompressPolicy(boolean recommended, boolean available, String urgency, String hint) {
+        return new ContextUsageDto(
+                usedTokens, limitTokens, percent, messageTokens, toolsTokens,
+                systemTokens, conversationTokens,
+                recommended, available,
+                urgency != null ? urgency : compressUrgency,
+                hint);
+    }
+
     @Deprecated
     public static ContextUsageDto of(int systemTokens, int conversationTokens, int toolsTokens, int limitTokens,
                                      boolean ignoredCompressHint) {

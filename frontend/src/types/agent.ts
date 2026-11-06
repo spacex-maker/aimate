@@ -110,8 +110,14 @@ export interface ContextUsageDto {
   toolsTokens: number
   systemTokens?: number
   conversationTokens?: number
-  /** 占用 ≥72% 时建议压缩 */
+  /** 建议用户压缩（占用达阈值且有收益） */
   compressRecommended?: boolean
+  /** 当前结构上能否执行压缩 */
+  compressAvailable?: boolean
+  /** none | suggest | urgent */
+  compressUrgency?: 'none' | 'suggest' | 'urgent' | string
+  /** 为何建议 / 为何暂不可压 */
+  compressHint?: string | null
 }
 
 /** 当前用户首选模型（用于恢复聊天输入框默认选中项） */
