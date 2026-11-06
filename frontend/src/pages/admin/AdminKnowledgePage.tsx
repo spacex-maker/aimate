@@ -9,6 +9,7 @@ import {
 } from '../../api/adminKnowledge'
 import { AppSelect } from '../../ui/AppSelect'
 import { AdminPager } from '../../ui/AdminPager'
+import { AdminQueryBar } from '../../ui/AdminQueryBar'
 
 const PAGE_SIZE_OPTIONS = [
   { value: '20', label: '每页 20' },
@@ -308,71 +309,94 @@ export function AdminKnowledgePage() {
         </aside>
 
         <section className="admin-kb-panel">
-          <div className="admin-kb-filters">
-            <input
-              className="admin-input min-w-[160px] flex-1"
-              placeholder="关键词：名称 / 摘要 / 标签 / publicId / code"
-              value={q}
-              onChange={(e) => {
-                setQ(e.target.value)
-                setPage(0)
-              }}
-            />
-            <input
-              className="admin-input w-[120px]"
-              placeholder="标签含"
-              value={tag}
-              onChange={(e) => {
-                setTag(e.target.value)
-                setPage(0)
-              }}
-            />
-            <input
-              className="admin-input w-[120px]"
-              placeholder="code 含"
-              value={code}
-              onChange={(e) => {
-                setCode(e.target.value)
-                setPage(0)
-              }}
-            />
-            <AppSelect
-              className="admin-kb-filter-select w-[120px]"
-              ariaLabel="启用状态"
-              value={enabledFilter}
-              options={ENABLED_OPTIONS}
-              onChange={(v) => {
-                setEnabledFilter(v)
-                setPage(0)
-              }}
-            />
-            <AppSelect
-              className="admin-kb-filter-select w-[110px]"
-              ariaLabel="每页条数"
-              value={String(size)}
-              options={PAGE_SIZE_OPTIONS}
-              onChange={(v) => {
-                setSize(Number(v) || 20)
-                setPage(0)
-              }}
-            />
-            <button
-              type="button"
-              className="rounded-lg border border-white/15 px-3 py-2 text-xs text-white/55 disabled:opacity-30"
-              disabled={!filtersActive}
-              onClick={resetFilters}
-            >
-              清空筛选
-            </button>
-            <button
-              type="button"
-              className="rounded-lg bg-blue-600/80 px-3 py-2 text-xs hover:bg-blue-600 ml-auto"
-              onClick={openCreateKb}
-              disabled={!flatCats.length}
-            >
-              新建知识库
-            </button>
-          </div>
+          <AdminQueryBar
+            fields={[
+              {
+                key: 'q',
+                label: '关键词',
+                value: q,
+                onChange: (v) => {
+                  setQ(v)
+                  setPage(0)
+                },
+                placeholder: '名称 / 摘要 / 标签 / publicId / code',
+                width: 'grow',
+              },
+              {
+                key: 'tag',
+                label: '标签',
+                type: 'text',
+                value: tag,
+                onChange: (v) => {
+                  setTag(v)
+                  setPage(0)
+                },
+                placeholder: '标签含',
+                width: 'sm',
+              },
+              {
+                key: 'code',
+                label: 'Code',
+                type: 'text',
+                value: code,
+                onChange: (v) => {
+                  setCode(v)
+                  setPage(0)
+                },
+                placeholder: 'code 含',
+                width: 'sm',
+              },
+              {
+                key: 'enabled',
+                label: '状态',
+                value: enabledFilter,
+                onChange: setEnabledFilter,
+                width: 'sm',
+                render: (
+                  <AppSelect
+                    ariaLabel="启用状态"
+                    value={enabledFilter}
+                    options={ENABLED_OPTIONS}
+                    onChange={(v) => {
+                      setEnabledFilter(v)
+                      setPage(0)
+                    }}
+                  />
+                ),
+              },
+              {
+                key: 'size',
+                label: '每页',
+                value: String(size),
+                onChange: () => {},
+                width: 'sm',
+                render: (
+                  <AppSelect
+                    ariaLabel="每页条数"
+                    value={String(size)}
+                    options={PAGE_SIZE_OPTIONS}
+                    onChange={(v) => {
+                      setSize(Number(v) || 20)
+                      setPage(0)
+                    }}
+                  />
+                ),
+              },
+            ]}
+            onSubmit={() => setPage(0)}
+            onReset={resetFilters}
+            active={filtersActive}
+            trailing={
+              <button
+                type="button"
+                className="admin-btn admin-btn--sm"
+                onClick={openCreateKb}
+                disabled={!flatCats.length}
+              >
+                新建知识库
+              </button>
+            }
+          />
 
           <div className="admin-kb-table-scroll">
             <table className="w-full text-left text-xs text-white/70">

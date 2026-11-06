@@ -6,6 +6,9 @@ import { AdminAgentsPanel } from './AdminAgentsPanel'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { adminApi } from '../../api/admin'
+import { AdminToggle } from '../../ui/AdminToggle'
+import { AdminQueryBar } from '../../ui/AdminQueryBar'
+import { AppSelect } from '../../ui/AppSelect'
 import { ComponentStatusCard } from './ComponentStatusCard'
 import type { HostResourceStatusDto, SystemModelDto, ToolSettingsDto } from '../../types/agent'
 import type {
@@ -197,10 +200,23 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
 }
 
 export function ContainerMonitorContent() {
+  const [qInput, setQInput] = useState('')
+  const [q, setQ] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
   const { data = [], isLoading, isFetching, refetch } = useQuery({
     queryKey: ['admin-containers'],
     queryFn: () => adminApi.listContainers(),
   })
+  const filteredContainers = useMemo(() => {
+    const kw = q.trim().toLowerCase()
+    return data.filter((c) => {
+      const running = (c.status?.toLowerCase().startsWith('up') || c.status === 'running')
+      if (statusFilter === 'running' && !running) return false
+      if (statusFilter === 'stopped' && running) return false
+      if (!kw) return true
+      return `${c.userId} ${c.username} ${c.containerName} ${c.status ?? ''}`.toLowerCase().includes(kw)
+    })
+  }, [data, q, statusFilter])
   const { data: hostStatus } = useQuery({
     queryKey: ['admin-host-status'],
     queryFn: () => adminApi.getHostStatus(),
@@ -387,10 +403,50 @@ export function ContainerMonitorContent() {
           )}
         </div>
       </div>
+      <AdminQueryBar
+        fields={[
+          {
+            key: 'q',
+            label: '关键词',
+            value: qInput,
+            onChange: setQInput,
+            placeholder: '用户 / 容器名 / 状态',
+            width: 'grow',
+          },
+          {
+            key: 'status',
+            label: '状态',
+            value: statusFilter,
+            onChange: setStatusFilter,
+            width: 'sm',
+            render: (
+              <AppSelect
+                value={statusFilter}
+                onChange={setStatusFilter}
+                options={[
+                  { value: '', label: '全部' },
+                  { value: 'running', label: '运行中' },
+                  { value: 'stopped', label: '非运行' },
+                ]}
+                ariaLabel="容器状态"
+              />
+            ),
+          },
+        ]}
+        onSubmit={() => setQ(qInput.trim())}
+        onReset={() => {
+          setQInput('')
+          setQ('')
+          setStatusFilter('')
+        }}
+        active={!!q || !!statusFilter || !!qInput.trim()}
+      />
       {isLoading ? (
         <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
       ) : data.length === 0 ? (
         <div className="text-center py-10 text-white/30 text-sm">当前没有用户容器。</div>
+      ) : filteredContainers.length === 0 ? (
+        <div className="text-center py-10 text-white/30 text-sm">无匹配容器</div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-white/10">
           <table className="w-full text-xs text-white/80">
@@ -406,7 +462,7 @@ export function ContainerMonitorContent() {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/10">
-              {data.map((c: UserContainerStatus) => (
+              {filteredContainers.map((c: UserContainerStatus) => (
                 <tr key={c.containerName} className="hover:bg-white/[0.03]">
                   <td className="py-2 px-3 font-mono text-white/70">{c.userId}</td>
                   <td className="py-2 px-3">{c.username}</td>
@@ -437,6 +493,10 @@ export function ContainerMonitorContent() {
 
 export function ModelManageContent() {
   const queryClient = useQueryClient()
+  const [qInput, setQInput] = useState('')
+  const [q, setQ] = useState('')
+  const [providerFilter, setProviderFilter] = useState('')
+  const [enabledFilter, setEnabledFilter] = useState('')
   const { data: models = [], isLoading } = useQuery({
     queryKey: ['admin-system-models'],
     queryFn: () => adminApi.listAllSystemModels(),
@@ -445,9 +505,32 @@ export function ModelManageContent() {
     queryKey: ['admin-system-providers'],
     queryFn: () => adminApi.listSystemProviders(),
   })
-  const providerKeyMap = new Map(
-    providers.map((p) => [p.code.toLowerCase(), p] as const)
+  const providerKeyMap = useMemo(
+    () => new Map(providers.map((p) => [p.code.toLowerCase(), p] as const)),
+    [providers],
   )
+  const providerOptions = useMemo(
+    () => [
+      { value: '', label: '全部服务商' },
+      ...Array.from(new Set(models.map((m) => m.provider).filter(Boolean))).map((p) => ({
+        value: String(p),
+        label: formatProvider(String(p)),
+      })),
+    ],
+    [models],
+  )
+  const filteredModels = useMemo(() => {
+    const kw = q.trim().toLowerCase()
+    return models.filter((m) => {
+      if (providerFilter && (m.provider || '') !== providerFilter) return false
+      if (enabledFilter === 'true' && m.enabled === false) return false
+      if (enabledFilter === 'false' && m.enabled !== false) return false
+      if (!kw) return true
+      const hay = `${m.displayName ?? ''} ${m.modelId ?? ''} ${m.provider ?? ''} ${m.tip ?? ''}`.toLowerCase()
+      return hay.includes(kw)
+    })
+  }, [models, q, providerFilter, enabledFilter])
+  const filtersActive = !!(q || providerFilter || enabledFilter)
 
   const updateMutation = useMutation({
     mutationFn: ({ id, body }: { id: number; body: Parameters<typeof adminApi.updateSystemModel>[1] }) =>
@@ -467,32 +550,88 @@ export function ModelManageContent() {
 
   const moveUp = (index: number) => {
     if (index <= 0) return
-    const current = models[index]
-    const prev = models[index - 1]
+    const current = filteredModels[index]
+    const prev = filteredModels[index - 1]
     if (!current || !prev) return
     updateMutation.mutate({ id: current.id, body: { sortOrder: (prev.sortOrder ?? 0) - 1 } })
   }
 
   const moveDown = (index: number) => {
-    if (index >= models.length - 1) return
-    const current = models[index]
-    const next = models[index + 1]
+    if (index >= filteredModels.length - 1) return
+    const current = filteredModels[index]
+    const next = filteredModels[index + 1]
     if (!current || !next) return
     updateMutation.mutate({ id: current.id, body: { sortOrder: (next.sortOrder ?? 0) + 1 } })
   }
 
   return (
     <div className="h-full flex flex-col">
-      <div className="mb-4">
+      <div className="mb-3">
         <h3 className="text-sm font-medium text-white">模型管理</h3>
         <p className="text-xs text-white/40 mt-0.5">
           开启/关闭、提示与计费参数。API Key 按服务商统一配置（侧栏「服务商管理」）。
         </p>
       </div>
+      <AdminQueryBar
+        fields={[
+          {
+            key: 'q',
+            label: '关键词',
+            value: qInput,
+            onChange: setQInput,
+            placeholder: '展示名 / 模型 ID / 服务商 / 提示',
+            width: 'grow',
+          },
+          {
+            key: 'provider',
+            label: '服务商',
+            value: providerFilter,
+            onChange: setProviderFilter,
+            width: 'md',
+            render: (
+              <AppSelect
+                value={providerFilter}
+                onChange={setProviderFilter}
+                options={providerOptions}
+                ariaLabel="服务商"
+              />
+            ),
+          },
+          {
+            key: 'enabled',
+            label: '状态',
+            value: enabledFilter,
+            onChange: setEnabledFilter,
+            width: 'sm',
+            render: (
+              <AppSelect
+                value={enabledFilter}
+                onChange={setEnabledFilter}
+                options={[
+                  { value: '', label: '全部' },
+                  { value: 'true', label: '启用' },
+                  { value: 'false', label: '停用' },
+                ]}
+                ariaLabel="启用状态"
+              />
+            ),
+          },
+        ]}
+        onSubmit={() => setQ(qInput.trim())}
+        onReset={() => {
+          setQInput('')
+          setQ('')
+          setProviderFilter('')
+          setEnabledFilter('')
+        }}
+        active={filtersActive || !!qInput.trim()}
+      />
       {isLoading ? (
         <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
       ) : models.length === 0 ? (
         <div className="text-center py-10 text-white/30 text-sm">暂无系统模型，请先执行 seed_system_models.sql</div>
+      ) : filteredModels.length === 0 ? (
+        <div className="text-center py-10 text-white/30 text-sm">无匹配模型</div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-white/10">
           <table className="w-full text-xs text-white/80">
@@ -511,25 +650,25 @@ export function ModelManageContent() {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/10">
-              {models.map((m: SystemModelDto, index: number) => (
+              {filteredModels.map((m: SystemModelDto, index: number) => (
                 <tr key={m.id} className="hover:bg-white/[0.03]">
                   <td className="py-2 px-2">
                     <div className="flex flex-col items-center gap-0.5">
                       <button
                         type="button"
                         onClick={() => moveUp(index)}
-                        disabled={index === 0 || updateMutation.isPending}
+                        disabled={index === 0 || updateMutation.isPending || filtersActive}
                         className="text-white/40 hover:text-white/80 disabled:opacity-30 cursor-pointer"
-                        title="提高优先级"
+                        title={filtersActive ? '筛选中不可调序' : '提高优先级'}
                       >
                         ▲
                       </button>
                       <button
                         type="button"
                         onClick={() => moveDown(index)}
-                        disabled={index === models.length - 1 || updateMutation.isPending}
+                        disabled={index === filteredModels.length - 1 || updateMutation.isPending || filtersActive}
                         className="text-white/40 hover:text-white/80 disabled:opacity-30 cursor-pointer"
-                        title="降低优先级"
+                        title={filtersActive ? '筛选中不可调序' : '降低优先级'}
                       >
                         ▼
                       </button>
@@ -653,22 +792,12 @@ export function ModelManageContent() {
                     })()}
                   </td>
                   <td className="py-2 px-3">
-                    <button
-                      type="button"
-                      onClick={() => toggleEnabled(m)}
+                    <AdminToggle
+                      checked={m.enabled !== false}
                       disabled={updateMutation.isPending}
-                      className={clsx(
-                        'w-9 h-5 rounded-full transition-colors relative',
-                        m.enabled !== false ? 'bg-blue-600' : 'bg-white/15'
-                      )}
-                    >
-                      <div
-                        className={clsx(
-                          'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
-                          m.enabled !== false ? 'translate-x-4' : 'translate-x-0.5'
-                        )}
-                      />
-                    </button>
+                      onChange={() => toggleEnabled(m)}
+                      title={m.enabled !== false ? '点击停用' : '点击启用'}
+                    />
                   </td>
                 </tr>
               ))}
@@ -687,14 +816,23 @@ export function UserManageContent() {
   const [page, setPage] = useState(0)
   const [qInput, setQInput] = useState('')
   const [q, setQ] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [roleFilter, setRoleFilter] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [rechargeOpen, setRechargeOpen] = useState(false)
   const [rechargePoints, setRechargePoints] = useState('1000')
   const [rechargeRemark, setRechargeRemark] = useState('系统赠送')
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-users', page, q],
-    queryFn: () => adminApi.listUsers({ page, size: 20, q: q || undefined }),
+    queryKey: ['admin-users', page, q, statusFilter, roleFilter],
+    queryFn: () =>
+      adminApi.listUsers({
+        page,
+        size: 20,
+        q: q || undefined,
+        status: statusFilter || undefined,
+        role: roleFilter || undefined,
+      }),
   })
   const users = data?.items ?? []
   const totalPages = data?.totalPages ?? 0
@@ -794,34 +932,85 @@ export function UserManageContent() {
     })
   }
 
+  const userFiltersActive = !!(q || statusFilter || roleFilter)
   return (
     <div className="h-full flex flex-col">
-      <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-medium text-white">用户管理</h3>
-          <p className="text-xs text-white/40 mt-0.5">多选批量启用/禁用/系统赠送充值 · 单条角色与流水</p>
-        </div>
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault()
-            setPage(0)
-            setQ(qInput.trim())
-            setSelectedIds(new Set())
-          }}
-        >
-          <input
-            type="search"
-            value={qInput}
-            onChange={(e) => setQInput(e.target.value)}
-            placeholder="搜索用户名 / 邮箱 / 昵称"
-            className="w-52 bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white placeholder:text-white/30"
-          />
-          <button type="submit" className="px-2.5 py-1.5 rounded border border-white/20 text-[11px] text-white/80 hover:bg-white/10">
-            搜索
-          </button>
-        </form>
+      <div className="mb-3">
+        <h3 className="text-sm font-medium text-white">用户管理</h3>
+        <p className="text-xs text-white/40 mt-0.5">多选批量启用/禁用/系统赠送充值 · 单条角色与流水</p>
       </div>
+      <AdminQueryBar
+        fields={[
+          {
+            key: 'q',
+            label: '关键词',
+            value: qInput,
+            onChange: setQInput,
+            placeholder: '用户名 / 邮箱 / 昵称',
+            width: 'grow',
+          },
+          {
+            key: 'status',
+            label: '状态',
+            value: statusFilter,
+            onChange: setStatusFilter,
+            width: 'sm',
+            render: (
+              <AppSelect
+                value={statusFilter}
+                onChange={(v) => {
+                  setStatusFilter(v)
+                  setPage(0)
+                  setSelectedIds(new Set())
+                }}
+                options={[
+                  { value: '', label: '全部' },
+                  { value: 'ACTIVE', label: '启用' },
+                  { value: 'DISABLED', label: '禁用' },
+                ]}
+                ariaLabel="用户状态"
+              />
+            ),
+          },
+          {
+            key: 'role',
+            label: '角色',
+            value: roleFilter,
+            onChange: setRoleFilter,
+            width: 'sm',
+            render: (
+              <AppSelect
+                value={roleFilter}
+                onChange={(v) => {
+                  setRoleFilter(v)
+                  setPage(0)
+                  setSelectedIds(new Set())
+                }}
+                options={[
+                  { value: '', label: '全部' },
+                  { value: 'USER', label: '用户' },
+                  { value: 'ADMIN', label: '管理员' },
+                ]}
+                ariaLabel="用户角色"
+              />
+            ),
+          },
+        ]}
+        onSubmit={() => {
+          setPage(0)
+          setQ(qInput.trim())
+          setSelectedIds(new Set())
+        }}
+        onReset={() => {
+          setQInput('')
+          setQ('')
+          setStatusFilter('')
+          setRoleFilter('')
+          setPage(0)
+          setSelectedIds(new Set())
+        }}
+        active={userFiltersActive || !!qInput.trim()}
+      />
 
       {selectedList.length > 0 && (
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
@@ -1242,6 +1431,11 @@ function BillingUsageDetailModal({
 export function BillingManageContent() {
   const [subTab, setSubTab] = useState<'usage' | 'packages' | 'orders' | 'rules'>('usage')
   const [rangeDays, setRangeDays] = useState<7 | 30 | 90>(30)
+  const [usageQInput, setUsageQInput] = useState('')
+  const [usageQ, setUsageQ] = useState('')
+  const [packQInput, setPackQInput] = useState('')
+  const [packQ, setPackQ] = useState('')
+  const [packEnabled, setPackEnabled] = useState('')
   const [detailUser, setDetailUser] = useState<BillingUsageSummary | null>(null)
   const queryClient = useQueryClient()
   const [markupInput, setMarkupInput] = useState('4')
@@ -1266,6 +1460,23 @@ export function BillingManageContent() {
     queryFn: () => adminApi.listPointPackages(),
     enabled: subTab === 'packages',
   })
+
+  const filteredUsage = useMemo(() => {
+    const rows = data?.summaries ?? []
+    const kw = usageQ.trim().toLowerCase()
+    if (!kw) return rows
+    return rows.filter((r) => String(r.username ?? '').toLowerCase().includes(kw))
+  }, [data?.summaries, usageQ])
+
+  const filteredPackages = useMemo(() => {
+    const kw = packQ.trim().toLowerCase()
+    return packages.filter((p) => {
+      if (packEnabled === 'true' && !p.enabled) return false
+      if (packEnabled === 'false' && p.enabled) return false
+      if (!kw) return true
+      return `${p.name} ${p.description ?? ''}`.toLowerCase().includes(kw)
+    })
+  }, [packages, packQ, packEnabled])
 
   const { data: billingSettings, isLoading: settingsLoading } = useQuery({
     queryKey: ['admin-billing-settings'],
@@ -1311,6 +1522,8 @@ export function BillingManageContent() {
 
   const [orderPage, setOrderPage] = useState(0)
   const [orderStatus, setOrderStatus] = useState('')
+  const [orderQInput, setOrderQInput] = useState('')
+  const [orderQ, setOrderQ] = useState('')
   const { data: orderPageData, isLoading: ordersLoading } = useQuery({
     queryKey: ['admin-payment-orders', orderPage, orderStatus],
     queryFn: () => adminApi.listPaymentOrders({ page: orderPage, size: 20, status: orderStatus || undefined }),
@@ -1380,32 +1593,56 @@ export function BillingManageContent() {
 
       {subTab === 'usage' && (
         <>
-          <div className="mb-4 flex items-start justify-between gap-3">
-            <div>
-              <h3 className="text-sm font-medium text-white">成本核算</h3>
-              <p className="text-xs text-white/40 mt-0.5">
-                Token / 模型调用 + 联网搜索（Tavily）等估算系统成本 CNY
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              {([7, 30, 90] as const).map((d) => (
-                <button
-                  key={d}
-                  type="button"
-                  onClick={() => setRangeDays(d)}
-                  className={clsx(
-                    'px-2 py-1 rounded text-[11px] border',
-                    rangeDays === d ? 'border-white/30 bg-white/10 text-white' : 'border-white/10 text-white/50',
-                  )}
-                >
-                  {d} 天
-                </button>
-              ))}
-              <button type="button" onClick={() => refetch()} className="p-1.5 rounded border border-white/15 text-white/60" title="刷新">
-                <RefreshCw className={clsx('w-3.5 h-3.5', isFetching && 'animate-spin')} />
-              </button>
-            </div>
+          <div className="mb-3">
+            <h3 className="text-sm font-medium text-white">成本核算</h3>
+            <p className="text-xs text-white/40 mt-0.5">
+              Token / 模型调用 + 联网搜索（Tavily）等估算系统成本 CNY
+            </p>
           </div>
+          <AdminQueryBar
+            fields={[
+              {
+                key: 'q',
+                label: '用户',
+                value: usageQInput,
+                onChange: setUsageQInput,
+                placeholder: '用户名',
+                width: 'grow',
+              },
+              {
+                key: 'range',
+                label: '时间范围',
+                value: String(rangeDays),
+                onChange: () => {},
+                width: 'sm',
+                render: (
+                  <AppSelect
+                    value={String(rangeDays)}
+                    onChange={(v) => setRangeDays(Number(v) as 7 | 30 | 90)}
+                    options={[
+                      { value: '7', label: '近 7 天' },
+                      { value: '30', label: '近 30 天' },
+                      { value: '90', label: '近 90 天' },
+                    ]}
+                    ariaLabel="时间范围"
+                  />
+                ),
+              },
+            ]}
+            onSubmit={() => setUsageQ(usageQInput.trim())}
+            onReset={() => {
+              setUsageQInput('')
+              setUsageQ('')
+              setRangeDays(30)
+            }}
+            active={!!usageQ || !!usageQInput.trim() || rangeDays !== 30}
+            trailing={
+              <button type="button" onClick={() => refetch()} className="admin-btn admin-btn--ghost admin-btn--sm" title="刷新">
+                <RefreshCw className={clsx('w-3.5 h-3.5', isFetching && 'animate-spin')} />
+                刷新
+              </button>
+            }
+          />
 
           <div className="mb-4 grid grid-cols-2 gap-3">
             <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
@@ -1424,6 +1661,8 @@ export function BillingManageContent() {
             <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
           ) : !data?.summaries?.length ? (
             <div className="text-center py-10 text-white/30 text-sm">所选时间范围内暂无用量</div>
+          ) : !filteredUsage.length ? (
+            <div className="text-center py-10 text-white/30 text-sm">无匹配用户</div>
           ) : (
             <div className="overflow-x-auto rounded-lg border border-white/10 mb-4">
               <table className="w-full text-xs text-white/80">
@@ -1439,7 +1678,7 @@ export function BillingManageContent() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/10">
-                  {data.summaries.map((row) => (
+                  {filteredUsage.map((row) => (
                     <tr key={row.userId} className="hover:bg-white/[0.03]">
                       <td className="py-2 px-3 font-mono">{row.username}</td>
                       <td className="py-2 px-3">{row.callCount}</td>
@@ -1598,6 +1837,44 @@ export function BillingManageContent() {
 
       {subTab === 'packages' && (
         <div className="space-y-4">
+          <AdminQueryBar
+            fields={[
+              {
+                key: 'q',
+                label: '套餐',
+                value: packQInput,
+                onChange: setPackQInput,
+                placeholder: '名称 / 说明',
+                width: 'grow',
+              },
+              {
+                key: 'enabled',
+                label: '状态',
+                value: packEnabled,
+                onChange: setPackEnabled,
+                width: 'sm',
+                render: (
+                  <AppSelect
+                    value={packEnabled}
+                    onChange={setPackEnabled}
+                    options={[
+                      { value: '', label: '全部' },
+                      { value: 'true', label: '上架' },
+                      { value: 'false', label: '下架' },
+                    ]}
+                    ariaLabel="套餐状态"
+                  />
+                ),
+              },
+            ]}
+            onSubmit={() => setPackQ(packQInput.trim())}
+            onReset={() => {
+              setPackQInput('')
+              setPackQ('')
+              setPackEnabled('')
+            }}
+            active={!!packQ || !!packEnabled || !!packQInput.trim()}
+          />
           <div className="rounded-lg border border-white/10 p-3 space-y-2">
             <div className="text-xs text-white/50">新建套餐</div>
             <div className="grid grid-cols-2 gap-2">
@@ -1610,6 +1887,8 @@ export function BillingManageContent() {
           </div>
           {packagesLoading ? (
             <div className="text-center py-8 text-xs text-white/40">加载中…</div>
+          ) : !filteredPackages.length ? (
+            <div className="text-center py-8 text-xs text-white/30">无匹配套餐</div>
           ) : (
             <div className="overflow-x-auto rounded-lg border border-white/10">
               <table className="w-full text-xs text-white/80">
@@ -1623,16 +1902,18 @@ export function BillingManageContent() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/10">
-                  {packages.map((p) => (
+                  {filteredPackages.map((p) => (
                     <tr key={p.id}>
                       <td className="px-3 py-2">{p.name}</td>
                       <td className="px-3 py-2">¥{Number(p.priceYuan).toFixed(2)}</td>
                       <td className="px-3 py-2">{p.points}</td>
                       <td className="px-3 py-2">{p.bonusPoints}</td>
                       <td className="px-3 py-2">
-                        <button type="button" onClick={() => togglePackMutation.mutate(p as typeof p & { enabled: boolean })} className="text-[11px] text-blue-300">
-                          {p.enabled === false ? '已下架' : '已上架'}（点此切换）
-                        </button>
+                        <AdminToggle
+                          checked={p.enabled !== false}
+                          onChange={() => togglePackMutation.mutate(p as typeof p & { enabled: boolean })}
+                          title={p.enabled === false ? '点击上架' : '点击下架'}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -1645,18 +1926,52 @@ export function BillingManageContent() {
 
       {subTab === 'orders' && (
         <div className="space-y-3">
-          <div className="flex gap-2">
-            {['', 'PENDING', 'SUCCESS', 'CLOSED'].map((s) => (
-              <button
-                key={s || 'all'}
-                type="button"
-                onClick={() => { setOrderStatus(s); setOrderPage(0) }}
-                className={clsx('px-2 py-1 rounded text-[11px] border', orderStatus === s ? 'border-white/30 bg-white/10 text-white' : 'border-white/10 text-white/50')}
-              >
-                {s || '全部'}
-              </button>
-            ))}
-          </div>
+          <AdminQueryBar
+            fields={[
+              {
+                key: 'q',
+                label: '关键词',
+                value: orderQInput,
+                onChange: setOrderQInput,
+                placeholder: '订单号 / 用户 ID',
+                width: 'grow',
+              },
+              {
+                key: 'status',
+                label: '状态',
+                value: orderStatus,
+                onChange: setOrderStatus,
+                width: 'md',
+                render: (
+                  <AppSelect
+                    value={orderStatus}
+                    onChange={(v) => {
+                      setOrderStatus(v)
+                      setOrderPage(0)
+                    }}
+                    options={[
+                      { value: '', label: '全部状态' },
+                      { value: 'PENDING', label: 'PENDING' },
+                      { value: 'SUCCESS', label: 'SUCCESS' },
+                      { value: 'CLOSED', label: 'CLOSED' },
+                    ]}
+                    ariaLabel="订单状态"
+                  />
+                ),
+              },
+            ]}
+            onSubmit={() => {
+              setOrderQ(orderQInput.trim())
+              setOrderPage(0)
+            }}
+            onReset={() => {
+              setOrderQInput('')
+              setOrderQ('')
+              setOrderStatus('')
+              setOrderPage(0)
+            }}
+            active={!!orderQ || !!orderStatus || !!orderQInput.trim()}
+          />
           {ordersLoading ? (
             <div className="text-center py-8 text-xs text-white/40">加载中…</div>
           ) : !(orderPageData?.items?.length) ? (
@@ -1676,7 +1991,13 @@ export function BillingManageContent() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/10">
-                    {orderPageData.items.map((o) => (
+                    {orderPageData.items
+                      .filter((o) => {
+                        const kw = orderQ.trim().toLowerCase()
+                        if (!kw) return true
+                        return `${o.orderNo} ${o.userId ?? ''}`.toLowerCase().includes(kw)
+                      })
+                      .map((o) => (
                       <tr key={o.id}>
                         <td className="px-3 py-2 font-mono">{o.orderNo}</td>
                         <td className="px-3 py-2">{o.userId ?? '—'}</td>
@@ -1865,21 +2186,11 @@ function UserOperationModal({
                       className="flex items-center justify-between gap-3 py-1.5 px-2 rounded-lg hover:bg-white/[0.04] transition-colors"
                     >
                       <span className="text-xs text-white/85">{label}</span>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleTool(key, !checked)}
-                        className={clsx(
-                          'relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40',
-                          checked ? 'bg-blue-500' : 'bg-white/20'
-                        )}
-                      >
-                        <span
-                          className={clsx(
-                            'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition-transform mt-0.5 ml-0.5',
-                            checked ? 'translate-x-4' : 'translate-x-0'
-                          )}
-                        />
-                      </button>
+                      <AdminToggle
+                        checked={!!checked}
+                        onChange={() => handleToggleTool(key, !checked)}
+                        title={label}
+                      />
                     </div>
                   )
                 })}
@@ -1906,14 +2217,22 @@ export function SystemConfigContent() {
   const queryClient = useQueryClient()
   const [tavilyValue, setTavilyValue] = useState('')
   const [tavilyDirty, setTavilyDirty] = useState(false)
+  const [qInput, setQInput] = useState('')
+  const [q, setQ] = useState('')
   const { data: configs = [], isLoading } = useQuery({
     queryKey: ['admin-system-configs'],
     queryFn: () => adminApi.listSystemConfigs(),
   })
   const tavilyConfig = configs.find((c) => c.configKey === 'TAVILY_API_KEY')
-  const otherConfigs = configs.filter(
-    (c) => !DEEPSEEK_KEY.test(c.configKey) && !HIDDEN_SYSTEM_KEYS.has(c.configKey),
-  )
+  const otherConfigs = useMemo(() => {
+    const kw = q.trim().toLowerCase()
+    return configs.filter((c) => {
+      if (DEEPSEEK_KEY.test(c.configKey) || HIDDEN_SYSTEM_KEYS.has(c.configKey)) return false
+      if (!kw) return true
+      const hay = `${c.configKey} ${c.configValue ?? ''} ${c.description ?? ''}`.toLowerCase()
+      return hay.includes(kw)
+    })
+  }, [configs, q])
 
   useEffect(() => {
     if (tavilyDirty) return
@@ -1966,12 +2285,30 @@ export function SystemConfigContent() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="mb-4">
+      <div className="mb-3">
         <h3 className="text-sm font-medium text-white">系统配置</h3>
         <p className="text-xs text-white/40 mt-0.5">
           模型 API Key 请到「服务商管理」。此处配置 Tavily 联网搜索等全局参数。
         </p>
       </div>
+      <AdminQueryBar
+        fields={[
+          {
+            key: 'q',
+            label: '关键词',
+            value: qInput,
+            onChange: setQInput,
+            placeholder: '配置键 / 值 / 说明',
+            width: 'grow',
+          },
+        ]}
+        onSubmit={() => setQ(qInput.trim())}
+        onReset={() => {
+          setQInput('')
+          setQ('')
+        }}
+        active={!!q || !!qInput.trim()}
+      />
 
       <div className="mb-4 rounded-lg border border-cyan-500/20 bg-cyan-500/[0.04] p-3 space-y-3">
         <div className="flex items-start justify-between gap-3">

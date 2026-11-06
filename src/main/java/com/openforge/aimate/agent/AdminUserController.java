@@ -41,13 +41,33 @@ public class AdminUserController {
     public Map<String, Object> list(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
-            @RequestParam(required = false) String q
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String role
     ) {
         int p = Math.max(0, page);
         int s = Math.min(100, Math.max(1, size));
         String keyword = q != null ? q.trim() : "";
+        User.Status statusEnum = null;
+        if (status != null && !status.isBlank()) {
+            try {
+                statusEnum = User.Status.valueOf(status.trim().toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new ResponseStatusException(BAD_REQUEST, "无效的 status，应为 ACTIVE 或 DISABLED");
+            }
+        }
+        User.Role roleEnum = null;
+        if (role != null && !role.isBlank()) {
+            try {
+                roleEnum = User.Role.valueOf(role.trim().toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new ResponseStatusException(BAD_REQUEST, "无效的 role，应为 USER 或 ADMIN");
+            }
+        }
         Page<User> result = userRepository.search(
                 keyword,
+                statusEnum,
+                roleEnum,
                 PageRequest.of(p, s, Sort.by(Sort.Direction.DESC, "id"))
         );
         Map<String, Object> m = new HashMap<>();

@@ -1,7 +1,10 @@
-import { FormEvent, useState } from 'react'
+import { FormEvent, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { adminApi, type SystemProviderDto } from '../../api/admin'
+import { AdminToggle } from '../../ui/AdminToggle'
+import { AdminQueryBar } from '../../ui/AdminQueryBar'
+import { AppSelect } from '../../ui/AppSelect'
 
 const emptyForm = {
   code: '',
@@ -17,6 +20,10 @@ export function AdminProvidersPanel() {
   const [editKey, setEditKey] = useState('')
   const [editName, setEditName] = useState('')
   const [editDesc, setEditDesc] = useState('')
+  const [qInput, setQInput] = useState('')
+  const [q, setQ] = useState('')
+  const [enabledFilter, setEnabledFilter] = useState('')
+  const [keyFilter, setKeyFilter] = useState('')
 
   const { data: providers = [], isLoading } = useQuery({
     queryKey: ['admin-system-providers'],
@@ -78,6 +85,18 @@ export function AdminProvidersPanel() {
     createMutation.mutate()
   }
 
+  const filtered = useMemo(() => {
+    const kw = q.trim().toLowerCase()
+    return providers.filter((p) => {
+      if (enabledFilter === 'true' && !p.enabled) return false
+      if (enabledFilter === 'false' && p.enabled) return false
+      if (keyFilter === 'set' && !p.apiKeySet) return false
+      if (keyFilter === 'missing' && p.apiKeySet) return false
+      if (!kw) return true
+      return `${p.code} ${p.displayName} ${p.description ?? ''}`.toLowerCase().includes(kw)
+    })
+  }, [providers, q, enabledFilter, keyFilter])
+
   return (
     <div className="space-y-5">
       <div>
@@ -86,6 +105,64 @@ export function AdminProvidersPanel() {
           一个服务商配置一把 API Key；模型管理里同一服务商下的模型共用该密钥。
         </p>
       </div>
+      <AdminQueryBar
+        fields={[
+          {
+            key: 'q',
+            label: '关键词',
+            value: qInput,
+            onChange: setQInput,
+            placeholder: '编码 / 名称 / 说明',
+            width: 'grow',
+          },
+          {
+            key: 'enabled',
+            label: '状态',
+            value: enabledFilter,
+            onChange: setEnabledFilter,
+            width: 'sm',
+            render: (
+              <AppSelect
+                value={enabledFilter}
+                onChange={setEnabledFilter}
+                options={[
+                  { value: '', label: '全部' },
+                  { value: 'true', label: '启用' },
+                  { value: 'false', label: '停用' },
+                ]}
+                ariaLabel="启用状态"
+              />
+            ),
+          },
+          {
+            key: 'key',
+            label: '密钥',
+            value: keyFilter,
+            onChange: setKeyFilter,
+            width: 'sm',
+            render: (
+              <AppSelect
+                value={keyFilter}
+                onChange={setKeyFilter}
+                options={[
+                  { value: '', label: '全部' },
+                  { value: 'set', label: '已配置' },
+                  { value: 'missing', label: '未配置' },
+                ]}
+                ariaLabel="密钥状态"
+              />
+            ),
+          },
+        ]}
+        onSubmit={() => setQ(qInput.trim())}
+        onReset={() => {
+          setQInput('')
+          setQ('')
+          setEnabledFilter('')
+          setKeyFilter('')
+        }}
+        active={!!q || !!enabledFilter || !!keyFilter || !!qInput.trim()}
+      />
 
       <form onSubmit={onCreate} className="rounded-lg border border-white/10 p-3 space-y-3">
         <div className="text-xs text-white/70">新增服务商</div>
@@ -126,6 +203,8 @@ export function AdminProvidersPanel() {
         <div className="text-sm text-white/40 py-8 text-center">加载中…</div>
       ) : providers.length === 0 ? (
         <div className="text-sm text-white/35 py-8 text-center">暂无服务商</div>
+      ) : filtered.length === 0 ? (
+        <div className="text-sm text-white/35 py-8 text-center">无匹配服务商</div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-white/10">
           <table className="w-full text-xs text-white/80">
@@ -140,7 +219,7 @@ export function AdminProvidersPanel() {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/10">
-              {providers.map((p) => (
+              {filtered.map((p) => (
                 <tr key={p.id} className="hover:bg-white/[0.03] align-top">
                   <td className="py-2.5 px-3 font-mono text-white/60">{p.code}</td>
                   <td className="py-2.5 px-3">
@@ -182,20 +261,12 @@ export function AdminProvidersPanel() {
                     )}
                   </td>
                   <td className="py-2.5 px-3">
-                    <button
-                      type="button"
+                    <AdminToggle
+                      checked={p.enabled}
                       disabled={updateMutation.isPending}
-                      onClick={() => updateMutation.mutate({ id: p.id, body: { enabled: !p.enabled } })}
-                      className={`w-9 h-5 rounded-full relative transition-colors ${
-                        p.enabled ? 'bg-blue-600' : 'bg-white/15'
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                          p.enabled ? 'translate-x-4' : 'translate-x-0.5'
-                        }`}
-                      />
-                    </button>
+                      onChange={() => updateMutation.mutate({ id: p.id, body: { enabled: !p.enabled } })}
+                      title={p.enabled ? '点击停用' : '点击启用'}
+                    />
                   </td>
                   <td className="py-2.5 px-3">
                     {editingId === p.id ? (

@@ -5,6 +5,9 @@ import { adminAgentApi } from '../../api/multiAgent'
 import { adminApi } from '../../api/admin'
 import { adminKnowledgeApi, type KnowledgeBaseBrief } from '../../api/adminKnowledge'
 import clsx from 'clsx'
+import { AdminToggle } from '../../ui/AdminToggle'
+import { AdminQueryBar } from '../../ui/AdminQueryBar'
+import { AppSelect } from '../../ui/AppSelect'
 
 const TIERS = ['JUNIOR', 'MID', 'SENIOR', 'EXPERT'] as const
 
@@ -14,6 +17,10 @@ export function AdminAgentsPanel() {
   const [linkCatalogId, setLinkCatalogId] = useState<number | null>(null)
   const [linkSelected, setLinkSelected] = useState<number[]>([])
   const [kbPickQ, setKbPickQ] = useState('')
+  const [catQInput, setCatQInput] = useState('')
+  const [catQ, setCatQ] = useState('')
+  const [catTier, setCatTier] = useState('')
+  const [catEnabled, setCatEnabled] = useState('')
 
   const catalogQ = useQuery({
     queryKey: ['admin-agent-catalog'],
@@ -121,6 +128,18 @@ export function AdminAgentsPanel() {
   })
 
   const kbOptions = useMemo(() => kbPoolQ.data?.items ?? [], [kbPoolQ.data])
+  const filteredCatalog = useMemo(() => {
+    const rows = catalogQ.data ?? []
+    const kw = catQ.trim().toLowerCase()
+    return rows.filter((row) => {
+      if (catTier && String(row.tier) !== catTier) return false
+      if (catEnabled === 'true' && !row.enabled) return false
+      if (catEnabled === 'false' && row.enabled) return false
+      if (!kw) return true
+      const hay = `${row.name ?? ''} ${row.industryName ?? ''} ${row.careerName ?? ''} ${row.tier ?? ''}`.toLowerCase()
+      return hay.includes(kw)
+    })
+  }, [catalogQ.data, catQ, catTier, catEnabled])
 
   return (
     <div className="space-y-4">
@@ -147,6 +166,64 @@ export function AdminAgentsPanel() {
       </div>
 
       {sub === 'catalog' && (
+        <>
+        <AdminQueryBar
+          fields={[
+            {
+              key: 'q',
+              label: '关键词',
+              value: catQInput,
+              onChange: setCatQInput,
+              placeholder: '名称 / 行业 / 职业 / 等级',
+              width: 'grow',
+            },
+            {
+              key: 'tier',
+              label: '等级',
+              value: catTier,
+              onChange: setCatTier,
+              width: 'sm',
+              render: (
+                <AppSelect
+                  value={catTier}
+                  onChange={setCatTier}
+                  options={[
+                    { value: '', label: '全部' },
+                    ...TIERS.map((t) => ({ value: t, label: t })),
+                  ]}
+                  ariaLabel="等级"
+                />
+              ),
+            },
+            {
+              key: 'enabled',
+              label: '上架',
+              value: catEnabled,
+              onChange: setCatEnabled,
+              width: 'sm',
+              render: (
+                <AppSelect
+                  value={catEnabled}
+                  onChange={setCatEnabled}
+                  options={[
+                    { value: '', label: '全部' },
+                    { value: 'true', label: '已上架' },
+                    { value: 'false', label: '已下架' },
+                  ]}
+                  ariaLabel="上架状态"
+                />
+              ),
+            },
+          ]}
+          onSubmit={() => setCatQ(catQInput.trim())}
+          onReset={() => {
+            setCatQInput('')
+            setCatQ('')
+            setCatTier('')
+            setCatEnabled('')
+          }}
+          active={!!catQ || !!catTier || !!catEnabled || !!catQInput.trim()}
+        />
         <div className="overflow-x-auto rounded-xl border border-white/10">
           <table className="w-full text-left text-xs text-white/70">
             <thead className="bg-white/[0.03] text-white/40">
@@ -161,7 +238,7 @@ export function AdminAgentsPanel() {
               </tr>
             </thead>
             <tbody>
-              {(catalogQ.data ?? []).map((row) => {
+              {filteredCatalog.map((row) => {
                 const kbs = (row.knowledgeBases as KnowledgeBaseBrief[] | undefined) ?? []
                 return (
                 <tr key={String(row.id)} className="border-t border-white/5">
@@ -182,13 +259,12 @@ export function AdminAgentsPanel() {
                     </button>
                   </td>
                   <td className="px-3 py-2">
-                    <button
-                      type="button"
-                      className="text-cyan-300/80 hover:text-cyan-200"
-                      onClick={() => toggleCatalogMut.mutate(row)}
-                    >
-                      {row.enabled ? '已上架' : '已下架'}
-                    </button>
+                    <AdminToggle
+                      checked={!!row.enabled}
+                      disabled={toggleCatalogMut.isPending}
+                      onChange={() => toggleCatalogMut.mutate(row)}
+                      title={row.enabled ? '点击下架' : '点击上架'}
+                    />
                   </td>
                 </tr>
                 )
@@ -196,6 +272,10 @@ export function AdminAgentsPanel() {
             </tbody>
           </table>
         </div>
+        {!filteredCatalog.length && (
+          <div className="py-8 text-center text-sm text-white/35">无匹配商品</div>
+        )}
+        </>
       )}
 
       {linkCatalogId != null && (

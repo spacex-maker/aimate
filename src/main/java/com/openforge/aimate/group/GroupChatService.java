@@ -972,7 +972,7 @@ public class GroupChatService {
 
         int s = Math.min(100, Math.max(1, size <= 0 ? 20 : size));
 
-        Page<User> result = userRepository.search(q == null ? "" : q.trim(), PageRequest.of(p, s));
+        Page<User> result = userRepository.search(q == null ? "" : q.trim(), null, null, PageRequest.of(p, s));
 
         List<Map<String, Object>> items = result.getContent().stream()
 

@@ -44,11 +44,13 @@ export const adminApi = {
     }),
 
   /** 管理员：分页用户列表 */
-  listUsers: (params?: { page?: number; size?: number; q?: string }) => {
+  listUsers: (params?: { page?: number; size?: number; q?: string; status?: string; role?: string }) => {
     const qs = new URLSearchParams()
     qs.set('page', String(params?.page ?? 0))
     qs.set('size', String(params?.size ?? 20))
     if (params?.q) qs.set('q', params.q)
+    if (params?.status) qs.set('status', params.status)
+    if (params?.role) qs.set('role', params.role)
     return http<AdminUserPage>(`/api/admin/users?${qs}`)
   },
 

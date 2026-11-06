@@ -20,8 +20,14 @@ public interface UserRepository extends JpaRepository<User, Long> {
                OR LOWER(u.username) LIKE LOWER(CONCAT('%', :q, '%'))
                OR LOWER(COALESCE(u.email, '')) LIKE LOWER(CONCAT('%', :q, '%'))
                OR LOWER(COALESCE(u.displayName, '')) LIKE LOWER(CONCAT('%', :q, '%')))
+              AND (:status IS NULL OR u.status = :status)
+              AND (:role IS NULL OR u.role = :role)
             """)
-    Page<User> search(@Param("q") String q, Pageable pageable);
+    Page<User> search(
+            @Param("q") String q,
+            @Param("status") User.Status status,
+            @Param("role") User.Role role,
+            Pageable pageable);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE User u SET u.pointsBalance = u.pointsBalance - :amount WHERE u.id = :userId AND u.pointsBalance >= :amount")
