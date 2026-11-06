@@ -27,6 +27,9 @@ public record StartSessionRequest(
         @JsonProperty("userApiKeyId")
         Long userApiKeyId,
 
+        @JsonProperty("thinkingEnabled")
+        Boolean thinkingEnabled,
+
         /** 对话绑定的 UserAgent；空则默认秘书 */
         @JsonProperty("userAgentId")
         Long userAgentId,

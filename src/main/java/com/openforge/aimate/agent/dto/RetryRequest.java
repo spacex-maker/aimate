@@ -25,4 +25,7 @@ public class RetryRequest {
 
     @JsonProperty("userApiKeyId")
     private Long userApiKeyId;
+
+    @JsonProperty("thinkingEnabled")
+    private Boolean thinkingEnabled;
 }

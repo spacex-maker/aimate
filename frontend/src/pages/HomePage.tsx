@@ -74,6 +74,7 @@ export function HomePage() {
       modelSource?: 'SYSTEM' | 'USER_KEY'
       systemModelId?: number | null
       userApiKeyId?: number | null
+      thinkingEnabled?: boolean
       images?: string[]
     }) => {
       const session = await multiAgentApi.openChat(payload.agentId)
@@ -85,6 +86,7 @@ export function HomePage() {
           modelSource: payload.modelSource,
           systemModelId: payload.systemModelId ?? null,
           userApiKeyId: payload.userApiKeyId ?? null,
+          thinkingEnabled: payload.thinkingEnabled,
           images: payload.images,
         })
       }
@@ -223,6 +225,7 @@ export function HomePage() {
             modelSource: opts?.modelSource,
             systemModelId: opts?.systemModelId ?? null,
             userApiKeyId: opts?.userApiKeyId ?? null,
+            thinkingEnabled: opts?.thinkingEnabled,
             images: opts?.images,
           })
           setTask('')

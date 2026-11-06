@@ -87,6 +87,8 @@ public class AgentLoopService {
 
     // ── JDK 25: ScopedValue ──────────────────────────────────────────────────
     public static final ScopedValue<String> SESSION_SCOPE = ScopedValue.newInstance();
+    /** 本轮请求携带的思考开关；优先于 DB 偏好，避免 toggle/发消息竞态。 */
+    private static final ScopedValue<Boolean> THINKING_OVERRIDE = ScopedValue.newInstance();
 
     // ── Safety limits ────────────────────────────────────────────────────────
     // 不再对迭代轮次做硬性上限控制，由会话状态（PAUSED/TERMINATED）和外部中断来终止循环。
@@ -168,22 +170,41 @@ public class AgentLoopService {
 
     /** 单条消息独立 run：绑定占位条 id，可多轮并行；中断仅影响该条。 */
     public void run(AgentSession session, long placeholderId) {
-        ScopedValue.where(SESSION_SCOPE, session.getSessionId())
-                .run(() -> executeLoopForPlaceholder(session, placeholderId));
+        run(session, placeholderId, null);
+    }
+
+    /** @param thinkingEnabled 本轮思考开关；null 则读 user_default_models */
+    public void run(AgentSession session, long placeholderId, Boolean thinkingEnabled) {
+        var carrier = ScopedValue.where(SESSION_SCOPE, session.getSessionId());
+        if (thinkingEnabled != null) {
+            carrier = carrier.where(THINKING_OVERRIDE, thinkingEnabled);
+        }
+        carrier.run(() -> executeLoopForPlaceholder(session, placeholderId));
     }
 
     /** 兼容入口：无 placeholder 时先确保消息表有首轮、创建占位，再按占位 run。 */
     public void run(AgentSession session) {
-        ScopedValue.where(SESSION_SCOPE, session.getSessionId())
-                .run(() -> executeLoop(session));
+        run(session, (Boolean) null);
+    }
+
+    public void run(AgentSession session, Boolean thinkingEnabled) {
+        var carrier = ScopedValue.where(SESSION_SCOPE, session.getSessionId());
+        if (thinkingEnabled != null) {
+            carrier = carrier.where(THINKING_OVERRIDE, thinkingEnabled);
+        }
+        carrier.run(() -> executeLoop(session));
     }
 
     /** 新建会话首条用户消息可带图片，只在首轮写入消息表时消费一次。 */
     public void run(AgentSession session, java.util.List<String> openingImageDataUrls) {
+        run(session, openingImageDataUrls, null);
+    }
+
+    public void run(AgentSession session, java.util.List<String> openingImageDataUrls, Boolean thinkingEnabled) {
         if (openingImageDataUrls != null && !openingImageDataUrls.isEmpty()) {
             openingImages.put(session.getSessionId(), java.util.List.copyOf(openingImageDataUrls));
         }
-        run(session);
+        run(session, thinkingEnabled);
     }
 
     /**
@@ -191,8 +212,15 @@ public class AgentLoopService {
      * @param userMessageId 用户消息 id（该条之前的上下文 + 记忆作为 context）
      */
     public void runForRetry(AgentSession session, long userMessageId) {
-        ScopedValue.where(SESSION_SCOPE, session.getSessionId())
-                .run(() -> executeLoopForRetry(session, userMessageId));
+        runForRetry(session, userMessageId, null);
+    }
+
+    public void runForRetry(AgentSession session, long userMessageId, Boolean thinkingEnabled) {
+        var carrier = ScopedValue.where(SESSION_SCOPE, session.getSessionId());
+        if (thinkingEnabled != null) {
+            carrier = carrier.where(THINKING_OVERRIDE, thinkingEnabled);
+        }
+        carrier.run(() -> executeLoopForRetry(session, userMessageId));
     }
 
     // ── Main loop ────────────────────────────────────────────────────────────
@@ -1099,16 +1127,23 @@ public class AgentLoopService {
                 .orElse(false);
     }
 
-    /** 当前用户是否对所选系统模型开启了思考模式。 */
+    /** 当前用户是否对所选系统模型开启了思考模式（本轮请求 override 优先）。 */
     private boolean sessionThinkingEnabled(AgentSession session) {
         Long userId = session != null ? session.getUserId() : null;
         if (userId == null) return false;
-        return userDefaultModelRepository.findByUserId(userId)
-                .filter(udm -> "SYSTEM".equalsIgnoreCase(udm.getSource()))
-                .filter(com.openforge.aimate.domain.UserDefaultModel::isThinkingEnabled)
+        Boolean override = THINKING_OVERRIDE.isBound() ? THINKING_OVERRIDE.get() : null;
+        if (override != null && !override) {
+            return false;
+        }
+        var udmOpt = userDefaultModelRepository.findByUserId(userId)
+                .filter(udm -> "SYSTEM".equalsIgnoreCase(udm.getSource()));
+        boolean modelSupports = udmOpt
                 .map(com.openforge.aimate.domain.UserDefaultModel::getSystemModel)
                 .map(com.openforge.aimate.domain.SystemModel::isSupportsThinking)
                 .orElse(false);
+        if (!modelSupports) return false;
+        if (override != null) return true;
+        return udmOpt.map(com.openforge.aimate.domain.UserDefaultModel::isThinkingEnabled).orElse(false);
     }
 
     /**

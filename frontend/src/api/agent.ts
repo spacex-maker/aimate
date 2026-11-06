@@ -103,7 +103,7 @@ export const agentApi = {
 
   continueSession: (
     sessionId: string,
-    body: { message: string; modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null; images?: string[] }
+    body: { message: string; modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null; thinkingEnabled?: boolean; images?: string[] }
   ) =>
     http<SessionResponse>(`${BASE}/${sessionId}/continue`, {
       method: 'POST',
@@ -143,7 +143,7 @@ export const agentApi = {
   /** 重试某条用户消息：用该条之前的上下文重新生成下一条 assistant，并追加新版本 */
   retryMessage: (
     sessionId: string,
-    body: { userMessageId: number; modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null }
+    body: { userMessageId: number; modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null; thinkingEnabled?: boolean }
   ) =>
     http<SessionResponse>(`${BASE}/${sessionId}/retry`, {
       method: 'POST',

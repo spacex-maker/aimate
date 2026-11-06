@@ -33,7 +33,7 @@ export interface AgentInputBoxProps {
    * 提交时回调，携带当前模型选择信息（若有）。
    * HomePage 不关心模型时可以忽略参数。
    */
-  onSubmit: (options?: { modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null; images?: string[] }) => void
+  onSubmit: (options?: { modelSource?: 'SYSTEM' | 'USER_KEY'; systemModelId?: number | null; userApiKeyId?: number | null; thinkingEnabled?: boolean; images?: string[] }) => void
   placeholder: string
   hintText: string
   isPending: boolean
@@ -432,6 +432,8 @@ export function AgentInputBox({
       modelSource: selectedSource,
       systemModelId: selectedSource === 'SYSTEM' ? selectedModelId ?? null : null,
       userApiKeyId: selectedSource === 'USER_KEY' && selectedUserModel ? selectedUserModel.id ?? null : null,
+      // 本条消息立刻带上思考开关，避免只靠异步 PUT 偏好导致「下一条才生效」
+      thinkingEnabled: selectedSource === 'SYSTEM' ? (!!selectedModel?.supportsThinking && thinkingEnabled) : false,
       images: images.length ? images : undefined,
     }
     setImages([])

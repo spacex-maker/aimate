@@ -205,6 +205,13 @@ public class AgentController {
             }
         }
 
+        applyModelAndThinkingPreference(
+                userId,
+                request.modelSource(),
+                request.systemModelId(),
+                request.userApiKeyId(),
+                request.thinkingEnabled());
+
         List<String> images = normalizeImages(request.images(), userId);
         String task = textOrImagePrompt(request.task(), images);
 
@@ -222,9 +229,10 @@ public class AgentController {
 
         // Launch the loop on a virtual thread — non-blocking for the HTTP thread
         final AgentSession finalSession = session;
+        final Boolean thinkingEnabled = request.thinkingEnabled();
         agentVirtualThreadExecutor.submit(() -> {
             try {
-                agentLoopService.run(finalSession, images);
+                agentLoopService.run(finalSession, images, thinkingEnabled);
             } catch (Exception e) {
                 log.error("[Controller] Uncaught exception in loop for session {}: {}",
                         sessionId, e.getMessage(), e);
@@ -527,44 +535,13 @@ public class AgentController {
         AgentSession session = findOrThrow(sessionId);
         pointsService.assertCanChat(session.getUserId());
 
-        // 若前端携带了本次使用的模型选择，则先更新 user_default_models，确保本次调用使用最新模型。
-        if (request.modelSource() != null && !request.modelSource().isBlank()) {
-            Long userId = session.getUserId();
-            if (userId != null) {
-                String src = request.modelSource().toUpperCase();
-                if ("SYSTEM".equals(src) && request.systemModelId() != null) {
-                    UserDefaultModel udm = userDefaultModelRepository.findByUserId(userId)
-                            .orElseGet(() -> {
-                                UserDefaultModel x = new UserDefaultModel();
-                                x.setUserId(userId);
-                                return x;
-                            });
-                    var model = systemModelRepository.findById(request.systemModelId())
-                            .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
-                                    org.springframework.http.HttpStatus.BAD_REQUEST,
-                                    "系统模型不存在: " + request.systemModelId()));
-                    udm.setSource("SYSTEM");
-                    udm.setSystemModel(model);
-                    udm.setUserApiKey(null);
-                    userDefaultModelRepository.save(udm);
-                } else if ("USER_KEY".equals(src) && request.userApiKeyId() != null) {
-                    var key = userApiKeyRepository.findByIdAndUserId(request.userApiKeyId(), userId)
-                            .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
-                                    org.springframework.http.HttpStatus.BAD_REQUEST,
-                                    "用户 API Key 不存在或不属于当前用户: " + request.userApiKeyId()));
-                    UserDefaultModel udm = userDefaultModelRepository.findByUserId(userId)
-                            .orElseGet(() -> {
-                                UserDefaultModel x = new UserDefaultModel();
-                                x.setUserId(userId);
-                                return x;
-                            });
-                    udm.setSource("USER_KEY");
-                    udm.setUserApiKey(key);
-                    udm.setSystemModel(null);
-                    userDefaultModelRepository.save(udm);
-                }
-            }
-        }
+        // 若前端携带了本次使用的模型选择 / 思考开关，则先更新 user_default_models。
+        applyModelAndThinkingPreference(
+                session.getUserId(),
+                request.modelSource(),
+                request.systemModelId(),
+                request.userApiKeyId(),
+                request.thinkingEnabled());
 
         List<String> images = normalizeImages(request.images(), session.getUserId());
         String text = textOrImagePrompt(request.message(), images);
@@ -576,9 +553,10 @@ public class AgentController {
 
         final AgentSession finalSession = sessionRepository.findBySessionId(sessionId).orElseThrow();
         final long placeholderId = placeholder.getId();
+        final Boolean thinkingEnabled = request.thinkingEnabled();
         agentVirtualThreadExecutor.submit(() -> {
             try {
-                agentLoopService.run(finalSession, placeholderId);
+                agentLoopService.run(finalSession, placeholderId, thinkingEnabled);
             } catch (Exception e) {
                 log.error("[Controller] Uncaught exception in loop for session {} (continue): {}",
                         sessionId, e.getMessage(), e);
@@ -629,49 +607,20 @@ public class AgentController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userMessageId required");
         }
 
-        // 若前端在点击「重试」前已经切换了模型，这里也要同步更新 user_default_models，
-        // 保证本次重试调用使用最新选择的模型。
         Long userId = session.getUserId();
-        if (userId != null && request.getModelSource() != null && !request.getModelSource().isBlank()) {
-            String src = request.getModelSource().toUpperCase();
-            if ("SYSTEM".equals(src) && request.getSystemModelId() != null) {
-                UserDefaultModel udm = userDefaultModelRepository.findByUserId(userId)
-                        .orElseGet(() -> {
-                            UserDefaultModel x = new UserDefaultModel();
-                            x.setUserId(userId);
-                            return x;
-                        });
-                var model = systemModelRepository.findById(request.getSystemModelId())
-                        .orElseThrow(() -> new ResponseStatusException(
-                                HttpStatus.BAD_REQUEST,
-                                "系统模型不存在: " + request.getSystemModelId()));
-                udm.setSource("SYSTEM");
-                udm.setSystemModel(model);
-                udm.setUserApiKey(null);
-                userDefaultModelRepository.save(udm);
-            } else if ("USER_KEY".equals(src) && request.getUserApiKeyId() != null) {
-                var key = userApiKeyRepository.findByIdAndUserId(request.getUserApiKeyId(), userId)
-                        .orElseThrow(() -> new ResponseStatusException(
-                                HttpStatus.BAD_REQUEST,
-                                "用户 API Key 不存在或不属于当前用户: " + request.getUserApiKeyId()));
-                UserDefaultModel udm = userDefaultModelRepository.findByUserId(userId)
-                        .orElseGet(() -> {
-                            UserDefaultModel x = new UserDefaultModel();
-                            x.setUserId(userId);
-                            return x;
-                        });
-                udm.setSource("USER_KEY");
-                udm.setUserApiKey(key);
-                udm.setSystemModel(null);
-                userDefaultModelRepository.save(udm);
-            }
-        }
+        applyModelAndThinkingPreference(
+                userId,
+                request.getModelSource(),
+                request.getSystemModelId(),
+                request.getUserApiKeyId(),
+                request.getThinkingEnabled());
 
         final long userMessageId = request.getUserMessageId();
         final AgentSession finalSession = sessionRepository.findBySessionId(sessionId).orElseThrow();
+        final Boolean thinkingEnabled = request.getThinkingEnabled();
         agentVirtualThreadExecutor.submit(() -> {
             try {
-                agentLoopService.runForRetry(finalSession, userMessageId);
+                agentLoopService.runForRetry(finalSession, userMessageId, thinkingEnabled);
             } catch (Exception e) {
                 log.error("[Controller] Uncaught exception in retry for session {}: {}",
                         sessionId, e.getMessage(), e);
@@ -775,4 +724,69 @@ public class AgentController {
         }
         return null;
     }
+
+    /**
+     * 把本条请求的模型选择与思考开关写入 user_default_models，并供本轮 ScopedValue 使用。
+     * thinkingEnabled 单独传来时也会更新，避免只切思考、未改模型时偏好仍是旧值。
+     */
+    private void applyModelAndThinkingPreference(
+            Long userId,
+            String modelSource,
+            Long systemModelId,
+            Long userApiKeyId,
+            Boolean thinkingEnabled
+    ) {
+        if (userId == null) return;
+        boolean touchModel = modelSource != null && !modelSource.isBlank();
+        boolean touchThinking = thinkingEnabled != null;
+        if (!touchModel && !touchThinking) return;
+
+        UserDefaultModel udm = userDefaultModelRepository.findByUserId(userId)
+                .orElseGet(() -> {
+                    UserDefaultModel x = new UserDefaultModel();
+                    x.setUserId(userId);
+                    return x;
+                });
+
+        if (touchModel) {
+            String src = modelSource.toUpperCase();
+            if ("SYSTEM".equals(src) && systemModelId != null) {
+                var model = systemModelRepository.findById(systemModelId)
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST, "系统模型不存在: " + systemModelId));
+                udm.setSource("SYSTEM");
+                udm.setSystemModel(model);
+                udm.setUserApiKey(null);
+            } else if ("USER_KEY".equals(src) && userApiKeyId != null) {
+                var key = userApiKeyRepository.findByIdAndUserId(userApiKeyId, userId)
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST,
+                                "用户 API Key 不存在或不属于当前用户: " + userApiKeyId));
+                udm.setSource("USER_KEY");
+                udm.setUserApiKey(key);
+                udm.setSystemModel(null);
+                // 用户自有 Key 不走思考模式
+                udm.setThinkingEnabled(false);
+            }
+        }
+
+        if (touchThinking) {
+            if ("USER_KEY".equalsIgnoreCase(udm.getSource())) {
+                udm.setThinkingEnabled(false);
+            } else {
+                boolean on = thinkingEnabled;
+                if (on) {
+                    var sm = udm.getSystemModel();
+                    if (sm == null || !sm.isSupportsThinking()) {
+                        on = false;
+                    }
+                }
+                udm.setThinkingEnabled(on);
+            }
+        }
+
+        userDefaultModelRepository.save(udm);
+    }
+
+
 }

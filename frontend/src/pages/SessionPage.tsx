@@ -257,6 +257,7 @@ export function SessionPage({
       modelSource?: 'SYSTEM' | 'USER_KEY'
       systemModelId?: number | null
       userApiKeyId?: number | null
+      thinkingEnabled?: boolean
       images?: string[]
     }) =>
       agentApi.continueSession(effectiveSessionId!, {
@@ -264,6 +265,7 @@ export function SessionPage({
         modelSource: payload.modelSource,
         systemModelId: payload.systemModelId ?? null,
         userApiKeyId: payload.userApiKeyId ?? null,
+        thinkingEnabled: payload.thinkingEnabled,
         images: payload.images,
       }),
     onSuccess: () => {
@@ -575,6 +577,7 @@ export function SessionPage({
               modelSource: opts?.modelSource,
               systemModelId: opts?.systemModelId,
               userApiKeyId: opts?.userApiKeyId,
+              thinkingEnabled: opts?.thinkingEnabled,
               images: opts?.images,
             })
           }}
