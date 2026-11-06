@@ -514,7 +514,10 @@ public class AgentLoopService {
                 publisher.publish(AgentEvent.statusChange(sessionId, "IDLE", SessionResponse.from(session)));
             }
         } catch (Exception e) {
-            log.error("[Agent:{}] Exception in placeholder run {}: {}", sessionId, placeholderId, e.getMessage(), e);
+            String detail = e.getMessage() != null && !e.getMessage().isBlank()
+                    ? e.getMessage()
+                    : e.getClass().getSimpleName();
+            log.error("[Agent:{}] Exception in placeholder run {}: {}", sessionId, placeholderId, detail, e);
             String reason = e.getMessage() != null && !e.getMessage().isBlank() ? e.getMessage() : "回答失败";
             sessionMessageService.updateAssistantMessage(placeholderId, reason, SessionMessage.STATUS_INTERRUPTED);
             session = sessionRepository.findBySessionId(sessionId).orElse(session);
@@ -652,9 +655,12 @@ public class AgentLoopService {
             iteration = session.getIterationCount() + 1;
             publisher.publish(AgentEvent.iterationStart(sessionId, iteration));
 
-            List<Message> context = contextService.load(session);
+            List<Message> context = new ArrayList<>(contextService.load(session));
             if (!sessionSupportsVision(session)) {
-                context = context.stream().map(Message::withoutImages).toList();
+                // 必须可变：Java Stream.toList() 不可变，后续若有 tool 追加会 UOE
+                context = context.stream()
+                        .map(Message::withoutImages)
+                        .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
             }
             String        queryForTools = lastUserMessageFrom(context, session.getTaskDescription());
             List<Tool>    tools   = loadRelevantTools(queryForTools, TOP_K_TOOLS, userId, session);
@@ -724,6 +730,8 @@ public class AgentLoopService {
                                                        List<Message> context,
                                                        java.util.function.BiFunction<ChatRequest, StreamCallbacks, ChatResponse> llmCaller,
                                                        Long userId) {
+        // 调用方可能传入不可变 List；工具轮必须 context.addAll，统一拷成可变。
+        context = context == null ? new ArrayList<>() : new ArrayList<>(context);
         StringBuilder thinkingContent = new StringBuilder();
         java.util.List<com.openforge.aimate.agent.dto.StreamBlockDto> blocks = new java.util.ArrayList<>();
         int iteration = 0;
@@ -761,7 +769,11 @@ public class AgentLoopService {
             ));
 
             if (!sessionSupportsVision(session)) {
-                context = context.stream().map(Message::withoutImages).toList();
+                // 不可用 Stream.toList()：返回不可变列表，工具轮 context.addAll 会 UnsupportedOperationException
+                // （无视觉模型如 Qwen 每轮必走此分支；DeepSeek Flash 有视觉故此前未暴露）
+                context = context.stream()
+                        .map(Message::withoutImages)
+                        .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
             }
             String queryForTools = lastUserMessageFrom(context, session.getTaskDescription());
             List<Tool> tools = new ArrayList<>(loadRelevantTools(queryForTools, TOP_K_TOOLS, userId, session));
@@ -827,30 +839,6 @@ public class AgentLoopService {
             }
 
             Message assistantMessage = response.firstMessage();
-
-            // 空回复恢复：先保留 tools 再试（Qwen/Ollama 常先空再能出 tool_calls）；勿一上来剥工具。
-            boolean hadToolsThisIter = request.tools() != null && !request.tools().isEmpty();
-            if (!forcingDispatch
-                    && !response.hasToolCalls()
-                    && isBlankAssistantContent(assistantMessage)
-                    && currentIterReasoning.isEmpty()) {
-                log.warn("[Agent:{}] empty LLM content+reasoning on iter {}; retry keeping tools={} max_tokens=8192",
-                        sessionId, iteration, hadToolsThisIter);
-                ChatRequest.ChatRequestBuilder retryBuilder = ChatRequest.builder()
-                        .model("")
-                        .messages(context)
-                        .tools(hadToolsThisIter ? request.tools() : null)
-                        .toolChoice(hadToolsThisIter ? "auto" : "none")
-                        .temperature(0.7)
-                        .maxTokens(8192);
-                applyThinkingPreference(retryBuilder, session, true);
-                try {
-                    response = llmCaller.apply(retryBuilder.build(), callbacks);
-                    assistantMessage = response.firstMessage();
-                } catch (Exception retryEx) {
-                    log.warn("[Agent:{}] empty-content retry (keep tools) failed: {}", sessionId, retryEx.getMessage());
-                }
-            }
 
             // 当前轮思考内容作为一个 thinking block（若有）
             if (!currentIterReasoning.isEmpty()) {
@@ -933,34 +921,19 @@ public class AgentLoopService {
                 if (answer.isEmpty() && !thinkingContent.isEmpty()) {
                     log.debug("[Agent:{}] LLM returned empty content but had reasoning ({} chars), using fallback.", sessionId, thinkingContent.length());
                     answer = FALLBACK_EMPTY_ANSWER;
-                }
-                // 仍空且本轮曾带工具：最后一次无工具兜底（仅求自然语言回复，避免整轮空白）
-                if (answer.isEmpty() && thinkingContent.isEmpty() && !forcingDispatch && hadToolsThisIter) {
-                    log.warn("[Agent:{}] still empty after keep-tools retry on iter {}; last-resort without tools",
-                            sessionId, iteration);
-                    ChatRequest.ChatRequestBuilder plainBuilder = ChatRequest.builder()
-                            .model("")
-                            .messages(context)
-                            .tools(null)
-                            .toolChoice("none")
-                            .temperature(0.7)
-                            .maxTokens(4096);
-                    applyThinkingPreference(plainBuilder, session, true);
-                    try {
-                        ChatResponse plainRetry = llmCaller.apply(plainBuilder.build(), new StreamCallbacks(
-                                t -> {},
-                                t -> {
-                                    publisher.publish(AgentEvent.thinking(sessionId, t, finalIter));
-                                    thinkingContent.append(t);
-                                }
-                        ));
-                        Message retryMsg = plainRetry.firstMessage();
-                        if (retryMsg != null && retryMsg.content() != null && !retryMsg.content().isBlank()) {
-                            answer = retryMsg.content();
-                        }
-                    } catch (Exception retryEx) {
-                        log.warn("[Agent:{}] last-resort no-tools retry failed: {}", sessionId, retryEx.getMessage());
+                } else if (answer.isEmpty()) {
+                    // 不盲着重试；记清 finish/usage，便于查上游空响应根因
+                    String finish = null;
+                    Integer completionTok = null;
+                    if (response.choices() != null && !response.choices().isEmpty()) {
+                        finish = response.choices().get(0).finishReason();
                     }
+                    if (response.usage() != null) {
+                        completionTok = response.usage().completionTokens();
+                    }
+                    log.warn("[Agent:{}] empty LLM content+reasoning on iter {} (no blind retry). finish={} completionTokens={} hadTools={}",
+                            sessionId, iteration, finish, completionTok,
+                            request.tools() != null && !request.tools().isEmpty());
                 }
                 // 无工具却编造 taskId → 先强制 tool 一轮；仍失败则服务端入队（不中断本机控制）
                 if (localAssist && !dispatchedLocal && answerClaimsMissingTaskId(answer) && forcedDispatchAttempts < 1) {
@@ -1858,14 +1831,6 @@ public class AgentLoopService {
             out.remove(out.size() - 1);
         }
         return out;
-    }
-
-    private static boolean isBlankAssistantContent(Message m) {
-        if (m == null) return true;
-        if (m.toolCalls() != null && !m.toolCalls().isEmpty()) return false;
-        String c = m.content();
-        return c == null || c.isBlank()
-                || "(无内容)".equals(c) || "(无文字回复)".equals(c);
     }
 
     private String lastUserMessageFrom(List<Message> context, String taskDescription) {
