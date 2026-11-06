@@ -44,6 +44,18 @@ export interface SystemConfigItem {
   description: string | null
 }
 
+/** LLM 服务商（一把 Key） */
+export interface SystemProviderDto {
+  id: number
+  code: string
+  displayName: string
+  description: string | null
+  enabled: boolean
+  sortOrder: number
+  apiKeySet: boolean
+  apiKeyMasked: string | null
+}
+
 /** 宿主机负载历史记录，用于时间轴图表 */
 export interface HostLoadMetric {
   hostName: string

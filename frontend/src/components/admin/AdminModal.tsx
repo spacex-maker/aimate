@@ -1,6 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import type React from 'react'
-import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { X, Activity, Box, Briefcase, RefreshCw, Users, SlidersHorizontal, Receipt } from 'lucide-react'
 import { AdminAgentsPanel } from './AdminAgentsPanel'
@@ -436,132 +435,19 @@ export function ContainerMonitorContent() {
   )
 }
 
-function KeyPicker({
-  value,
-  options,
-  disabled,
-  onChange,
-}: {
-  value?: string | null
-  options: { value: string; label: string }[]
-  disabled?: boolean
-  onChange: (next: string | null) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null)
-  const buttonRef = useRef<HTMLButtonElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-
-  useLayoutEffect(() => {
-    if (!open || !buttonRef.current) {
-      setMenuPos(null)
-      return
-    }
-    const rect = buttonRef.current.getBoundingClientRect()
-    const width = Math.max(rect.width, 160)
-    const menuHeight = 208
-    const spaceBelow = window.innerHeight - rect.bottom - 8
-    const openUp = spaceBelow < Math.min(menuHeight, 120) && rect.top > spaceBelow
-    const top = openUp
-      ? Math.max(8, rect.top - Math.min(menuHeight, rect.top - 8) - 4)
-      : rect.bottom + 4
-    let left = rect.left
-    if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8)
-    setMenuPos({ top, left, width })
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    const onDoc = (event: MouseEvent) => {
-      const target = event.target as Node
-      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return
-      setOpen(false)
-    }
-    const onScroll = () => setOpen(false)
-    document.addEventListener('mousedown', onDoc)
-    window.addEventListener('scroll', onScroll, true)
-    window.addEventListener('resize', onScroll)
-    return () => {
-      document.removeEventListener('mousedown', onDoc)
-      window.removeEventListener('scroll', onScroll, true)
-      window.removeEventListener('resize', onScroll)
-    }
-  }, [open])
-
-  const current = options.find((option) => option.value === value)
-  const label = current?.label ?? (value ? value : '未指定')
-  return (
-    <>
-      <button
-        ref={buttonRef}
-        type="button"
-        disabled={disabled}
-        onClick={() => setOpen((v) => !v)}
-        className="w-full text-left bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white/80 hover:border-white/30 disabled:opacity-40"
-      >
-        {label}
-      </button>
-      {open &&
-        menuPos &&
-        createPortal(
-          <div
-            ref={menuRef}
-            className="fixed z-[80] max-h-52 overflow-auto rounded border border-white/15 bg-[#161616] shadow-xl"
-            style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}
-          >
-            <button
-              type="button"
-              onClick={() => {
-                onChange(null)
-                setOpen(false)
-              }}
-              className="block w-full text-left px-2 py-1.5 text-xs text-white/50 hover:bg-white/10"
-            >
-              未指定
-            </button>
-            {options.length === 0 ? (
-              <div className="px-2 py-1.5 text-[11px] text-white/35">请先在系统配置添加 DeepSeek Key</div>
-            ) : (
-              options.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => {
-                    onChange(option.value)
-                    setOpen(false)
-                  }}
-                  className={clsx(
-                    'block w-full text-left px-2 py-1.5 text-xs hover:bg-white/10',
-                    option.value === value ? 'text-blue-300' : 'text-white/80'
-                  )}
-                >
-                  {option.label}
-                </button>
-              ))
-            )}
-          </div>,
-          document.body
-        )}
-    </>
-  )
-}
-
 export function ModelManageContent() {
   const queryClient = useQueryClient()
   const { data: models = [], isLoading } = useQuery({
     queryKey: ['admin-system-models'],
     queryFn: () => adminApi.listAllSystemModels(),
   })
-  const { data: configs = [] } = useQuery({
-    queryKey: ['admin-system-configs'],
-    queryFn: () => adminApi.listSystemConfigs(),
+  const { data: providers = [] } = useQuery({
+    queryKey: ['admin-system-providers'],
+    queryFn: () => adminApi.listSystemProviders(),
   })
-  const keyOptions = configs
-    .filter((c) => c.configKey.startsWith('DEEPSEEK_API_KEY'))
-    .map((c) => ({
-      value: c.configKey,
-      label: c.description?.trim() || c.configKey,
-    }))
+  const providerKeyMap = new Map(
+    providers.map((p) => [p.code.toLowerCase(), p] as const)
+  )
 
   const updateMutation = useMutation({
     mutationFn: ({ id, body }: { id: number; body: Parameters<typeof adminApi.updateSystemModel>[1] }) =>
@@ -599,7 +485,9 @@ export function ModelManageContent() {
     <div className="h-full flex flex-col">
       <div className="mb-4">
         <h3 className="text-sm font-medium text-white">模型管理</h3>
-        <p className="text-xs text-white/40 mt-0.5">开启/关闭、API Key、提示，以及用户扣费积分倍率与系统成本单价（CNY/百万 token）。</p>
+        <p className="text-xs text-white/40 mt-0.5">
+          开启/关闭、提示与计费参数。API Key 按服务商统一配置（侧栏「服务商管理」）。
+        </p>
       </div>
       {isLoading ? (
         <div className="text-center py-10 text-white/40 text-sm">加载中...</div>
@@ -618,7 +506,7 @@ export function ModelManageContent() {
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 min-w-[8rem]">提示</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-28">积分/1K</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-36">成本 CNY/1M</th>
-                <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-44">API Key</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-40">服务商密钥</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-24">启用</th>
               </tr>
             </thead>
@@ -749,15 +637,20 @@ export function ModelManageContent() {
                     </div>
                   </td>
                   <td className="py-2 px-3">
-                    <KeyPicker
-                      value={m.apiKeyConfigKey}
-                      options={keyOptions}
-                      disabled={updateMutation.isPending}
-                      onChange={(next) => {
-                        if (m.id == null) return
-                        updateMutation.mutate({ id: m.id, body: { apiKeyConfigKey: next ?? '' } })
-                      }}
-                    />
+                    {(() => {
+                      const p = providerKeyMap.get((m.provider || '').toLowerCase())
+                      if (!p) {
+                        return <span className="text-amber-300/80">服务商未登记</span>
+                      }
+                      if (!p.apiKeySet) {
+                        return <span className="text-amber-300/80">未配置 Key</span>
+                      }
+                      return (
+                        <span className="font-mono text-[11px] text-emerald-300/90" title={p.displayName}>
+                          {p.apiKeyMasked}
+                        </span>
+                      )
+                    })()}
                   </td>
                   <td className="py-2 px-3">
                     <button
@@ -2011,15 +1904,12 @@ const HIDDEN_SYSTEM_KEYS = new Set([
 
 export function SystemConfigContent() {
   const queryClient = useQueryClient()
-  const [keyLabel, setKeyLabel] = useState('')
-  const [keyValue, setKeyValue] = useState('')
   const [tavilyValue, setTavilyValue] = useState('')
   const [tavilyDirty, setTavilyDirty] = useState(false)
   const { data: configs = [], isLoading } = useQuery({
     queryKey: ['admin-system-configs'],
     queryFn: () => adminApi.listSystemConfigs(),
   })
-  const deepseekKeys = configs.filter((c) => DEEPSEEK_KEY.test(c.configKey))
   const tavilyConfig = configs.find((c) => c.configKey === 'TAVILY_API_KEY')
   const otherConfigs = configs.filter(
     (c) => !DEEPSEEK_KEY.test(c.configKey) && !HIDDEN_SYSTEM_KEYS.has(c.configKey),
@@ -2040,17 +1930,6 @@ export function SystemConfigContent() {
     onError: (e: Error) => toast.error(e.message),
   })
 
-  const createMutation = useMutation({
-    mutationFn: () => adminApi.createDeepseekKey({ configValue: keyValue.trim(), description: keyLabel.trim() || undefined }),
-    onSuccess: () => {
-      toast.success('已添加 DeepSeek API Key')
-      setKeyLabel('')
-      setKeyValue('')
-      queryClient.invalidateQueries({ queryKey: ['admin-system-configs'] })
-    },
-    onError: (e: Error) => toast.error(e.message),
-  })
-
   const tavilyMutation = useMutation({
     mutationFn: (value: string) => adminApi.upsertTavilyKey({ configValue: value.trim() }),
     onSuccess: (_res, value) => {
@@ -2059,15 +1938,6 @@ export function SystemConfigContent() {
       setTavilyValue(value.trim())
       queryClient.invalidateQueries({ queryKey: ['admin-system-configs'] })
       queryClient.invalidateQueries({ queryKey: ['admin-billing-settings'] })
-    },
-    onError: (e: Error) => toast.error(e.message),
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: number) => adminApi.deleteSystemConfig(id),
-    onSuccess: () => {
-      toast.success('已删除')
-      queryClient.invalidateQueries({ queryKey: ['admin-system-configs'] })
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -2099,7 +1969,7 @@ export function SystemConfigContent() {
       <div className="mb-4">
         <h3 className="text-sm font-medium text-white">系统配置</h3>
         <p className="text-xs text-white/40 mt-0.5">
-          可添加多条 DeepSeek API Key；配置 Tavily 后，用户「联网搜索」即走 Tavily，并可在计费管理中核算搜索成本。
+          模型 API Key 请到「服务商管理」。此处配置 Tavily 联网搜索等全局参数。
         </p>
       </div>
 
@@ -2152,68 +2022,6 @@ export function SystemConfigContent() {
           >
             清空 Key
           </button>
-        )}
-      </div>
-
-      <div className="mb-4 rounded-lg border border-white/10 p-3 space-y-3">
-        <div className="text-xs text-white/70">DeepSeek API Key</div>
-        <div className="flex flex-col sm:flex-row gap-2">
-          <input
-            type="text"
-            value={keyLabel}
-            onChange={(e) => setKeyLabel(e.target.value)}
-            placeholder="名称，如主 Key"
-            className="sm:w-40 bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white placeholder:text-white/25 focus:outline-none focus:ring-1 focus:ring-blue-500/70"
-          />
-          <input
-            type="password"
-            value={keyValue}
-            onChange={(e) => setKeyValue(e.target.value)}
-            placeholder="sk-..."
-            autoComplete="off"
-            className="flex-1 bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white placeholder:text-white/25 focus:outline-none focus:ring-1 focus:ring-blue-500/70"
-          />
-          <button
-            type="button"
-            disabled={!keyValue.trim() || createMutation.isPending}
-            onClick={() => createMutation.mutate()}
-            className="px-3 py-1.5 rounded bg-blue-600 text-xs text-white disabled:opacity-40"
-          >
-            添加
-          </button>
-        </div>
-        {deepseekKeys.length === 0 ? (
-          <div className="text-[11px] text-white/35">还没有 DeepSeek Key。</div>
-        ) : (
-          <div className="space-y-2">
-            {deepseekKeys.map((c) => (
-              <div key={c.id} className="grid grid-cols-1 sm:grid-cols-[8rem_1fr_auto] gap-2 items-center">
-                <input
-                  type="text"
-                  value={c.description ?? ''}
-                  onChange={handleChange(c, 'description')}
-                  onBlur={() => handleBlur(c)}
-                  placeholder="名称"
-                  className="bg-black/10 border border-white/10 rounded px-2 py-1.5 text-xs text-white"
-                />
-                <input
-                  type="password"
-                  value={c.configValue ?? ''}
-                  onChange={handleChange(c, 'configValue')}
-                  onBlur={() => handleBlur(c)}
-                  autoComplete="off"
-                  className="bg-black/20 border border-white/15 rounded px-2 py-1.5 text-xs text-white"
-                />
-                <button
-                  type="button"
-                  onClick={() => deleteMutation.mutate(c.id)}
-                  className="text-[11px] text-white/45 hover:text-red-300"
-                >
-                  删除
-                </button>
-              </div>
-            ))}
-          </div>
         )}
       </div>
 

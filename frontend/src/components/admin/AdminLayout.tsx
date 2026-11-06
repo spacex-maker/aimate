@@ -4,6 +4,7 @@ import {
   BookOpen,
   Bot,
   Box,
+  Building2,
   LogOut,
   Receipt,
   SlidersHorizontal,
@@ -14,6 +15,7 @@ import { CLOUD_SITE_ORIGIN } from '../../lib/host'
 
 const nav = [
   { to: '/admin', end: true, label: '模型管理', icon: Box },
+  { to: '/admin/providers', end: false, label: '服务商管理', icon: Building2 },
   { to: '/admin/agents', end: false, label: '官方 Agent', icon: Bot },
   { to: '/admin/knowledge', end: false, label: '官方知识库', icon: BookOpen },
   { to: '/admin/host', end: false, label: '主机状态', icon: Activity },

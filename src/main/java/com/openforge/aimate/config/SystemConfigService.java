@@ -1,9 +1,12 @@
 package com.openforge.aimate.config;
 
 import com.openforge.aimate.domain.SystemConfig;
+import com.openforge.aimate.domain.SystemProvider;
 import com.openforge.aimate.repository.SystemConfigRepository;
+import com.openforge.aimate.repository.SystemProviderRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.util.Locale;
 import java.util.Optional;
@@ -19,9 +22,14 @@ public class SystemConfigService {
     public static final String RAG_MEMORY_ENABLED = "RAG_MEMORY_ENABLED";
 
     private final SystemConfigRepository systemConfigRepository;
+    private final SystemProviderRepository systemProviderRepository;
 
-    public SystemConfigService(SystemConfigRepository systemConfigRepository) {
+    public SystemConfigService(
+            SystemConfigRepository systemConfigRepository,
+            SystemProviderRepository systemProviderRepository
+    ) {
         this.systemConfigRepository = systemConfigRepository;
+        this.systemProviderRepository = systemProviderRepository;
     }
 
     public boolean exists(String configKey) {
@@ -39,10 +47,17 @@ public class SystemConfigService {
     }
 
     /**
-     * 模型未指定 key 时的默认值。DeepSeek 取第一条已填写的 DEEPSEEK_API_KEY。
+     * Resolve API key by provider code (system_providers), with legacy system_config fallback.
      */
     public Optional<String> defaultApiKeyForProvider(String provider) {
-        if (provider == null || !provider.equalsIgnoreCase("deepseek")) return Optional.empty();
+        if (!StringUtils.hasText(provider)) return Optional.empty();
+        Optional<String> fromProvider = systemProviderRepository.findByCodeIgnoreCase(provider.trim())
+                .map(SystemProvider::getApiKey)
+                .filter(StringUtils::hasText);
+        if (fromProvider.isPresent()) {
+            return fromProvider;
+        }
+        if (!provider.equalsIgnoreCase("deepseek")) return Optional.empty();
         return systemConfigRepository.findAllByOrderByConfigKeyAsc().stream()
                 .filter(c -> c.getConfigKey() != null && c.getConfigKey().matches("DEEPSEEK_API_KEY(_[A-Za-z0-9]{1,40})?"))
                 .map(SystemConfig::getConfigValue)

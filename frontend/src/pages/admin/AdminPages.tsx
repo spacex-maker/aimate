@@ -6,15 +6,28 @@ import {
   UserManageContent,
 } from '../../components/admin/AdminModal'
 import { AdminAgentsPanel } from '../../components/admin/AdminAgentsPanel'
+import { AdminProvidersPanel } from '../../components/admin/AdminProvidersPanel'
 export { AdminKnowledgePage } from './AdminKnowledgePage'
 
 export function AdminModelsPage() {
   return (
     <div>
       <h1 className="admin-page__title">模型管理</h1>
-      <p className="admin-page__lead">系统模型与 Key 配置</p>
+      <p className="admin-page__lead">系统模型开关、排序与计费参数；API Key 在服务商管理</p>
       <div className="mt-4">
         <ModelManageContent />
+      </div>
+    </div>
+  )
+}
+
+export function AdminProvidersPage() {
+  return (
+    <div>
+      <h1 className="admin-page__title">服务商管理</h1>
+      <p className="admin-page__lead">一个服务商一把 API Key，供其下全部模型共用</p>
+      <div className="mt-4">
+        <AdminProvidersPanel />
       </div>
     </div>
   )

@@ -11,6 +11,7 @@ import {
   AdminHostPage,
   AdminKnowledgePage,
   AdminModelsPage,
+  AdminProvidersPage,
   AdminSystemPage,
   AdminUsersPage,
 } from './pages/admin/AdminPages'
@@ -67,6 +68,7 @@ export default function AdminApp() {
           }
         >
           <Route path="/admin" element={<AdminModelsPage />} />
+          <Route path="/admin/providers" element={<AdminProvidersPage />} />
           <Route path="/admin/agents" element={<AdminAgentsPage />} />
           <Route path="/admin/knowledge" element={<AdminKnowledgePage />} />
           <Route path="/admin/host" element={<AdminHostPage />} />

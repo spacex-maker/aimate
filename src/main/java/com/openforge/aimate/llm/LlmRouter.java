@@ -181,7 +181,10 @@ public class LlmRouter {
 
                     String apiKey = config.apiKey();
                     String keyConfigKey = m.getApiKeyConfigKey();
-                    if (keyConfigKey != null && !keyConfigKey.isBlank()) {
+                    String providerKey = systemConfigService.defaultApiKeyForProvider(m.getProvider()).orElse(null);
+                    if (providerKey != null && !providerKey.isBlank()) {
+                        apiKey = providerKey;
+                    } else if (keyConfigKey != null && !keyConfigKey.isBlank()) {
                         apiKey = systemConfigService.get(keyConfigKey).orElse(apiKey);
                     }
 

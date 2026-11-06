@@ -8,8 +8,11 @@ import type {
   ComponentStatusDto,
   HostLoadMetric,
   SystemConfigItem,
+  SystemProviderDto,
   UserContainerStatus,
 } from '../types/admin'
+
+export type { SystemProviderDto }
 import { http } from './httpClient'
 
 export const adminApi = {
@@ -99,6 +102,42 @@ export const adminApi = {
     const query = qs.toString()
     return http<HostLoadMetric[]>('/api/admin/host-metrics' + (query ? `?${query}` : ''))
   },
+
+  listSystemProviders: () =>
+    http<SystemProviderDto[]>('/api/admin/system-providers'),
+
+  createSystemProvider: (body: {
+    code: string
+    displayName: string
+    description?: string
+    apiKey?: string
+    enabled?: boolean
+    sortOrder?: number
+  }) =>
+    http<SystemProviderDto>('/api/admin/system-providers', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+
+  updateSystemProvider: (
+    id: number,
+    body: {
+      displayName?: string
+      description?: string | null
+      apiKey?: string | null
+      enabled?: boolean
+      sortOrder?: number
+    }
+  ) =>
+    http<SystemProviderDto>(`/api/admin/system-providers/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+
+  deleteSystemProvider: (id: number) =>
+    http<void>(`/api/admin/system-providers/${id}`, { method: 'DELETE' }),
 
   /** 管理员：获取全部系统配置项 */
   listSystemConfigs: () =>

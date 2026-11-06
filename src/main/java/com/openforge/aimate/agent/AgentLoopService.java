@@ -405,18 +405,15 @@ public class AgentLoopService {
                     .formatted(m.getId(), provider));
         }
 
-        String apiKey = null;
-        if (keyCfg != null && !keyCfg.isBlank()) {
-            // 1) 先按 config_key 去 system_config 查；
-            apiKey = systemConfigService.get(keyCfg).orElse(null);
-            // 2) 查不到则视为直接在 system_models 里存了明文 key，本身就是 sk-xxx；
-            if (apiKey == null || apiKey.isBlank()) {
-                apiKey = keyCfg;
-            }
-        }
-
+        // Prefer provider-level key (服务商管理); fall back to legacy per-model config key.
+        String apiKey = systemConfigService.defaultApiKeyForProvider(provider).orElse(null);
         if (apiKey == null || apiKey.isBlank()) {
-            apiKey = systemConfigService.defaultApiKeyForProvider(provider).orElse(null);
+            if (keyCfg != null && !keyCfg.isBlank()) {
+                apiKey = systemConfigService.get(keyCfg).orElse(null);
+                if (apiKey == null || apiKey.isBlank()) {
+                    apiKey = keyCfg; // plaintext sk-xxx stored on the model row
+                }
+            }
         }
 
         if (apiKey == null || apiKey.isBlank()) {

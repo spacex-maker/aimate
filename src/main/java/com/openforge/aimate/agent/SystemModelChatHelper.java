@@ -65,15 +65,12 @@ public class SystemModelChatHelper {
         if (!StringUtils.hasText(baseUrl) || !StringUtils.hasText(model)) {
             throw new IllegalStateException("SystemModel 缺少 base_url 或 model_id");
         }
-        String apiKey = null;
-        if (StringUtils.hasText(keyCfg)) {
+        String apiKey = systemConfigService.defaultApiKeyForProvider(provider).orElse(null);
+        if (!StringUtils.hasText(apiKey) && StringUtils.hasText(keyCfg)) {
             apiKey = systemConfigService.get(keyCfg).orElse(null);
             if (!StringUtils.hasText(apiKey)) {
                 apiKey = keyCfg;
             }
-        }
-        if (!StringUtils.hasText(apiKey)) {
-            apiKey = systemConfigService.defaultApiKeyForProvider(provider).orElse(null);
         }
         if (!StringUtils.hasText(apiKey)) {
             throw new IllegalStateException("SystemModel 未配置 API Key");
