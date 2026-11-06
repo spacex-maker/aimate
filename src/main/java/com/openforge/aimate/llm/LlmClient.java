@@ -198,12 +198,20 @@ public class LlmClient {
                 || msg.toolCalls() == null
                 || msg.toolCalls().isEmpty();
         if (emptyContent && noTools) {
-            log.warn("[LlmClient:{}] stream returned empty content/tool_calls; falling back to non-stream chat. model={}",
-                    config.name(), model);
+            log.warn("[LlmClient:{}] stream returned empty content/tool_calls; falling back to non-stream chat. model={} finish={} id={}",
+                    config.name(), model,
+                    streamed.choices() != null && !streamed.choices().isEmpty()
+                            ? streamed.choices().get(0).finishReason() : null,
+                    streamed.id());
             ChatResponse fallback = chat(effectiveRequest);
             Message fb = fallback.firstMessage();
             if (fb != null && fb.content() != null && !fb.content().isBlank()) {
                 callbacks.onContent().accept(fb.content());
+            } else {
+                log.warn("[LlmClient:{}] non-stream fallback also empty. model={} finish={}",
+                        config.name(), model,
+                        fallback.choices() != null && !fallback.choices().isEmpty()
+                                ? fallback.choices().get(0).finishReason() : null);
             }
             return fallback;
         }

@@ -74,7 +74,14 @@ public class SessionMessageService {
     private List<Message> toMessages(List<SessionMessage> rows) {
         List<Message> out = new ArrayList<>(rows.size());
         for (SessionMessage row : rows) {
-            out.add(toMessage(row));
+            Message m = toMessage(row);
+            // 跳过无文字且无工具的 assistant（含历史「(无文字回复)」），避免打断 user/assistant 轮次。
+            if ("assistant".equals(m.role())
+                    && (m.content() == null || m.content().isBlank())
+                    && (m.toolCalls() == null || m.toolCalls().isEmpty())) {
+                continue;
+            }
+            out.add(m);
         }
         return out;
     }
@@ -547,11 +554,14 @@ public class SessionMessageService {
                 log.warn("[SessionMessage] Failed to deserialize tool_calls for id {}: {}", row.getId(), e.getMessage());
             }
         }
+        // 送模保持空 content 为 null/blank，禁止填「(无内容)」——否则末条 assistant 占位会让 Qwen 等直接空回复。
+        // 前端展示的空态由 loadDtos / 落库占位文案处理，不在这里伪造。
         String content = row.getContent();
         if ("assistant".equals(row.getRole())
-                && (content == null || content.isBlank())
+                && content != null
+                && (content.equals("(无内容)") || content.equals("(无文字回复)"))
                 && (toolCalls == null || toolCalls.isEmpty())) {
-            content = "(无内容)";
+            content = null;
         }
         String reasoningContent = "assistant".equals(row.getRole())
                 ? (row.getThinkingContent() != null ? row.getThinkingContent() : "")

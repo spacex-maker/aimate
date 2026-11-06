@@ -28,10 +28,13 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessage, 
     List<SessionMessage> findMainMessagesBySessionIdAndSeqBeforeOrderBySeqDesc(
             @Param("sessionId") Long sessionId, @Param("beforeSeq") int beforeSeq, Pageable pageable);
 
-    /** 某条回复的上下文：主序消息 seq≤maxSeq 或归属该回复的消息，按 seq 升序（已压缩排除的不送模）。 */
+    /**
+     * 某条回复的上下文：主序消息 seq&lt;maxSeq（不含当前占位 assistant）或归属该回复的消息，按 seq 升序。
+     * 必须排除正在 ANSWERING 的空占位条，否则末条已是 assistant，Qwen 等模型会直接返回空 content。
+     */
     @Query("SELECT m FROM SessionMessage m WHERE m.agentSession.id = :sessionId " +
            "AND m.excludeFromContext = false " +
-           "AND ((m.replyToMessageId IS NULL AND m.seq <= :maxSeq) OR m.replyToMessageId = :replyToId) " +
+           "AND ((m.replyToMessageId IS NULL AND m.seq < :maxSeq) OR m.replyToMessageId = :replyToId) " +
            "ORDER BY m.seq ASC")
     List<SessionMessage> findContextForReply(@Param("sessionId") Long sessionId,
                                              @Param("maxSeq") int maxSeq,

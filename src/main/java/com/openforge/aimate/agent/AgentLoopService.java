@@ -1798,13 +1798,18 @@ public class AgentLoopService {
     /** 发给 LLM 前去掉末尾的「空占位 assistant」，避免 API 报 content/tool_calls 必填。 */
     private List<Message> trimTrailingEmptyAssistant(List<Message> context) {
         if (context == null || context.isEmpty()) return context;
-        Message last = context.get(context.size() - 1);
-        if ("assistant".equals(last.role())
-                && (last.content() == null || last.content().isBlank())
-                && (last.toolCalls() == null || last.toolCalls().isEmpty())) {
-            return new ArrayList<>(context.subList(0, context.size() - 1));
+        List<Message> out = new ArrayList<>(context);
+        while (!out.isEmpty()) {
+            Message last = out.get(out.size() - 1);
+            if (!"assistant".equals(last.role())) break;
+            boolean noTools = last.toolCalls() == null || last.toolCalls().isEmpty();
+            String c = last.content();
+            boolean emptyText = c == null || c.isBlank()
+                    || "(无内容)".equals(c) || "(无文字回复)".equals(c);
+            if (!(noTools && emptyText)) break;
+            out.remove(out.size() - 1);
         }
-        return new ArrayList<>(context);
+        return out;
     }
 
     private String lastUserMessageFrom(List<Message> context, String taskDescription) {
