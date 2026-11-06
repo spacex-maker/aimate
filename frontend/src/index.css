@@ -2114,6 +2114,60 @@ a.auth-gate__cta {
   padding-top: 6px;
 }
 
+/* —— Product bridge (Soul / ICA) —— */
+.agent-land__product-bridge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px 28px;
+  margin: 28px auto 0;
+  max-width: 52rem;
+  padding: clamp(18px, 2.8vw, 26px) clamp(18px, 3vw, 28px);
+  background:
+    linear-gradient(120deg, rgba(56, 189, 248, 0.08), transparent 55%),
+    rgba(8, 12, 20, 0.72);
+  border: 1px solid rgba(232, 238, 248, 0.12);
+}
+
+.agent-land__product-bridge--ica {
+  background:
+    linear-gradient(120deg, rgba(167, 139, 250, 0.08), transparent 55%),
+    rgba(8, 12, 20, 0.72);
+  border-color: rgba(167, 139, 250, 0.22);
+}
+
+.agent-land__product-bridge-copy {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.agent-land__product-bridge-kicker {
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--al-cyan);
+}
+
+.agent-land__product-bridge--ica .agent-land__product-bridge-kicker {
+  color: #c4b5fd;
+}
+
+.agent-land__product-bridge-copy > p:last-child {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--al-mute);
+}
+
+.agent-land__btn-ghost--compact {
+  flex-shrink: 0;
+  padding: 0.55rem 1rem;
+  font-size: 0.78rem;
+}
+
 /* —— Soul —— */
 .agent-land__soul-grid {
   display: grid;

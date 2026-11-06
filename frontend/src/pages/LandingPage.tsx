@@ -8,12 +8,13 @@ import {
   Eye,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
+import { SOUL_SITE_ORIGIN } from '../lib/host'
 import { CollabStoryReel } from '../components/landing/CollabStoryReel'
 
 const NAV: { label: string; href?: string; to?: string }[] = [
   { href: '#hire', label: '招聘同事' },
-  { href: '#memory', label: '记得你' },
-  { href: '#focus', label: '长对话' },
+  { href: '#memory', label: 'Soul 记忆' },
+  { href: '#focus', label: '智能压缩' },
   { href: '#collab', label: '一起干活' },
   { href: '#trust', label: '放心交给它' },
   { to: '/emergence', label: '智能涌现' },
@@ -39,31 +40,31 @@ const HIRE_SCENES = [
 
 const MEMORY_SCENES = [
   {
-    title: '规矩讲一次就够',
-    desc: '语气、禁忌、常用口径——它记住了，下次直接按你的方式做事。',
+    title: '每位同事，一颗独立 Soul',
+    desc: '偏好、禁忌、已定结论写进灵魂档案——跟着这位 Agent 走，而不是散落在某个聊天窗口。',
   },
   {
-    title: '跨周项目不断档',
-    desc: '上周定的结论还在。打开对话，它知道你们走到哪一步。',
+    title: '跨会话、跨工具可延续',
+    desc: '今天在 Chat 里定下的规矩，明天仍能召回。Soul 是记忆层，Chat 是协作现场。',
   },
   {
-    title: '记忆你看得见',
-    desc: '想核对它记得什么，随时打开查看。重要的事，人说了算。',
+    title: '记忆你看得见、管得住',
+    desc: '想核对它记得什么，可在 Chat 预览，也可打开 Soul 平台查看完整档案与心智图。',
   },
 ]
 
 const FOCUS_SCENES = [
   {
-    title: '聊得再久，也不糊',
-    desc: '长项目、长排障、长讨论——它始终抓得住当前目标，而不是越聊越散。',
+    title: '自己知道何时该压',
+    desc: '占用压力、可折段落、对话占比一起判断——不是死数「轮次够不够」，超限也能安全收束。',
   },
   {
-    title: '重要的事钉在桌上',
-    desc: '关键约束与决定不会被冲掉。你钉住的，它一直记得。',
+    title: '钉住与近期原文保留',
+    desc: '关键约束钉在桌上；早期轮次收成结构化状态。聊天记录仍可回看，不等于删故事。',
   },
   {
-    title: '完整记录还在',
-    desc: '聊天历史可以回看。喂给模型时更聪明，不等于把故事删掉。',
+    title: '架构可迭代',
+    desc: '智能压缩 ICA 分层管线（策略可升版）。今天 v1.0，明天可换更强策略，不必推倒重来。',
   },
 ]
 
@@ -229,6 +230,16 @@ export function LandingPage() {
         </nav>
         <div className="agent-land__nav-actions">
           <a
+            href={SOUL_SITE_ORIGIN}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="agent-land__ext"
+            title="Soul 记忆平台"
+          >
+            Soul
+            <ArrowUpRight className="w-3.5 h-3.5" />
+          </a>
+          <a
             href="https://aimatex.com"
             target="_blank"
             rel="noopener noreferrer"
@@ -329,9 +340,12 @@ export function LandingPage() {
       <section id="memory" className="agent-land__section agent-land__section--alt">
         <Reveal>
           <div className="agent-land__section-head agent-land__section-head--apple">
-            <p className="agent-land__eye">Memory</p>
+            <p className="agent-land__eye">Soul</p>
             <h2>它记得你怎么工作。</h2>
-            <p>偏好、口径、已定的事——跟着这位同事走，而不是散落在某个聊天窗口里。</p>
+            <p>
+              Chat 已接入 Soul：每位 Agent 绑定独立灵魂。偏好、口径、已定的事跟着同事走，
+              而不是散落在某个聊天窗口里。
+            </p>
           </div>
         </Reveal>
         <div className="agent-land__statement-grid">
@@ -343,16 +357,36 @@ export function LandingPage() {
           ))}
         </div>
         <Reveal>
-          <p className="agent-land__tech-line">Soul · 跨会话可延续的记忆层</p>
+          <div className="agent-land__product-bridge">
+            <div className="agent-land__product-bridge-copy">
+              <p className="agent-land__product-bridge-kicker">Chat × Soul</p>
+              <p>
+                对话现场在 Chat，耐久记忆在 Soul。压缩前也可把关键事实写入灵魂，
+                长项目不断档、跨工具仍认得你。
+              </p>
+            </div>
+            <a
+              href={SOUL_SITE_ORIGIN}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="agent-land__btn agent-land__btn--sm"
+            >
+              <span>打开 Soul</span>
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </a>
+          </div>
         </Reveal>
       </section>
 
       <section id="focus" className="agent-land__section">
         <Reveal>
           <div className="agent-land__section-head agent-land__section-head--apple">
-            <p className="agent-land__eye">Focus</p>
+            <p className="agent-land__eye">Intelligent Compress</p>
             <h2>聊到很晚。<br />它依然清醒。</h2>
-            <p>长项目不怕拖。目标钉住，旧讨论收束，新回合接着干——不用从零复述。</p>
+            <p>
+              长项目不怕拖。智能压缩（ICA）按占用压力与可折段落决定何时收束——
+              目标钉住，旧讨论折进结构化状态，新回合接着干。
+            </p>
           </div>
         </Reveal>
         <div className="agent-land__focus-band">
@@ -364,7 +398,18 @@ export function LandingPage() {
           ))}
         </div>
         <Reveal>
-          <p className="agent-land__tech-line">工业级上下文管理 · 对齐前沿 Agent 工作流</p>
+          <div className="agent-land__product-bridge agent-land__product-bridge--ica">
+            <div className="agent-land__product-bridge-copy">
+              <p className="agent-land__product-bridge-kicker">智能压缩 · ICA v1.0</p>
+              <p>
+                分层管线：裁剪摘要稿 → 结构化 SessionState → 可选写入 Soul → 排除老化轮次。
+                策略版本可迭代，宣传名与版本号随产品升级。
+              </p>
+            </div>
+            <a href="#memory" className="agent-land__btn-ghost agent-land__btn-ghost--compact">
+              也看看 Soul
+            </a>
+          </div>
         </Reveal>
       </section>
 
@@ -460,6 +505,9 @@ export function LandingPage() {
       <footer className="agent-land__footer">
         <span>© {new Date().getFullYear()} AIMATEX</span>
         <Link to="/emergence">智能涌现</Link>
+        <a href={SOUL_SITE_ORIGIN} target="_blank" rel="noopener noreferrer">
+          Soul
+        </a>
         <a href="https://aimatex.com" target="_blank" rel="noopener noreferrer">
           aimatex.com
         </a>
