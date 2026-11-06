@@ -118,6 +118,14 @@ export interface ContextUsageDto {
   compressUrgency?: 'none' | 'suggest' | 'urgent' | string
   /** 为何建议 / 为何暂不可压 */
   compressHint?: string | null
+  /** ICA id，如 aimate-ica */
+  compressArchitecture?: string
+  /** 产品名，如 智能压缩 */
+  compressArchitectureName?: string
+  /** 架构 semver，如 1.0.0 */
+  compressVersion?: string
+  /** 策略版本 id，如 ica-policy-v1 */
+  compressPolicyId?: string
 }
 
 /** 当前用户首选模型（用于恢复聊天输入框默认选中项） */
@@ -204,6 +212,7 @@ export type EventType =
   | 'STEP_START'
   | 'STEP_COMPLETE'
   | 'THINKING'
+  | 'ANSWER_TOKEN'
   | 'TOOL_CALL'
   | 'TOOL_RESULT'
   | 'TOOL_OUTPUT_CHUNK'

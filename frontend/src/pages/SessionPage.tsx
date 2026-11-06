@@ -337,6 +337,26 @@ export function SessionPage({
       case 'THINKING':
         if (event.content) dispatch({ type: 'THINKING_TOKEN', token: event.content })
         break
+      case 'ANSWER_TOKEN': {
+        if (!event.content) break
+        const token = event.content
+        queryClient.setQueryData(
+          ['session-messages', sessionId],
+          (prev: ChatMessageDto[] | undefined) => {
+            const list = prev ?? []
+            for (let i = list.length - 1; i >= 0; i--) {
+              const m = list[i]
+              if (m.role === 'assistant' && m.messageStatus === 'ANSWERING') {
+                const next = [...list]
+                next[i] = { ...m, content: (m.content || '') + token }
+                return next
+              }
+            }
+            return list
+          },
+        )
+        break
+      }
       case 'TOOL_CALL':
         dispatch({ type: 'TOOL_CALL', call: event.payload as ToolCall })
         break

@@ -26,6 +26,38 @@ const BLOCKS_AREA_HEIGHT = 'min(calc(100dvh - 16rem), 340px)'
 /** 外层滚动底部留白，对应 AgentInputBox fixed 占用高度 */
 const STREAM_BOTTOM_PAD = 'pb-52 sm:pb-56'
 
+/** 该消息是否产生过思考正文（与当前全局思考开关无关） */
+function messageHasThinking(msg: ChatMessageDto): boolean {
+  if (msg.thinkingContent && msg.thinkingContent.trim()) return true
+  return !!(msg.thinkingBlocks && msg.thinkingBlocks.some(
+    (b) => b.kind === 'thinking' && !!(b.content && String(b.content).trim()),
+  ))
+}
+
+/** 该消息是否有工具调用过程 */
+function messageHasTools(msg: ChatMessageDto): boolean {
+  if (msg.toolCalls && msg.toolCalls.length > 0) return true
+  return !!(msg.thinkingBlocks && msg.thinkingBlocks.some((b) => b.kind === 'toolCall'))
+}
+
+/** 实时流是否含思考正文或工具（纯 iteration 不算，避免关思考仍出思考区） */
+function blocksHaveProcess(blocks: StreamBlock[]): boolean {
+  return blocks.some((b) => {
+    if (b.kind === 'thinking') return !!(b.content && b.content.trim())
+    if (b.kind === 'toolCall') return true
+    return false
+  })
+}
+
+function processPanelTitle(blocks: StreamBlock[]): string {
+  const hasThinking = blocks.some((b) => b.kind === 'thinking' && !!(b.content && b.content.trim()))
+  const hasTools = blocks.some((b) => b.kind === 'toolCall')
+  if (hasThinking && hasTools) return '思考与工具调用'
+  if (hasThinking) return '思考过程'
+  if (hasTools) return '工具调用'
+  return '过程'
+}
+
 function BlocksArea({ blocks, isRunning }: { blocks: StreamBlock[]; isRunning: boolean }) {
   const lastBlock = blocks[blocks.length - 1]
   const streamingThinkingInProgress = isRunning && lastBlock?.kind === 'thinking' && !lastBlock.complete
@@ -54,7 +86,7 @@ function BlocksArea({ blocks, isRunning }: { blocks: StreamBlock[]; isRunning: b
     <div className="w-full min-w-0 flex flex-col rounded-xl border border-white/10 bg-white/[0.06] overflow-hidden" style={{ height: BLOCKS_AREA_HEIGHT }}>
       <div className="px-3 py-2 flex items-center gap-2 border-b border-white/5 bg-white/[0.03] shrink-0">
         <Brain className="w-4 h-4 shrink-0 text-white/50" />
-        <span className="text-xs font-medium text-white/60">思考与工具调用</span>
+        <span className="text-xs font-medium text-white/60">{processPanelTitle(blocks)}</span>
         {streamingThinkingInProgress && <span className="text-white/40 text-xs">（输出中…）</span>}
       </div>
       {/* 按事件顺序：思考内容、第 N 轮、工具调用、思考、… 在同一流中显示 */}
@@ -237,8 +269,9 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
         return -1
       })()
     : -1
-  const attachLiveToAnswering = lastAnsweringIndex >= 0 && blocks.length > 0 && !showBlocksInline
-  const showBlocksAtBottom = blocks.length > 0 && !showBlocksInline && !attachLiveToAnswering
+  const liveHasProcess = blocksHaveProcess(blocks)
+  const attachLiveToAnswering = lastAnsweringIndex >= 0 && liveHasProcess && !showBlocksInline
+  const showBlocksAtBottom = liveHasProcess && !showBlocksInline && !attachLiveToAnswering
 
   // 监听外层对话区域的滚动，仅在用户本来就在底部附近时才自动滚到底，避免打断用户上滑查看历史
   useEffect(() => {
@@ -304,7 +337,12 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
                             </button>
                           )}
                         </div>
-                        <BlocksArea blocks={blocks} isRunning={isRunning} />
+                        {liveHasProcess ? (
+                          <div className="mb-2">
+                            <BlocksArea blocks={blocks} isRunning={isRunning} />
+                          </div>
+                        ) : null}
+                        <MarkdownContent content={assistantMsg.content || ''} className="break-words" />
                       </div>
                     </div>
                   </div>
@@ -323,20 +361,16 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
                     </div>
                   )}
                   {/* AI 回复消息卡上方：思考（展开后含思考文字 + 工具调用，工具显示在思考内容下方） */}
-                  {msg.role === 'assistant' && (
-                    (msg.thinkingBlocks && msg.thinkingBlocks.length > 0) ||
-                    msg.thinkingContent ||
-                    (msg.toolCalls && msg.toolCalls.length > 0)
-                  ) && (
+                  {msg.role === 'assistant' && (messageHasThinking(msg) || messageHasTools(msg)) && (
                     <div className="w-full min-w-0 mb-2">
                       <button
                         type="button"
                         onClick={() => setExpandedThinkingIndex(prev => (prev === i ? null : i))}
                         className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium text-white/60 hover:text-white/90 hover:bg-white/10 border border-white/10 hover:border-white/20 transition-colors shrink-0"
-                        title={expandedThinkingIndex === i ? '收起' : '点击查阅思考过程与工具调用'}
+                        title={expandedThinkingIndex === i ? '收起' : (messageHasThinking(msg) ? '点击查阅思考过程与工具调用' : '点击查阅工具调用')}
                       >
                         <Brain className="w-4 h-4 shrink-0 text-white/50" />
-                        <span>思考</span>
+                        <span>{messageHasThinking(msg) ? '思考' : '工具'}</span>
                         {msg.toolCalls && msg.toolCalls.length > 0 && (
                           <span className="text-white/40">（含 {msg.toolCalls.length} 次工具调用）</span>
                         )}
@@ -497,7 +531,11 @@ export function ThinkingStream({ userMessage, historyMessages, topSlot, blocks, 
                               <span className="text-amber-400/90 text-xs">再次回答中…</span>
                             </div>
                           )}
-                          <BlocksArea blocks={blocks} isRunning={isRunning} />
+                          {liveHasProcess ? (
+                            <div className="mb-2">
+                              <BlocksArea blocks={blocks} isRunning={isRunning} />
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     </div>

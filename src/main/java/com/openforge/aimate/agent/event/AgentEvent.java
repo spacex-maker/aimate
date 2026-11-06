@@ -42,6 +42,10 @@ public record AgentEvent(
         return new AgentEvent(sessionId, EventType.THINKING, token, null, iteration, now(), nextEventId());
     }
 
+    public static AgentEvent answerToken(String sessionId, String token, int iteration) {
+        return new AgentEvent(sessionId, EventType.ANSWER_TOKEN, token, null, iteration, now(), nextEventId());
+    }
+
     public static AgentEvent iterationStart(String sessionId, int iteration) {
         return new AgentEvent(sessionId, EventType.ITERATION_START, null, null, iteration, now(), nextEventId());
     }

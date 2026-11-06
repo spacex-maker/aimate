@@ -812,7 +812,12 @@ public class AgentLoopService {
             StringBuilder currentIterReasoning = new StringBuilder();
 
             StreamCallbacks callbacks = new StreamCallbacks(
-                    t -> { /* content 仅由 LlmClient 累积并作为 firstMessage().content() 返回，不推思考 */ },
+                    t -> {
+                        // 正文流式推到气泡；与思考开关无关（关思考时也要实时出字）
+                        if (t != null && !t.isEmpty()) {
+                            publisher.publish(AgentEvent.answerToken(sessionId, t, finalIter));
+                        }
+                    },
                     t -> {
                         publisher.publish(AgentEvent.thinking(sessionId, t, finalIter));
                         currentIterReasoning.append(t);

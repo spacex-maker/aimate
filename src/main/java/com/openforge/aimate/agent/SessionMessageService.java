@@ -386,10 +386,11 @@ public class SessionMessageService {
                 // 兼容：未显式传入 blocks 时，基于 thinking/toolCalls 构造简化版本
                 blocksToStore = buildThinkingBlocks(msg, contentToStore, thinkingContent);
             }
-            if (blocksToStore != null && !blocksToStore.isEmpty()) {
+            if (blocksToStore != null && !blocksToStore.isEmpty() && hasMeaningfulProcessBlocks(blocksToStore)) {
                 String json = objectMapper.writeValueAsString(blocksToStore);
                 msg.setThinkingBlocksJson(json);
             } else {
+                // 无思考正文、无工具调用时不落 thinking_blocks，避免关思考仍出现「思考」入口
                 msg.setThinkingBlocksJson(null);
             }
         } catch (Exception e) {
@@ -413,6 +414,22 @@ public class SessionMessageService {
      * - toolCall：每次工具调用的名称/参数/结果
      * - finalAnswer：最终回答内容
      */
+
+    /** 是否含真实思考正文或工具调用（纯 iteration/finalAnswer 不算）。 */
+    private boolean hasMeaningfulProcessBlocks(List<StreamBlockDto> blocks) {
+        if (blocks == null || blocks.isEmpty()) return false;
+        for (StreamBlockDto b : blocks) {
+            if (b == null || b.kind() == null) continue;
+            if ("thinking".equals(b.kind()) && b.content() != null && !b.content().isBlank()) {
+                return true;
+            }
+            if ("toolCall".equals(b.kind())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private List<StreamBlockDto> buildThinkingBlocks(SessionMessage msg, String content, String thinkingContent) {
         List<StreamBlockDto> out = new ArrayList<>();
         String idBase = "m-" + msg.getId();

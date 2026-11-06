@@ -18,8 +18,11 @@ public enum EventType {
     /** A step finished. payload = step index + title + optional summary. */
     STEP_COMPLETE,
 
-    /** A single token from the streaming LLM (during step 2). */
+    /** A single token from the streaming LLM reasoning / CoT. */
     THINKING,
+
+    /** Final-answer text token (streamed into the assistant bubble; independent of thinking). */
+    ANSWER_TOKEN,
 
     /** The Agent is about to invoke a tool. payload = ToolCall. */
     TOOL_CALL,
