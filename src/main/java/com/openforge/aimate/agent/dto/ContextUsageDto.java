@@ -3,10 +3,10 @@ package com.openforge.aimate.agent.dto;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import com.openforge.aimate.agent.compress.IntelligentCompressArch;
 
 /**
- * Session context usage estimate (Cursor-style ring).
- * Compress policy fields filled by ContextCompressService from pressure + foldable turns + dialogue share.
+ * Session context usage estimate (Cursor-style ring) + ICA compress policy snapshot.
  */
 @JsonNaming(PropertyNamingStrategies.LowerCamelCaseStrategy.class)
 public record ContextUsageDto(
@@ -21,7 +21,15 @@ public record ContextUsageDto(
         @JsonProperty("compressAvailable") boolean compressAvailable,
         /** none | suggest | urgent */
         @JsonProperty("compressUrgency") String compressUrgency,
-        @JsonProperty("compressHint") String compressHint
+        @JsonProperty("compressHint") String compressHint,
+        /** e.g. aimate-ica */
+        @JsonProperty("compressArchitecture") String compressArchitecture,
+        /** Product name, e.g. 智能压缩 */
+        @JsonProperty("compressArchitectureName") String compressArchitectureName,
+        /** Semver, e.g. 1.0.0 */
+        @JsonProperty("compressVersion") String compressVersion,
+        /** Active policy id, e.g. ica-policy-v1 */
+        @JsonProperty("compressPolicyId") String compressPolicyId
 ) {
     public static final double COMPRESS_SUGGEST_RATIO = 0.72;
     public static final double COMPRESS_URGENT_RATIO = 0.90;
@@ -41,7 +49,11 @@ public record ContextUsageDto(
         boolean suggest = !"none".equals(urgency);
         return new ContextUsageDto(
                 used, limit, percent, messages, tools, system, conversation,
-                suggest, false, urgency, null);
+                suggest, false, urgency, null,
+                IntelligentCompressArch.ID,
+                IntelligentCompressArch.DISPLAY_NAME_ZH,
+                IntelligentCompressArch.VERSION,
+                IntelligentCompressArch.POLICY_ID);
     }
 
     public ContextUsageDto withCompressPolicy(boolean recommended, boolean available, String urgency, String hint) {
@@ -50,7 +62,11 @@ public record ContextUsageDto(
                 systemTokens, conversationTokens,
                 recommended, available,
                 urgency != null ? urgency : compressUrgency,
-                hint);
+                hint,
+                IntelligentCompressArch.ID,
+                IntelligentCompressArch.DISPLAY_NAME_ZH,
+                IntelligentCompressArch.VERSION,
+                IntelligentCompressArch.POLICY_ID);
     }
 
     @Deprecated

@@ -1,6 +1,9 @@
 package com.openforge.aimate.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.openforge.aimate.agent.compress.CompressPlan;
+import com.openforge.aimate.agent.compress.CompressPolicyV1;
+import com.openforge.aimate.agent.compress.IntelligentCompressArch;
 import com.openforge.aimate.agent.dto.ContextCompressResultDto;
 import com.openforge.aimate.agent.dto.ContextUsageDto;
 import com.openforge.aimate.agent.dto.SessionState;
@@ -24,12 +27,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 会话上下文压缩管线（业界 Hybrid + 四层）：
+ * 会话上下文压缩管线 — {@link IntelligentCompressArch}（智能压缩 / ICA）。
  * <ul>
  *   <li>L0 确定性裁剪（摘要用稿）</li>
  *   <li>L1 结构化 SessionState JSON 滚动合并</li>
  *   <li>L2 write-before-compact → Soul（记忆开启时）</li>
  *   <li>L3 exclude 老化消息；pin 永不 exclude；近期原文保留</li>
+ *   <li>P  多因素策略（占用压力 / 可折段落 / 对话占比 / 自适应保留窗）</li>
  * </ul>
  */
 @Slf4j
@@ -83,11 +87,11 @@ public class ContextCompressService {
             }
         }
 
-        ContextCompressPolicy.Plan plan = ContextCompressPolicy.analyze(rest, before, KEEP_TOOL_ROUNDS);
+        CompressPlan plan = IntelligentCompressArch.activePolicy().analyze(rest, before, KEEP_TOOL_ROUNDS);
         before = before.withCompressPolicy(plan.recommended(), plan.available(), plan.urgency(), plan.hint());
 
         if (!plan.available()) {
-            return new ContextCompressResultDto(
+            return ContextCompressResultDto.of(
                     false, 0, rest.size(), 0, before, before,
                     plan.hint() != null ? plan.hint() : "暂不可压缩"
             );
@@ -131,7 +135,7 @@ public class ContextCompressService {
         int minFold = plan.minFoldable();
         if (old.size() < minFold) {
             String hint = plan.hint() != null ? plan.hint() : "可压缩段落不足（含钉住消息），请稍后再试";
-            return new ContextCompressResultDto(
+            return ContextCompressResultDto.of(
                     false, 0, recent.size() + pinnedKept.size(), 0, before, before, hint
             );
         }
@@ -163,21 +167,22 @@ public class ContextCompressService {
                 next.entityCount(), next.constraintCount(),
                 before.usedTokens(), after.usedTokens());
 
-        return new ContextCompressResultDto(
+        return ContextCompressResultDto.of(
                 true,
                 old.size(),
                 recent.size() + pinnedKept.size(),
                 summaryJson.length(),
                 before,
                 after,
-                "已压缩为结构化会话状态；钉住与近期原文保留；聊天记录仍可回看"
+                IntelligentCompressArch.marketingLineZh()
+                        + "：已折为结构化会话状态；钉住与近期原文保留；聊天记录仍可回看"
         );
     }
 
-    /** @deprecated use {@link ContextCompressPolicy#computeKeepRecentCount} */
+    /** @deprecated use {@link CompressPolicyV1#computeKeepRecentCount} */
     static int computeKeepRecentCount(List<SessionMessage> rest) {
-        return ContextCompressPolicy.computeKeepRecentCount(
-                rest, ContextCompressPolicy.keepFloor(ContextCompressPolicy.Band.NORMAL), KEEP_TOOL_ROUNDS);
+        return CompressPolicyV1.computeKeepRecentCount(
+                rest, CompressPolicyV1.keepFloor(CompressPlan.PressureBand.NORMAL), KEEP_TOOL_ROUNDS);
     }
 
     /**
@@ -193,7 +198,7 @@ public class ContextCompressService {
             if ("system".equalsIgnoreCase(m.getRole())) continue;
             rest.add(m);
         }
-        ContextCompressPolicy.Plan plan = ContextCompressPolicy.analyze(rest, raw, KEEP_TOOL_ROUNDS);
+        CompressPlan plan = IntelligentCompressArch.activePolicy().analyze(rest, raw, KEEP_TOOL_ROUNDS);
         return raw.withCompressPolicy(plan.recommended(), plan.available(), plan.urgency(), plan.hint());
     }
 

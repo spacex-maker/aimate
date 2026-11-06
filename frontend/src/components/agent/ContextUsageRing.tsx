@@ -33,6 +33,8 @@ export interface ContextUsageRingProps {
   compressUrgency?: string
   /** 策略说明 */
   compressHint?: string | null
+  compressArchitectureName?: string | null
+  compressVersion?: string | null
   /** 有会话时可手动压缩（单聊） */
   sessionId?: string | null
   systemModelId?: number | null
@@ -75,6 +77,8 @@ export function ContextUsageRing({
   compressAvailable,
   compressUrgency = 'none',
   compressHint = null,
+  compressArchitectureName = null,
+  compressVersion = null,
   sessionId = null,
   systemModelId = null,
   compressFn = null,
@@ -253,6 +257,11 @@ export function ContextUsageRing({
               )}
               <p className="mb-2 text-[10px] text-white/35 leading-relaxed">
                 按当前模型上限估算。压缩为结构化会话状态 + 近期原文；聊天记录不删。
+              </p>
+              <p className="mb-2 text-[10px] text-white/30 leading-relaxed">
+                {(compressArchitectureName || '智能压缩')}
+                {compressVersion ? ` v${String(compressVersion).replace(/^v/, '')}` : ' v1.0.0'}
+                <span className="text-white/20"> · 可迭代策略</span>
               </p>
               <ul className="space-y-1 text-[11px] text-white/55">
                 {sys > 0 && (

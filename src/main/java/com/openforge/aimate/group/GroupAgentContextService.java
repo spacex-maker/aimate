@@ -2,8 +2,9 @@ package com.openforge.aimate.group;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openforge.aimate.agent.AgentPromptService;
-import com.openforge.aimate.agent.ContextCompressPolicy;
 import com.openforge.aimate.agent.ContextCompressService;
+import com.openforge.aimate.agent.compress.CompressPlan;
+import com.openforge.aimate.agent.compress.IntelligentCompressArch;
 import com.openforge.aimate.agent.ContextUsageService;
 import com.openforge.aimate.agent.dto.ContextCompressResultDto;
 import com.openforge.aimate.agent.dto.ContextUsageDto;
@@ -105,10 +106,10 @@ public class GroupAgentContextService {
         ContextUsageDto before = estimateForMember(g, am, systemModelId);
 
         List<GroupMessage> active = loadActiveChatMessages(g.getId(), ctx.getFoldedThroughMessageId());
-        ContextCompressPolicy.Plan plan = ContextCompressPolicy.analyzeGroup(active.size(), 0, before);
+        CompressPlan plan = IntelligentCompressArch.activePolicy().analyzeGroup(active.size(), 0, before);
         before = before.withCompressPolicy(plan.recommended(), plan.available(), plan.urgency(), plan.hint());
         if (!plan.available()) {
-            return new ContextCompressResultDto(
+            return ContextCompressResultDto.of(
                     false, 0, active.size(), 0, before, before,
                     plan.hint() != null ? plan.hint() : "暂不可压缩"
             );
@@ -122,7 +123,7 @@ public class GroupAgentContextService {
                 ? new ArrayList<>()
                 : new ArrayList<>(active.subList(0, active.size() - keepCount));
         if (old.size() < plan.minFoldable()) {
-            return new ContextCompressResultDto(
+            return ContextCompressResultDto.of(
                     false, 0, recent.size(), 0, before, before,
                     plan.hint() != null ? plan.hint() : "可压缩段落不足，请稍后再试"
             );
@@ -147,14 +148,15 @@ public class GroupAgentContextService {
         log.info("[GroupAgentContext] compress group={} agent={} foldedThrough={} before={} after={}",
                 g.getPublicId(), ua.getName(), foldThrough, before.usedTokens(), after.usedTokens());
 
-        return new ContextCompressResultDto(
+        return ContextCompressResultDto.of(
                 true,
                 old.size(),
                 recent.size(),
                 summaryJson.length(),
                 before,
                 after,
-                "已压缩为结构化会话状态；近期原文保留；群聊记录仍可回看"
+                IntelligentCompressArch.marketingLineZh()
+                        + "：已折为结构化会话状态；近期原文保留；群聊记录仍可回看"
         );
     }
 
@@ -280,7 +282,7 @@ public class GroupAgentContextService {
         int toolsTokens = 0;
         ContextUsageDto raw = ContextUsageDto.of(systemTokens, conversationTokens, toolsTokens, limit);
         int activeApprox = structured != null ? structured.size() : 0;
-        ContextCompressPolicy.Plan plan = ContextCompressPolicy.analyzeGroup(activeApprox, 0, raw);
+        CompressPlan plan = IntelligentCompressArch.activePolicy().analyzeGroup(activeApprox, 0, raw);
         return raw.withCompressPolicy(plan.recommended(), plan.available(), plan.urgency(), plan.hint());
     }
 

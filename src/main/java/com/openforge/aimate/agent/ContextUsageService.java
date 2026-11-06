@@ -1,5 +1,7 @@
 package com.openforge.aimate.agent;
 
+import com.openforge.aimate.agent.compress.CompressPlan;
+import com.openforge.aimate.agent.compress.IntelligentCompressArch;
 import com.openforge.aimate.agent.dto.ContextUsageDto;
 import com.openforge.aimate.domain.AgentSession;
 import com.openforge.aimate.domain.SessionMessage;
@@ -48,7 +50,7 @@ public class ContextUsageService {
             if ("system".equalsIgnoreCase(m.getRole())) continue;
             rest.add(m);
         }
-        ContextCompressPolicy.Plan plan = ContextCompressPolicy.analyze(rest, raw, 3);
+        CompressPlan plan = IntelligentCompressArch.activePolicy().analyze(rest, raw, 3);
         return raw.withCompressPolicy(plan.recommended(), plan.available(), plan.urgency(), plan.hint());
     }
 

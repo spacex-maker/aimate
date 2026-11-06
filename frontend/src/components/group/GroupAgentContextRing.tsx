@@ -60,6 +60,8 @@ export function GroupAgentContextRing({
       compressAvailable={usage.compressAvailable}
       compressUrgency={usage.compressUrgency}
       compressHint={usage.compressHint}
+      compressArchitectureName={usage.compressArchitectureName}
+      compressVersion={usage.compressVersion}
       compressFn={() => groupsApi.compressAgentContext(publicId, userAgentId)}
       invalidateKeys={[['group-agent-context-usage', publicId]]}
     >

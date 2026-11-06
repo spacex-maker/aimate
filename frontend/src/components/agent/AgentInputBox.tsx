@@ -840,6 +840,8 @@ export function AgentInputBox({
                 compressAvailable={contextUsage?.compressAvailable}
                 compressUrgency={contextUsage?.compressUrgency}
                 compressHint={contextUsage?.compressHint}
+                compressArchitectureName={contextUsage?.compressArchitectureName}
+                compressVersion={contextUsage?.compressVersion}
                 sessionId={sessionId}
                 systemModelId={selectedSource === 'SYSTEM' ? selectedModelId : null}
               />
