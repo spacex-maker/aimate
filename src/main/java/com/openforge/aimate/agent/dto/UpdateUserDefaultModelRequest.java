@@ -10,6 +10,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public record UpdateUserDefaultModelRequest(
         @JsonProperty("source")       String source,
         @JsonProperty("systemModelId") Long systemModelId,
-        @JsonProperty("userApiKeyId") Long userApiKeyId
+        @JsonProperty("userApiKeyId") Long userApiKeyId,
+        /** 可选：更新思考模式开关；不传则保持原值。 */
+        @JsonProperty("thinkingEnabled") Boolean thinkingEnabled
 ) {}
 

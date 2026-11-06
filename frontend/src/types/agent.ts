@@ -89,6 +89,8 @@ export interface SystemModelDto {
   tip?: string | null
   /** 当前仅 DeepSeek V4.1 Flash 为 true */
   supportsVision?: boolean
+  /** 是否支持思考模式（选模型旁展示开关） */
+  supportsThinking?: boolean
   /** 模型上下文窗口上限（token），用于占用率圆环 */
   contextWindowTokens?: number
   pointsPer1kPromptTokens?: number
@@ -117,6 +119,8 @@ export interface UserDefaultModelDto {
   source?: 'SYSTEM' | 'USER_KEY' | null
   systemModelId?: number | null
   userApiKeyId?: number | null
+  /** 用户是否开启思考模式（仅 supportsThinking 模型生效） */
+  thinkingEnabled?: boolean | null
 }
 
 /** 用户自有模型（来自 user_api_keys, key_type=LLM），用于聊天输入框「我的模型」区域 */

@@ -779,25 +779,23 @@ public class AgentLoopService {
             // 本轮必须 thinking=disabled，且只用 dispatch 工具 + tool_choice=required。
             boolean forcingDispatch = forceDispatchTool && localAssist;
             Object toolChoice = "auto";
-            ChatRequest.Thinking thinkingMode = null;
             if (forcingDispatch) {
                 tools.clear();
                 tools.add(buildDispatchLocalTaskTool());
                 haveNames.clear();
                 haveNames.add("dispatch_local_task");
                 toolChoice = "required";
-                thinkingMode = ChatRequest.Thinking.disabled();
                 forceDispatchTool = false;
             }
-            ChatRequest request = ChatRequest.builder()
+            ChatRequest.ChatRequestBuilder reqBuilder = ChatRequest.builder()
                     .model("")
                     .messages(context)
                     .tools(tools.isEmpty() ? null : tools)
                     .toolChoice(tools.isEmpty() ? "none" : toolChoice)
                     .temperature(0.7)
-                    .maxTokens(16384)
-                    .thinking(thinkingMode)
-                    .build();
+                    .maxTokens(16384);
+            applyThinkingPreference(reqBuilder, session, forcingDispatch);
+            ChatRequest request = reqBuilder.build();
             final int finalIter = iteration;
             StringBuilder currentIterReasoning = new StringBuilder();
 
@@ -914,15 +912,15 @@ public class AgentLoopService {
                 }
                 if (answer.isEmpty() && thinkingContent.isEmpty() && !forcingDispatch) {
                     log.warn("[Agent:{}] empty LLM content+reasoning on iter {}; retry once without tools", sessionId, iteration);
-                    ChatRequest plain = ChatRequest.builder()
+                    ChatRequest.ChatRequestBuilder plainBuilder = ChatRequest.builder()
                             .model("")
                             .messages(context)
                             .tools(null)
                             .toolChoice("none")
                             .temperature(0.7)
-                            .maxTokens(4096)
-                            .thinking(ChatRequest.Thinking.disabled())
-                            .build();
+                            .maxTokens(8192);
+                    applyThinkingPreference(plainBuilder, session, true);
+                    ChatRequest plain = plainBuilder.build();
                     try {
                         ChatResponse retry = llmCaller.apply(plain, new StreamCallbacks(
                                 t -> {},
@@ -1096,6 +1094,31 @@ public class AgentLoopService {
                 .map(com.openforge.aimate.domain.UserDefaultModel::getSystemModel)
                 .map(com.openforge.aimate.domain.SystemModel::isSupportsVision)
                 .orElse(false);
+    }
+
+    /** 当前用户是否对所选系统模型开启了思考模式。 */
+    private boolean sessionThinkingEnabled(AgentSession session) {
+        Long userId = session != null ? session.getUserId() : null;
+        if (userId == null) return false;
+        return userDefaultModelRepository.findByUserId(userId)
+                .filter(udm -> "SYSTEM".equalsIgnoreCase(udm.getSource()))
+                .filter(com.openforge.aimate.domain.UserDefaultModel::isThinkingEnabled)
+                .map(com.openforge.aimate.domain.UserDefaultModel::getSystemModel)
+                .map(com.openforge.aimate.domain.SystemModel::isSupportsThinking)
+                .orElse(false);
+    }
+
+    /**
+     * 构造请求上的思考开关：DeepSeek 用 thinking.type，Ollama/Qwen/Aimodel 用 think 布尔。
+     * forcingDispatch 等场景必须关思考（否则 tool_choice 常 400）。
+     */
+    private void applyThinkingPreference(ChatRequest.ChatRequestBuilder b, AgentSession session, boolean forceDisable) {
+        boolean on = !forceDisable && sessionThinkingEnabled(session);
+        if (on) {
+            b.thinking(ChatRequest.Thinking.enabled()).think(true);
+        } else {
+            b.thinking(ChatRequest.Thinking.disabled()).think(false);
+        }
     }
 
     private String buildSystemPrompt(AgentSession session) {

@@ -142,6 +142,7 @@ CREATE TABLE IF NOT EXISTS system_models (
     sort_order      INT             NOT NULL DEFAULT 100 COMMENT '排序权重，数值越小越靠前',
     enabled         TINYINT(1)      NOT NULL DEFAULT 1 COMMENT '是否在「切换模型」列表中展示',
     supports_vision TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '是否接受图片输入',
+    supports_thinking TINYINT(1)    NOT NULL DEFAULT 0 COMMENT '是否支持思考模式',
     context_window_tokens INT       NOT NULL DEFAULT 128000 COMMENT '模型上下文窗口上限（token）',
     description     VARCHAR(256)             COMMENT '简短说明，如能力或适用场景',
     tip             VARCHAR(128)             COMMENT '选模型时名称旁提示，如非高峰半价时段',
@@ -181,6 +182,7 @@ CREATE TABLE IF NOT EXISTS user_default_models (
     source          VARCHAR(16)     NOT NULL COMMENT 'SYSTEM=系统模型表, USER_KEY=用户 API Key 表',
     system_model_id BIGINT UNSIGNED          COMMENT 'source=SYSTEM 时：system_models.id',
     user_api_key_id BIGINT                  COMMENT 'source=USER_KEY 时：user_api_keys.id',
+    thinking_enabled TINYINT(1)     NOT NULL DEFAULT 0 COMMENT '用户是否开启思考模式（仅 supports_thinking 模型生效）',
 
     version         INT             NOT NULL DEFAULT 0,
     create_time     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -32,6 +32,7 @@ export const adminApi = {
     sortOrder?: number
     apiKeyConfigKey?: string | null
     tip?: string | null
+    supportsThinking?: boolean
     contextWindowTokens?: number
     pointsPer1kPromptTokens?: number
     pointsPer1kCompletionTokens?: number

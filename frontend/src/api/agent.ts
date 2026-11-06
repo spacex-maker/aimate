@@ -164,7 +164,12 @@ export const agentApi = {
     http<AvailableModelsDto>('/api/agent/user-default-model'),
 
   /** 更新当前登录用户的默认模型（聊天输入框最近一次选择） */
-  setUserDefaultModel: (body: { source: 'SYSTEM' | 'USER_KEY'; systemModelId?: number; userApiKeyId?: number }) =>
+  setUserDefaultModel: (body: {
+    source?: 'SYSTEM' | 'USER_KEY'
+    systemModelId?: number
+    userApiKeyId?: number
+    thinkingEnabled?: boolean
+  }) =>
     http<void>('/api/agent/user-default-model', {
       method: 'PUT',
       body: JSON.stringify(body),

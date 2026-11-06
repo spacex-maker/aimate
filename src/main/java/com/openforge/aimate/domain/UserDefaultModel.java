@@ -40,5 +40,11 @@ public class UserDefaultModel extends BaseEntity {
     @ManyToOne
     @JoinColumn(name = "user_api_key_id")
     private UserApiKey userApiKey;
+
+    /**
+     * 用户是否开启思考模式。仅当所选系统模型 {@code supportsThinking=true} 时生效。
+     */
+    @Column(name = "thinking_enabled", nullable = false)
+    private boolean thinkingEnabled = false;
 }
 

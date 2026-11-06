@@ -52,6 +52,9 @@ public record StreamingChunk(
             String role,
             String content,
             @JsonProperty("reasoning_content") String reasoningContent,
+            /** Ollama Qwen 等：思考增量在 reasoning / thinking 字段。 */
+            String reasoning,
+            String thinking,
             @JsonProperty("tool_calls") List<ToolCallDelta> toolCalls
     ) {}
 

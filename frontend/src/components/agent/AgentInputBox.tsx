@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Send, ImagePlus, SlidersHorizontal, Mic, ChevronDown, X, Smile } from 'lucide-react'
+import { Send, ImagePlus, SlidersHorizontal, Mic, ChevronDown, X, Smile, Brain } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { ToolSettingsPanel } from './ToolSettingsPanel'
 import { ContextUsageRing } from './ContextUsageRing'
@@ -115,8 +115,9 @@ export function AgentInputBox({
   const [internalModelId, setInternalModelId] = useState<number | null>(null)
   const [selectedSource, setSelectedSource] = useState<'SYSTEM' | 'USER_KEY'>('SYSTEM')
   const [selectedUserModel, setSelectedUserModel] = useState<UserModelDto | null>(null)
+  const [thinkingEnabled, setThinkingEnabled] = useState(false)
 
-  const { data: availableModels, isLoading: modelsLoading } = useQuery<AvailableModelsDto>({
+  const { data: availableModels, isLoading: modelsLoading, refetch: refetchModels } = useQuery<AvailableModelsDto>({
     queryKey: ['available-models'],
     queryFn: () => agentApi.getAvailableModels(),
     enabled: !plain,
@@ -132,6 +133,8 @@ export function AgentInputBox({
       ? systemModels.find((m) => m.id === selectedModelId) ?? null
       : null
   const visionOn = plain || (selectedSource === 'SYSTEM' && !!selectedModel?.supportsVision)
+  const showThinkingToggle =
+    !plain && selectedSource === 'SYSTEM' && !!selectedModel?.supportsThinking
   const canSubmit = (value.trim() !== '' || images.length > 0) && !isPending && !disabled
 
   useEffect(() => {
@@ -239,6 +242,8 @@ export function AgentInputBox({
     if (initializedFromDefault) return
     if ((!systemModels || systemModels.length === 0) && userModels.length === 0) return
 
+    setThinkingEnabled(!!userDefaultModel?.thinkingEnabled)
+
     // 用户首选为用户自有模型
     if (userDefaultModel?.source === 'USER_KEY' && userDefaultModel.userApiKeyId != null) {
       const u = userModels.find(x => x.id === userDefaultModel.userApiKeyId)
@@ -246,6 +251,7 @@ export function AgentInputBox({
         setSelectedSource('USER_KEY')
         setSelectedUserModel(u)
         setInternalModelId(null)
+        setThinkingEnabled(false)
         onModelChange?.({ source: 'USER_KEY', userApiKeyId: u.id ?? null })
         setInitializedFromDefault(true)
         return
@@ -279,10 +285,17 @@ export function AgentInputBox({
       setSelectedSource('USER_KEY')
       setSelectedUserModel(userModels[0])
       setInternalModelId(null)
+      setThinkingEnabled(false)
       onModelChange?.({ source: 'USER_KEY', userApiKeyId: userModels[0].id ?? null })
       setInitializedFromDefault(true)
     }
   }, [controlledModelId, initializedFromDefault, systemModels, userModels, userDefaultModel])
+
+  useEffect(() => {
+    if (!selectedModel?.supportsThinking && thinkingEnabled) {
+      setThinkingEnabled(false)
+    }
+  }, [selectedModel?.supportsThinking, thinkingEnabled])
 
   useEffect(() => {
     if (!toolsOpen || !toolsButtonRef.current) return
@@ -303,11 +316,19 @@ export function AgentInputBox({
       setSelectedUserModel(null)
       setInternalModelId(m.id)
     }
+    const nextThinking = m.supportsThinking ? thinkingEnabled : false
+    setThinkingEnabled(nextThinking)
     // 记住用户最近一次选择的系统模型（首选模型）
     if (m.id != null) {
-      agentApi.setUserDefaultModel({ source: 'SYSTEM', systemModelId: m.id }).catch(() => {
-        // 记忆失败不影响前端切换，不做打扰性提示
-      })
+      agentApi
+        .setUserDefaultModel({
+          source: 'SYSTEM',
+          systemModelId: m.id,
+          thinkingEnabled: nextThinking,
+        })
+        .catch(() => {
+          // 记忆失败不影响前端切换，不做打扰性提示
+        })
     }
     onModelChange?.({ source: 'SYSTEM', systemModelId: m.id ?? null })
     setModelOpen(false)
@@ -317,13 +338,33 @@ export function AgentInputBox({
     setSelectedSource('USER_KEY')
     setSelectedUserModel(u)
     setInternalModelId(null)
+    setThinkingEnabled(false)
     if (u.id != null) {
-      agentApi.setUserDefaultModel({ source: 'USER_KEY', userApiKeyId: u.id }).catch(() => {
+      agentApi.setUserDefaultModel({ source: 'USER_KEY', userApiKeyId: u.id, thinkingEnabled: false }).catch(() => {
         // 忽略记忆失败
       })
     }
     onModelChange?.({ source: 'USER_KEY', userApiKeyId: u.id ?? null })
     setModelOpen(false)
+  }
+
+  const handleToggleThinking = () => {
+    if (!showThinkingToggle || selectedModelId == null) return
+    const next = !thinkingEnabled
+    setThinkingEnabled(next)
+    agentApi
+      .setUserDefaultModel({
+        source: 'SYSTEM',
+        systemModelId: selectedModelId,
+        thinkingEnabled: next,
+      })
+      .then(() => {
+        refetchModels()
+      })
+      .catch(() => {
+        setThinkingEnabled(!next)
+        toast.error('思考模式切换失败')
+      })
   }
 
   useEffect(() => {
@@ -624,7 +665,7 @@ export function AgentInputBox({
             </div>
             <div className="flex items-center gap-0.5">
               {!plain && (
-              <div className="relative flex items-center">
+              <div className="relative flex items-center gap-0.5">
                 <button
                   ref={modelButtonRef}
                   type="button"
@@ -651,6 +692,22 @@ export function AgentInputBox({
                   ) : null}
                   <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />
                 </button>
+                {showThinkingToggle ? (
+                  <button
+                    type="button"
+                    onClick={handleToggleThinking}
+                    className={`flex items-center gap-1 px-1.5 py-1 rounded-lg text-[11px] transition-colors ${
+                      thinkingEnabled
+                        ? 'text-violet-200 bg-violet-500/20 border border-violet-400/30'
+                        : 'text-white/45 hover:text-white/75 hover:bg-white/10 border border-transparent'
+                    }`}
+                    title={thinkingEnabled ? '思考模式：开（点击关闭）' : '思考模式：关（点击开启）'}
+                    aria-pressed={thinkingEnabled}
+                  >
+                    <Brain className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span className="hidden sm:inline">思考</span>
+                  </button>
+                ) : null}
                 {!modelsLoading && modelOpen &&
                   modelAnchor &&
                   createPortal(
@@ -734,6 +791,11 @@ export function AgentInputBox({
                                           {m.supportsVision ? (
                                             <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none bg-sky-500/15 text-sky-300/90 border border-sky-500/25">
                                               视觉
+                                            </span>
+                                          ) : null}
+                                          {m.supportsThinking ? (
+                                            <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none bg-violet-500/15 text-violet-300/90 border border-violet-500/25">
+                                              思考
                                             </span>
                                           ) : null}
                                           {m.tip ? (

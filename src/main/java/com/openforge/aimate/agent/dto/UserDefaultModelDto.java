@@ -13,16 +13,17 @@ import com.openforge.aimate.domain.UserDefaultModel;
 public record UserDefaultModelDto(
         @JsonProperty("source")       String source,
         @JsonProperty("systemModelId") Long systemModelId,
-        @JsonProperty("userApiKeyId") Long userApiKeyId
+        @JsonProperty("userApiKeyId") Long userApiKeyId,
+        @JsonProperty("thinkingEnabled") Boolean thinkingEnabled
 ) {
     public static UserDefaultModelDto from(UserDefaultModel udm) {
         if (udm == null) {
-            return new UserDefaultModelDto(null, null, null);
+            return new UserDefaultModelDto(null, null, null, false);
         }
         String source = udm.getSource();
         Long systemId = udm.getSystemModel() != null ? udm.getSystemModel().getId() : null;
         Long keyId    = udm.getUserApiKey() != null ? udm.getUserApiKey().getId() : null;
-        return new UserDefaultModelDto(source, systemId, keyId);
+        return new UserDefaultModelDto(source, systemId, keyId, udm.isThinkingEnabled());
     }
 }
 

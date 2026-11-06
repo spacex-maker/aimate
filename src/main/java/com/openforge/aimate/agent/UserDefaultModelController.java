@@ -67,7 +67,7 @@ public class UserDefaultModelController {
         if (userId == null) {
             // 未登录时：无用户模型，无首选模型，系统模型列表照常返回
             userModels = java.util.List.of();
-            defaultModel = new UserDefaultModelDto(null, null, null);
+            defaultModel = new UserDefaultModelDto(null, null, null, false);
         } else {
             userModels = userApiKeyRepository.findByUserIdAndKeyTypeAndIsActiveTrue(
                             userId, com.openforge.aimate.domain.UserApiKey.KeyType.LLM)
@@ -76,7 +76,7 @@ public class UserDefaultModelController {
                     .toList();
             defaultModel = userDefaultModelRepository.findByUserId(userId)
                     .map(UserDefaultModelDto::from)
-                    .orElseGet(() -> new UserDefaultModelDto(null, null, null));
+                    .orElseGet(() -> new UserDefaultModelDto(null, null, null, false));
         }
 
         return ResponseEntity.ok(new AvailableModelsDto(userModels, systemModels, defaultModel));
@@ -90,43 +90,56 @@ public class UserDefaultModelController {
             throw new ResponseStatusException(UNAUTHORIZED, "未登录用户无法设置默认模型");
         }
 
-        String source = request.source();
-        if (source == null || source.isBlank()) {
-            throw new ResponseStatusException(BAD_REQUEST, "source 不能为空（SYSTEM 或 USER_KEY）");
-        }
-        String normalized = source.toUpperCase();
-
         UserDefaultModel entity = userDefaultModelRepository.findByUserId(userId)
                 .orElseGet(() -> {
                     UserDefaultModel udm = new UserDefaultModel();
                     udm.setUserId(userId);
+                    udm.setSource("SYSTEM");
                     return udm;
                 });
 
-        switch (normalized) {
-            case "SYSTEM" -> {
-                Long systemModelId = request.systemModelId();
-                if (systemModelId == null) {
-                    throw new ResponseStatusException(BAD_REQUEST, "source=SYSTEM 时必须提供 systemModelId");
+        String source = request.source();
+        if (source != null && !source.isBlank()) {
+            String normalized = source.toUpperCase();
+            switch (normalized) {
+                case "SYSTEM" -> {
+                    Long systemModelId = request.systemModelId();
+                    if (systemModelId == null) {
+                        throw new ResponseStatusException(BAD_REQUEST, "source=SYSTEM 时必须提供 systemModelId");
+                    }
+                    SystemModel model = systemModelRepository.findById(systemModelId)
+                            .orElseThrow(() -> new ResponseStatusException(BAD_REQUEST, "系统模型不存在: " + systemModelId));
+                    entity.setSource("SYSTEM");
+                    entity.setSystemModel(model);
+                    entity.setUserApiKey(null);
                 }
-                SystemModel model = systemModelRepository.findById(systemModelId)
-                        .orElseThrow(() -> new ResponseStatusException(BAD_REQUEST, "系统模型不存在: " + systemModelId));
-                entity.setSource("SYSTEM");
-                entity.setSystemModel(model);
-                entity.setUserApiKey(null);
-            }
-            case "USER_KEY" -> {
-                Long keyId = request.userApiKeyId();
-                if (keyId == null) {
-                    throw new ResponseStatusException(BAD_REQUEST, "source=USER_KEY 时必须提供 userApiKeyId");
+                case "USER_KEY" -> {
+                    Long keyId = request.userApiKeyId();
+                    if (keyId == null) {
+                        throw new ResponseStatusException(BAD_REQUEST, "source=USER_KEY 时必须提供 userApiKeyId");
+                    }
+                    UserApiKey key = userApiKeyRepository.findByIdAndUserId(keyId, userId)
+                            .orElseThrow(() -> new ResponseStatusException(BAD_REQUEST, "用户 API Key 不存在或不属于当前用户: " + keyId));
+                    entity.setSource("USER_KEY");
+                    entity.setUserApiKey(key);
+                    entity.setSystemModel(null);
+                    entity.setThinkingEnabled(false);
                 }
-                UserApiKey key = userApiKeyRepository.findByIdAndUserId(keyId, userId)
-                        .orElseThrow(() -> new ResponseStatusException(BAD_REQUEST, "用户 API Key 不存在或不属于当前用户: " + keyId));
-                entity.setSource("USER_KEY");
-                entity.setUserApiKey(key);
-                entity.setSystemModel(null);
+                default -> throw new ResponseStatusException(BAD_REQUEST, "非法 source 值: " + source);
             }
-            default -> throw new ResponseStatusException(BAD_REQUEST, "非法 source 值: " + source);
+        } else if (request.thinkingEnabled() == null) {
+            throw new ResponseStatusException(BAD_REQUEST, "source 与 thinkingEnabled 不能同时为空");
+        }
+
+        if (request.thinkingEnabled() != null) {
+            boolean on = request.thinkingEnabled();
+            if (on) {
+                SystemModel sm = entity.getSystemModel();
+                if (sm == null || !sm.isSupportsThinking()) {
+                    throw new ResponseStatusException(BAD_REQUEST, "当前模型不支持思考模式");
+                }
+            }
+            entity.setThinkingEnabled(on);
         }
 
         userDefaultModelRepository.save(entity);

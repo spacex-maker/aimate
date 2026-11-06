@@ -12,6 +12,8 @@ public record UpdateSystemModelRequest(
         @JsonProperty("apiKeyConfigKey") String apiKeyConfigKey,
         /** 选模型时名称旁的提示；空字符串表示清空。 */
         @JsonProperty("tip") String tip,
+        /** 是否支持思考模式；不传则不改。 */
+        @JsonProperty("supportsThinking") Boolean supportsThinking,
         /** 模型上下文窗口上限（token）；不传则不改。 */
         @JsonProperty("contextWindowTokens") Integer contextWindowTokens,
         @JsonProperty("pointsPer1kPromptTokens") Integer pointsPer1kPromptTokens,

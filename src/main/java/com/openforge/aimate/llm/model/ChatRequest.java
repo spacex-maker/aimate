@@ -32,13 +32,21 @@ public record ChatRequest(
          * DeepSeek 等：关闭思考链，避免 reasoning 吃光 max_tokens 导致 content 为空。
          * 例：{@code Thinking.disabled()}
          */
-        Thinking thinking
+        Thinking thinking,
+        /**
+         * Ollama / Qwen OpenAI 兼容：显式开关思考。Aimodel 网关据此切换 think 模型。
+         */
+        Boolean think
 ) {
     /** OpenAI 兼容扩展：thinking.type = disabled | enabled */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Thinking(String type) {
         public static Thinking disabled() {
             return new Thinking("disabled");
+        }
+
+        public static Thinking enabled() {
+            return new Thinking("enabled");
         }
     }
 

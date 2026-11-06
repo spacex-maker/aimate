@@ -646,6 +646,7 @@ export function ModelManageContent() {
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-28">积分/1K</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-36">成本 CNY/1M</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-40">服务商密钥</th>
+                <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-20" title="是否在选模型旁展示思考开关">思考</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-24">启用</th>
               </tr>
             </thead>
@@ -790,6 +791,19 @@ export function ModelManageContent() {
                         </span>
                       )
                     })()}
+                  </td>
+                  <td className="py-2 px-3">
+                    <AdminToggle
+                      checked={!!m.supportsThinking}
+                      disabled={updateMutation.isPending}
+                      onChange={() =>
+                        updateMutation.mutate({
+                          id: m.id,
+                          body: { supportsThinking: !m.supportsThinking },
+                        })
+                      }
+                      title={m.supportsThinking ? '支持思考（点击关闭）' : '不支持思考（点击开启）'}
+                    />
                   </td>
                   <td className="py-2 px-3">
                     <AdminToggle

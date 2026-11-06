@@ -205,13 +205,18 @@ public class LlmClient {
                     streamed.id());
             ChatResponse fallback = chat(effectiveRequest);
             Message fb = fallback.firstMessage();
-            if (fb != null && fb.content() != null && !fb.content().isBlank()) {
-                callbacks.onContent().accept(fb.content());
-            } else {
-                log.warn("[LlmClient:{}] non-stream fallback also empty. model={} finish={}",
-                        config.name(), model,
-                        fallback.choices() != null && !fallback.choices().isEmpty()
-                                ? fallback.choices().get(0).finishReason() : null);
+            if (fb != null) {
+                if (fb.reasoningContent() != null && !fb.reasoningContent().isBlank()) {
+                    callbacks.onReasoning().accept(fb.reasoningContent());
+                }
+                if (fb.content() != null && !fb.content().isBlank()) {
+                    callbacks.onContent().accept(fb.content());
+                } else {
+                    log.warn("[LlmClient:{}] non-stream fallback also empty. model={} finish={}",
+                            config.name(), model,
+                            fallback.choices() != null && !fallback.choices().isEmpty()
+                                    ? fallback.choices().get(0).finishReason() : null);
+                }
             }
             return fallback;
         }
@@ -272,9 +277,11 @@ public class LlmClient {
             StreamingChunk.DeltaMessage delta = choice.delta();
             if (delta == null) continue;
 
-            // ── Reasoning token (e.g. DeepSeek reasoning_content) ─────────────
-            if (delta.reasoningContent() != null && !delta.reasoningContent().isEmpty()) {
-                callbacks.onReasoning().accept(delta.reasoningContent());
+            // ── Reasoning token (DeepSeek reasoning_content / Ollama reasoning|thinking) ──
+            String reasoningDelta = firstNonBlank(
+                    delta.reasoningContent(), delta.reasoning(), delta.thinking());
+            if (reasoningDelta != null) {
+                callbacks.onReasoning().accept(reasoningDelta);
             }
 
             // ── Content token (final answer) ──────────────────────────────────
@@ -362,6 +369,14 @@ public class LlmClient {
             Thread.currentThread().interrupt();
             throw new LlmException("Network error calling provider [%s]".formatted(config.name()), e);
         }
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) return null;
+        for (String v : values) {
+            if (v != null && !v.isEmpty()) return v;
+        }
+        return null;
     }
 
     /** 日志中安全展示部分秘钥：前 4 + '***' + 后 4，空则标记为 <null>。 */

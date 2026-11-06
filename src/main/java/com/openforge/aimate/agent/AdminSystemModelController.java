@@ -69,6 +69,9 @@ public class AdminSystemModelController {
             String tip = request.tip().trim();
             model.setTip(tip.isEmpty() ? null : tip.substring(0, Math.min(tip.length(), 128)));
         }
+        if (request.supportsThinking() != null) {
+            model.setSupportsThinking(request.supportsThinking());
+        }
         if (request.contextWindowTokens() != null) {
             model.setContextWindowTokens(Math.max(1_000, request.contextWindowTokens()));
         }
