@@ -828,6 +828,30 @@ public class AgentLoopService {
 
             Message assistantMessage = response.firstMessage();
 
+            // 空回复恢复：先保留 tools 再试（Qwen/Ollama 常先空再能出 tool_calls）；勿一上来剥工具。
+            boolean hadToolsThisIter = request.tools() != null && !request.tools().isEmpty();
+            if (!forcingDispatch
+                    && !response.hasToolCalls()
+                    && isBlankAssistantContent(assistantMessage)
+                    && currentIterReasoning.isEmpty()) {
+                log.warn("[Agent:{}] empty LLM content+reasoning on iter {}; retry keeping tools={} max_tokens=8192",
+                        sessionId, iteration, hadToolsThisIter);
+                ChatRequest.ChatRequestBuilder retryBuilder = ChatRequest.builder()
+                        .model("")
+                        .messages(context)
+                        .tools(hadToolsThisIter ? request.tools() : null)
+                        .toolChoice(hadToolsThisIter ? "auto" : "none")
+                        .temperature(0.7)
+                        .maxTokens(8192);
+                applyThinkingPreference(retryBuilder, session, true);
+                try {
+                    response = llmCaller.apply(retryBuilder.build(), callbacks);
+                    assistantMessage = response.firstMessage();
+                } catch (Exception retryEx) {
+                    log.warn("[Agent:{}] empty-content retry (keep tools) failed: {}", sessionId, retryEx.getMessage());
+                }
+            }
+
             // 当前轮思考内容作为一个 thinking block（若有）
             if (!currentIterReasoning.isEmpty()) {
                 blocks.add(new com.openforge.aimate.agent.dto.StreamBlockDto(
@@ -910,31 +934,32 @@ public class AgentLoopService {
                     log.debug("[Agent:{}] LLM returned empty content but had reasoning ({} chars), using fallback.", sessionId, thinkingContent.length());
                     answer = FALLBACK_EMPTY_ANSWER;
                 }
-                if (answer.isEmpty() && thinkingContent.isEmpty() && !forcingDispatch) {
-                    log.warn("[Agent:{}] empty LLM content+reasoning on iter {}; retry once without tools", sessionId, iteration);
+                // 仍空且本轮曾带工具：最后一次无工具兜底（仅求自然语言回复，避免整轮空白）
+                if (answer.isEmpty() && thinkingContent.isEmpty() && !forcingDispatch && hadToolsThisIter) {
+                    log.warn("[Agent:{}] still empty after keep-tools retry on iter {}; last-resort without tools",
+                            sessionId, iteration);
                     ChatRequest.ChatRequestBuilder plainBuilder = ChatRequest.builder()
                             .model("")
                             .messages(context)
                             .tools(null)
                             .toolChoice("none")
                             .temperature(0.7)
-                            .maxTokens(8192);
+                            .maxTokens(4096);
                     applyThinkingPreference(plainBuilder, session, true);
-                    ChatRequest plain = plainBuilder.build();
                     try {
-                        ChatResponse retry = llmCaller.apply(plain, new StreamCallbacks(
+                        ChatResponse plainRetry = llmCaller.apply(plainBuilder.build(), new StreamCallbacks(
                                 t -> {},
                                 t -> {
                                     publisher.publish(AgentEvent.thinking(sessionId, t, finalIter));
                                     thinkingContent.append(t);
                                 }
                         ));
-                        Message retryMsg = retry.firstMessage();
+                        Message retryMsg = plainRetry.firstMessage();
                         if (retryMsg != null && retryMsg.content() != null && !retryMsg.content().isBlank()) {
                             answer = retryMsg.content();
                         }
                     } catch (Exception retryEx) {
-                        log.warn("[Agent:{}] empty-content retry failed: {}", sessionId, retryEx.getMessage());
+                        log.warn("[Agent:{}] last-resort no-tools retry failed: {}", sessionId, retryEx.getMessage());
                     }
                 }
                 // 无工具却编造 taskId → 先强制 tool 一轮；仍失败则服务端入队（不中断本机控制）
@@ -1833,6 +1858,14 @@ public class AgentLoopService {
             out.remove(out.size() - 1);
         }
         return out;
+    }
+
+    private static boolean isBlankAssistantContent(Message m) {
+        if (m == null) return true;
+        if (m.toolCalls() != null && !m.toolCalls().isEmpty()) return false;
+        String c = m.content();
+        return c == null || c.isBlank()
+                || "(无内容)".equals(c) || "(无文字回复)".equals(c);
     }
 
     private String lastUserMessageFrom(List<Message> context, String taskDescription) {

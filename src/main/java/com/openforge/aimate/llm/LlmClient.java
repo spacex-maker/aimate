@@ -8,7 +8,6 @@ import com.openforge.aimate.llm.model.ChatResponse;
 import com.openforge.aimate.llm.model.FunctionCallResult;
 import com.openforge.aimate.llm.model.Message;
 import com.openforge.aimate.llm.model.StreamingChunk;
-import com.openforge.aimate.llm.model.Tool;
 import com.openforge.aimate.llm.model.ToolCall;
 import lombok.extern.slf4j.Slf4j;
 
@@ -71,14 +70,15 @@ public class LlmClient {
      * token-by-token delivery is not needed.
      */
     public ChatResponse chat(ChatRequest request) {
-        String requestBody = serialize(request);
+        ChatRequest effectiveRequest = prepareRequest(request);
+        String requestBody = serialize(effectiveRequest);
         log.debug("[LlmClient:{}] → chat POST body-length={}", config.name(), requestBody.length());
 
         // 便于排查：打印当前调用使用的 URL / model / key（仅显示 key 头尾，避免泄露全部秘钥）
         log.info("[LlmClient:{}] chat endpoint={} model={} key={}",
                 config.name(),
                 config.baseUrl() + "/chat/completions",
-                request.model() != null ? request.model() : config.model(),
+                effectiveRequest.model(),
                 maskKey(config.apiKey()));
 
         HttpResponse<String> httpResponse = sendBlocking(
@@ -118,25 +118,10 @@ public class LlmClient {
                     .formatted(config.name()));
         }
 
-        // 如果上游没有显式指定 model，则自动使用当前 ProviderConfig 的模型。
-        String model = request.model();
-        if (model == null || model.isBlank()) {
-            model = config.model();
-        }
-
         // Send full context including tool results. An assistant message with tool_calls
         // must be followed by tool messages for each tool_call_id (OpenAI/DeepSeek spec).
-        var messages = request.messages();
-        java.util.List<Tool> tools = request.tools();
-        ChatRequest effectiveRequest = ChatRequest.builder()
-                .model(model)
-                .messages(messages)
-                .tools(tools)
-                .toolChoice(request.toolChoice())
-                .temperature(request.temperature())
-                .maxTokens(request.maxTokens())
-                .thinking(request.thinking())
-                .build();
+        ChatRequest effectiveRequest = prepareRequest(request);
+        String model = effectiveRequest.model();
 
         String requestBody = serializeWithStream(effectiveRequest);
         log.debug("[LlmClient:{}] → streamChat POST body-length={}", config.name(), requestBody.length());
@@ -346,6 +331,78 @@ public class LlmClient {
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
+
+    /**
+     * 统一补全 model、透传 think、清洗 Ollama 不耐受的空 assistant，并对本地兼容端点限幅 max_tokens。
+     */
+    private ChatRequest prepareRequest(ChatRequest request) {
+        if (request == null) {
+            throw new LlmException("ChatRequest must not be null for provider [%s]"
+                    .formatted(config.name()));
+        }
+        String model = request.model();
+        if (model == null || model.isBlank()) {
+            model = config.model();
+        }
+        Integer maxTokens = request.maxTokens();
+        if (maxTokens != null && maxTokens > 8192 && looksLikeLocalOllamaCompat()) {
+            log.debug("[LlmClient:{}] cap max_tokens {} → 8192 for local/Ollama-compat endpoint",
+                    config.name(), maxTokens);
+            maxTokens = 8192;
+        }
+        return ChatRequest.builder()
+                .model(model)
+                .messages(sanitizeMessages(request.messages()))
+                .tools(request.tools())
+                .toolChoice(request.toolChoice())
+                .temperature(request.temperature())
+                .maxTokens(maxTokens)
+                .thinking(request.thinking())
+                .think(request.think())
+                .build();
+    }
+
+    /** Aimodel / Qwen / Ollama 等对 null content、过大 max_tokens 更敏感。 */
+    private boolean looksLikeLocalOllamaCompat() {
+        String name = config.name() != null ? config.name().toLowerCase() : "";
+        String url = config.baseUrl() != null ? config.baseUrl().toLowerCase() : "";
+        String model = config.model() != null ? config.model().toLowerCase() : "";
+        return name.contains("aimodel") || name.contains("qwen") || name.contains("ollama")
+                || url.contains("aimodel") || url.contains(":11434") || url.contains(":11435")
+                || model.contains("qwen");
+    }
+
+    /**
+     * 去掉无 tool_calls 的空 assistant（含「(无内容)」占位），避免 Ollama 400；
+     * 有 tool_calls 时把 null content 归一成 ""。
+     */
+    private List<Message> sanitizeMessages(List<Message> messages) {
+        if (messages == null) return null;
+        List<Message> out = new ArrayList<>(messages.size());
+        for (Message m : messages) {
+            if (m == null) continue;
+            boolean hasTools = m.toolCalls() != null && !m.toolCalls().isEmpty();
+            String c = m.content();
+            boolean emptyText = c == null || c.isBlank()
+                    || "(无内容)".equals(c) || "(无文字回复)".equals(c);
+            if ("assistant".equals(m.role()) && !hasTools && emptyText) {
+                continue;
+            }
+            if ("assistant".equals(m.role()) && hasTools && c == null) {
+                out.add(Message.builder()
+                        .role(m.role())
+                        .content("")
+                        .toolCalls(m.toolCalls())
+                        .toolCallId(m.toolCallId())
+                        .reasoningContent(m.reasoningContent())
+                        .imageDataUrls(m.imageDataUrls())
+                        .build());
+                continue;
+            }
+            out.add(m);
+        }
+        return out;
+    }
 
     private HttpRequest buildHttpRequest(String body, boolean streaming) {
         HttpRequest.Builder b = HttpRequest.newBuilder()
