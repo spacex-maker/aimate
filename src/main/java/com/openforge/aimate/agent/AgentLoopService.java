@@ -912,6 +912,33 @@ public class AgentLoopService {
                     log.debug("[Agent:{}] LLM returned empty content but had reasoning ({} chars), using fallback.", sessionId, thinkingContent.length());
                     answer = FALLBACK_EMPTY_ANSWER;
                 }
+                if (answer.isEmpty() && thinkingContent.isEmpty() && !forcingDispatch) {
+                    log.warn("[Agent:{}] empty LLM content+reasoning on iter {}; retry once without tools", sessionId, iteration);
+                    ChatRequest plain = ChatRequest.builder()
+                            .model("")
+                            .messages(context)
+                            .tools(null)
+                            .toolChoice("none")
+                            .temperature(0.7)
+                            .maxTokens(4096)
+                            .thinking(ChatRequest.Thinking.disabled())
+                            .build();
+                    try {
+                        ChatResponse retry = llmCaller.apply(plain, new StreamCallbacks(
+                                t -> {},
+                                t -> {
+                                    publisher.publish(AgentEvent.thinking(sessionId, t, finalIter));
+                                    thinkingContent.append(t);
+                                }
+                        ));
+                        Message retryMsg = retry.firstMessage();
+                        if (retryMsg != null && retryMsg.content() != null && !retryMsg.content().isBlank()) {
+                            answer = retryMsg.content();
+                        }
+                    } catch (Exception retryEx) {
+                        log.warn("[Agent:{}] empty-content retry failed: {}", sessionId, retryEx.getMessage());
+                    }
+                }
                 // 无工具却编造 taskId → 先强制 tool 一轮；仍失败则服务端入队（不中断本机控制）
                 if (localAssist && !dispatchedLocal && answerClaimsMissingTaskId(answer) && forcedDispatchAttempts < 1) {
                     forcedDispatchAttempts++;

@@ -12,7 +12,11 @@ import com.openforge.aimate.llm.model.Tool;
 import com.openforge.aimate.llm.model.ToolCall;
 import lombok.extern.slf4j.Slf4j;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -147,11 +151,11 @@ public class LlmClient {
         // 预估 prompt token 数，供组装 ChatResponse.usage 使用（provider 多数在流式模式下不返回 usage）
         int estimatedPromptTokens = TokenCounter.estimateTokensForMessages(effectiveRequest.messages());
 
-        HttpResponse<Stream<String>> httpResponse;
+        HttpResponse<InputStream> httpResponse;
         try {
             httpResponse = httpClient.send(
                     buildHttpRequest(requestBody, true),
-                    HttpResponse.BodyHandlers.ofLines());
+                    HttpResponse.BodyHandlers.ofInputStream());
         } catch (IOException | InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new LlmException("Network error (streaming) calling provider [%s]"
@@ -164,27 +168,46 @@ public class LlmClient {
                     "Rate-limited by provider [%s].".formatted(config.name()));
         }
         if (status < 200 || status >= 300) {
-            // 错误时尽量把对方返回的 body 全量打印出来，便于精准排查。
-            // 对于 xinghuapi 特别只要用户就想看“原生报错”，这里不再做长度截断。
             String bodyText = "";
-            Stream<String> lines = httpResponse.body();
-            if (lines != null) {
-                bodyText = lines.reduce(
-                        new StringBuilder(),
-                        (sb, line) -> {
-                            if (sb.length() > 0) sb.append('\n');
-                            sb.append(line);
-                            return sb;
-                        },
-                        StringBuilder::append
-                ).toString();
+            try (InputStream errIn = httpResponse.body()) {
+                if (errIn != null) {
+                    bodyText = new String(errIn.readAllBytes(), StandardCharsets.UTF_8);
+                }
+            } catch (IOException ignored) {
+                // keep empty bodyText
             }
             throw new LlmException(
                     "Provider [%s] returned HTTP %d on stream open: %s"
                             .formatted(config.name(), status, bodyText));
         }
 
-        return assembleStreamingResponse(httpResponse.body(), callbacks, estimatedPromptTokens);
+        ChatResponse streamed;
+        try (InputStream in = httpResponse.body();
+             BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+            streamed = assembleStreamingResponse(reader.lines(), callbacks, estimatedPromptTokens);
+        } catch (IOException e) {
+            throw new LlmException("Network error reading stream from provider [%s]"
+                    .formatted(config.name()), e);
+        }
+
+        Message msg = streamed.firstMessage();
+        boolean emptyContent = msg == null
+                || msg.content() == null
+                || msg.content().isBlank();
+        boolean noTools = msg == null
+                || msg.toolCalls() == null
+                || msg.toolCalls().isEmpty();
+        if (emptyContent && noTools) {
+            log.warn("[LlmClient:{}] stream returned empty content/tool_calls; falling back to non-stream chat. model={}",
+                    config.name(), model);
+            ChatResponse fallback = chat(effectiveRequest);
+            Message fb = fallback.firstMessage();
+            if (fb != null && fb.content() != null && !fb.content().isBlank()) {
+                callbacks.onContent().accept(fb.content());
+            }
+            return fallback;
+        }
+        return streamed;
     }
 
     /** The model name configured for this provider (e.g. "gpt-4o"). */
@@ -214,10 +237,14 @@ public class LlmClient {
         String finishReason  = null;
 
         for (String line : (Iterable<String>) lines::iterator) {
-            if (line.isEmpty() || !line.startsWith(SSE_DATA_PREFIX)) continue;
-            if (SSE_DONE.equals(line)) break;
+            if (line == null) continue;
+            line = line.strip();
+            if (line.isEmpty() || !line.startsWith("data:")) continue;
+            String payload = line.substring(5).strip();
+            if ("[DONE]".equals(payload)) break;
+            if (payload.isEmpty()) continue;
 
-            String json = line.substring(SSE_DATA_PREFIX.length());
+            String json = payload;
             StreamingChunk chunk;
             try {
                 chunk = objectMapper.readValue(json, StreamingChunk.class);
@@ -306,14 +333,18 @@ public class LlmClient {
     // ── Private helpers ──────────────────────────────────────────────────────
 
     private HttpRequest buildHttpRequest(String body, boolean streaming) {
-        return HttpRequest.newBuilder()
+        HttpRequest.Builder b = HttpRequest.newBuilder()
                 .uri(URI.create(config.baseUrl() + "/chat/completions"))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + config.apiKey())
-                // Streaming responses can take a long time to complete
                 .timeout(Duration.ofSeconds(streaming ? config.timeoutSeconds() * 2L : config.timeoutSeconds()))
-                .POST(HttpRequest.BodyPublishers.ofString(body))
-                .build();
+                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+        if (streaming) {
+            b.header("Accept", "text/event-stream");
+        } else {
+            b.header("Accept", "application/json");
+        }
+        return b.build();
     }
 
     private HttpResponse<String> sendBlocking(HttpRequest request) {
