@@ -279,8 +279,8 @@ export function AdminAgentsPanel() {
       )}
 
       {linkCatalogId != null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl border border-white/15 bg-[#141414] p-4">
+        <div className="admin-dialog-backdrop">
+          <div className="admin-dialog admin-dialog--md max-h-[85vh] overflow-y-auto p-4">
             <h3 className="mb-2 text-sm font-semibold">关联官方知识库</h3>
             <p className="mb-3 text-[11px] text-white/40">
               用户招聘该 Agent 时，将同时获得勾选的领域知识库（不仅是提示词）。
@@ -320,7 +320,7 @@ export function AdminAgentsPanel() {
             <div className="mt-3 flex justify-end gap-2">
               <button
                 type="button"
-                className="rounded-lg border border-white/15 px-3 py-1.5 text-xs"
+                className="admin-btn admin-btn--ghost admin-btn--sm"
                 onClick={() => setLinkCatalogId(null)}
               >
                 取消

@@ -607,11 +607,9 @@
 }
 
 .admin-kb-modal {
-  max-height: 92vh;
+  max-height: min(92vh, 920px);
   width: min(920px, 100%);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  padding: 0;
 }
 
 .admin-kb-modal__body {
@@ -789,4 +787,191 @@
 }
 .admin-query .admin-btn--ghost:disabled {
   opacity: 0.35;
+}
+
+/* —— Admin dialog（统一模态，去掉硬白描边） —— */
+.admin-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(4, 8, 14, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.admin-dialog {
+  width: 100%;
+  max-height: min(90vh, 920px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 48px),
+    var(--admin-panel);
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  box-shadow:
+    0 28px 80px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(0, 0, 0, 0.35);
+  color: var(--admin-ink);
+}
+.admin-dialog--sm { max-width: 28rem; }
+.admin-dialog--md { max-width: 40rem; }
+.admin-dialog--lg { max-width: 52rem; }
+.admin-dialog--xl { max-width: 64rem; }
+.admin-dialog__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1.15rem 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  flex-shrink: 0;
+}
+.admin-dialog__titles { min-width: 0; }
+.admin-dialog__title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--admin-ink);
+  letter-spacing: 0.01em;
+}
+.admin-dialog__sub {
+  margin: 0.28rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--admin-dim);
+}
+.admin-dialog__close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+}
+.admin-dialog__close:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--admin-ink);
+}
+.admin-dialog__close:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.admin-dialog__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem 1.15rem;
+}
+.admin-dialog__foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  padding: 0.85rem 1.15rem 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.18);
+}
+.admin-dialog__section {
+  margin-top: 1.1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.admin-dialog__section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.admin-dialog__section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.admin-dialog__section-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: rgba(232, 238, 246, 0.88);
+}
+.admin-dialog__hint {
+  margin: 0 0 0.75rem;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  color: var(--admin-dim);
+}
+.admin-dialog__grid {
+  display: grid;
+  gap: 0.75rem;
+}
+.admin-dialog__grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.admin-dialog__grid--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (max-width: 640px) {
+  .admin-dialog__grid--2,
+  .admin-dialog__grid--3 {
+    grid-template-columns: 1fr;
+  }
+}
+.admin-dialog__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  max-height: 9.5rem;
+  overflow: auto;
+  padding: 0.15rem;
+}
+.admin-dialog__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.32rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(232, 238, 246, 0.72);
+  font-size: 0.72rem;
+  cursor: pointer;
+  user-select: none;
+}
+.admin-dialog__chip.is-on {
+  border-color: rgba(94, 200, 255, 0.35);
+  background: rgba(94, 200, 255, 0.12);
+  color: #dff4ff;
+}
+.admin-dialog__chip input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.admin-dialog__row-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.admin-dialog__row-toggle span {
+  font-size: 0.78rem;
+  color: rgba(232, 238, 246, 0.85);
+}
+.admin-field .admin-input:disabled,
+.admin-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }

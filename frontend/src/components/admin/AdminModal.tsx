@@ -89,7 +89,7 @@ export function AdminModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden">
+      <div className="bg-[var(--admin-panel)] rounded-xl border border-white/[0.045] w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 flex-shrink-0">
           <h2 className="text-sm font-semibold text-white">管理</h2>
           <button
@@ -1186,7 +1186,7 @@ export function UserManageContent() {
       {rechargeOpen && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4" onClick={() => setRechargeOpen(false)}>
           <div
-            className="w-full max-w-sm rounded-xl border border-white/15 bg-[#12141a] p-4 space-y-3"
+            className="w-full max-w-sm rounded-xl border border-white/[0.045] bg-[var(--admin-panel)] p-4 space-y-3"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -1284,7 +1284,7 @@ function UserLedgerModal({ user, onClose }: { user: AdminUserListItem; onClose: 
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div className="w-full max-w-md max-h-[80vh] flex flex-col rounded-xl border border-white/15 bg-[#12141a]" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-md max-h-[80vh] flex flex-col rounded-xl border border-white/[0.045] bg-[var(--admin-panel)]" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
           <div>
             <h3 className="text-sm text-white font-medium">{user.username} 积分流水</h3>
@@ -1373,7 +1373,7 @@ function BillingUsageDetailModal({
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
-        className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-xl border border-white/15 bg-[#12141a] shadow-2xl"
+        className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-xl border border-white/[0.045] bg-[var(--admin-panel)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-white/10">
@@ -2090,7 +2090,7 @@ function UserOperationModal({
 
   return (
     <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-10">
-      <div className="bg-[#111111] border border-white/10 rounded-xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden shadow-xl">
+      <div className="bg-[var(--admin-panel)] rounded-xl border border-white/[0.045] w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden shadow-xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
           <div>
             <h3 className="text-sm font-semibold text-white">用户操作</h3>

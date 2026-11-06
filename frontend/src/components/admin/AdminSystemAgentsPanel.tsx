@@ -1,8 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Plus, X, Play, History } from 'lucide-react'
+import { Plus, Play, History } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { adminApi, type SystemAgentDto, type SystemAgentSaveBody } from '../../api/admin'
 import type { KbCuratorConfig } from '../../types/admin'
@@ -11,6 +10,7 @@ import { AdminToggle } from '../../ui/AdminToggle'
 import { AdminQueryBar } from '../../ui/AdminQueryBar'
 import { AdminPager } from '../../ui/AdminPager'
 import { AppSelect } from '../../ui/AppSelect'
+import { AdminDialog } from './AdminDialog'
 
 const defaultConfig = (): KbCuratorConfig => ({
   categoryIds: [],
@@ -51,10 +51,10 @@ function emptyForm(): FormState {
   }
 }
 
-function flattenCategories(nodes: KbCategoryNode[], depth = 0): { id: number; label: string }[] {
-  const out: { id: number; label: string }[] = []
+function flattenCategories(nodes: KbCategoryNode[], depth = 0): { id: number; label: string; depth: number }[] {
+  const out: { id: number; label: string; depth: number }[] = []
   for (const n of nodes) {
-    out.push({ id: n.id, label: `${'—'.repeat(depth)}${depth ? ' ' : ''}${n.name}` })
+    out.push({ id: n.id, label: n.name, depth })
     if (n.children?.length) out.push(...flattenCategories(n.children, depth + 1))
   }
   return out
@@ -233,6 +233,7 @@ export function AdminSystemAgentsPanel() {
 
   const agents = listQ.data ?? []
   const tavilyOk = agents.some((a) => a.tavilyConfigured)
+  const scheduleValue = `${pad2(form.scheduleHour)}:${pad2(form.scheduleMinute)}`
 
   return (
     <div className="space-y-5">
@@ -241,7 +242,6 @@ export function AdminSystemAgentsPanel() {
           <h3 className="text-sm font-medium text-white">系统 Agent</h3>
           <p className="text-xs text-white/40 mt-0.5 max-w-2xl">
             定时策展官方知识库：挑选内容偏薄或久未更新的条目，可选 Tavily 联网检索后由系统模型重写正文，并更新摘要与标签。
-            Tavily Key 在「系统配置」维护；此处可按 Agent 开关是否联网。
           </p>
           <p className="mt-1 text-[11px] text-white/35">
             Tavily：{tavilyOk ? (
@@ -307,10 +307,10 @@ export function AdminSystemAgentsPanel() {
       ) : agents.length === 0 ? (
         <div className="text-sm text-white/35 py-8 text-center">暂无系统 Agent，点击右上角新建知识库策展任务</div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-white/10">
+        <div className="overflow-x-auto rounded-lg border border-white/[0.06]">
           <table className="w-full text-xs text-white/80">
             <thead>
-              <tr className="border-b border-white/10 text-left bg-white/[0.03]">
+              <tr className="border-b border-white/[0.06] text-left bg-white/[0.02]">
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">编码</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">名称</th>
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40">日程</th>
@@ -319,9 +319,9 @@ export function AdminSystemAgentsPanel() {
                 <th className="pb-2 pt-2 px-3 font-medium text-white/40 w-48">操作</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/10">
+            <tbody className="divide-y divide-white/[0.06]">
               {agents.map((a) => (
-                <tr key={a.id} className="hover:bg-white/[0.03] align-top">
+                <tr key={a.id} className="hover:bg-white/[0.02] align-top">
                   <td className="py-2.5 px-3 font-mono text-white/60">
                     {a.code}
                     {a.running ? (
@@ -400,342 +400,314 @@ export function AdminSystemAgentsPanel() {
         </div>
       )}
 
-      {modal &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/65 p-4"
-            onClick={() => !saveMut.isPending && setModal(null)}
-          >
-            <div
-              className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-white/12 bg-[#121820] shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
+      <AdminDialog
+        open={modal != null}
+        onClose={() => !saveMut.isPending && setModal(null)}
+        busy={saveMut.isPending}
+        width="lg"
+        title={modal === 'create' ? '新建系统 Agent' : '配置系统 Agent'}
+        subtitle="知识库策展 · 每日 Asia/Shanghai 定点执行"
+        footer={
+          <>
+            <button
+              type="button"
+              className="admin-btn admin-btn--ghost admin-btn--sm"
+              disabled={saveMut.isPending}
+              onClick={() => setModal(null)}
             >
-              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-[#121820] px-4 py-3">
-                <div>
-                  <h4 className="text-sm font-medium text-white">
-                    {modal === 'create' ? '新建系统 Agent' : '配置系统 Agent'}
-                  </h4>
-                  <p className="mt-0.5 text-[11px] text-white/40">类型：知识库策展（KB_CURATOR）· 时区 Asia/Shanghai</p>
-                </div>
-                <button
-                  type="button"
-                  className="rounded-md p-1 text-white/40 hover:bg-white/10 hover:text-white"
-                  onClick={() => !saveMut.isPending && setModal(null)}
-                  aria-label="关闭"
-                >
-                  <X size={16} />
-                </button>
+              取消
+            </button>
+            <button
+              type="submit"
+              form="admin-system-agent-form"
+              className="admin-btn admin-btn--sm"
+              disabled={saveMut.isPending}
+            >
+              {saveMut.isPending ? '保存中…' : '保存'}
+            </button>
+          </>
+        }
+      >
+        <form id="admin-system-agent-form" onSubmit={onSubmit}>
+          <section className="admin-dialog__section">
+            <div className="admin-dialog__section-head">
+              <div className="admin-dialog__section-title">基本信息</div>
+              <div className="admin-dialog__row-toggle" style={{ padding: '0.35rem 0.55rem' }}>
+                <span>启用</span>
+                <AdminToggle
+                  checked={form.enabled}
+                  onChange={() => setForm({ ...form, enabled: !form.enabled })}
+                />
               </div>
-              <form onSubmit={onSubmit} className="space-y-4 p-4">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="admin-field">
-                    编码
-                    <input
-                      className="admin-input"
-                      value={form.code}
-                      disabled={modal === 'edit'}
-                      onChange={(e) => setForm({ ...form, code: e.target.value })}
-                      placeholder="KB_CURATOR_DAILY"
-                    />
-                  </label>
-                  <label className="admin-field">
-                    显示名
-                    <input
-                      className="admin-input"
-                      value={form.name}
-                      onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    />
-                  </label>
-                </div>
-                <label className="admin-field">
-                  说明
-                  <input
-                    className="admin-input"
-                    value={form.description}
-                    onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  />
-                </label>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <label className="admin-field">
-                    每日小时
-                    <input
-                      type="number"
-                      min={0}
-                      max={23}
-                      className="admin-input"
-                      value={form.scheduleHour}
-                      onChange={(e) => setForm({ ...form, scheduleHour: Number(e.target.value) || 0 })}
-                    />
-                  </label>
-                  <label className="admin-field">
-                    每日分钟
-                    <input
-                      type="number"
-                      min={0}
-                      max={59}
-                      className="admin-input"
-                      value={form.scheduleMinute}
-                      onChange={(e) => setForm({ ...form, scheduleMinute: Number(e.target.value) || 0 })}
-                    />
-                  </label>
-                  <label className="admin-field">
-                    启用
-                    <div className="mt-2">
-                      <AdminToggle
-                        checked={form.enabled}
-                        onChange={() => setForm({ ...form, enabled: !form.enabled })}
-                      />
-                    </div>
-                  </label>
-                </div>
-                <label className="admin-field">
-                  策展模型
-                  <AppSelect
-                    value={form.systemModelId == null ? '' : String(form.systemModelId)}
-                    onChange={(v) => setForm({ ...form, systemModelId: v ? Number(v) : null })}
-                    options={[{ value: '', label: '请选择…' }, ...modelOptions]}
-                    ariaLabel="系统模型"
-                  />
-                </label>
+            </div>
+            <div className="admin-dialog__grid admin-dialog__grid--2">
+              <label className="admin-field">
+                编码
+                <input
+                  className="admin-input"
+                  value={form.code}
+                  disabled={modal === 'edit'}
+                  onChange={(e) => setForm({ ...form, code: e.target.value })}
+                  placeholder="KB_CURATOR_DAILY"
+                />
+              </label>
+              <label className="admin-field">
+                显示名
+                <input
+                  className="admin-input"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                />
+              </label>
+            </div>
+            <label className="admin-field mt-3">
+              说明
+              <input
+                className="admin-input"
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+              />
+            </label>
+            <div className="admin-dialog__grid admin-dialog__grid--2 mt-3">
+              <label className="admin-field">
+                每日执行时间
+                <input
+                  type="time"
+                  className="admin-input"
+                  value={scheduleValue}
+                  onChange={(e) => {
+                    const [h, m] = e.target.value.split(':').map((x) => Number(x))
+                    setForm({
+                      ...form,
+                      scheduleHour: Number.isFinite(h) ? h : 0,
+                      scheduleMinute: Number.isFinite(m) ? m : 0,
+                    })
+                  }}
+                />
+              </label>
+              <label className="admin-field">
+                策展模型
+                <AppSelect
+                  value={form.systemModelId == null ? '' : String(form.systemModelId)}
+                  onChange={(v) => setForm({ ...form, systemModelId: v ? Number(v) : null })}
+                  options={[{ value: '', label: '请选择…' }, ...modelOptions]}
+                  ariaLabel="系统模型"
+                />
+              </label>
+            </div>
+          </section>
 
-                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
-                  <div className="text-xs font-medium text-white/70">策展参数</div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="admin-field">
-                      每轮最多条目
-                      <input
-                        type="number"
-                        min={1}
-                        max={50}
-                        className="admin-input"
-                        value={form.config.maxBasesPerRun}
-                        onChange={(e) => setCfg('maxBasesPerRun', Number(e.target.value) || 1)}
-                      />
-                    </label>
-                    <label className="admin-field">
-                      薄弱正文阈值（字）
-                      <input
-                        type="number"
-                        min={0}
-                        className="admin-input"
-                        value={form.config.thinContentChars}
-                        onChange={(e) => setCfg('thinContentChars', Number(e.target.value) || 0)}
-                      />
-                    </label>
-                    <label className="admin-field">
-                      过期天数（0=不按时间）
-                      <input
-                        type="number"
-                        min={0}
-                        className="admin-input"
-                        value={form.config.staleDays}
-                        onChange={(e) => setCfg('staleDays', Number(e.target.value) || 0)}
-                      />
-                    </label>
-                    <label className="admin-field">
-                      温度
-                      <input
-                        type="number"
-                        step="0.05"
-                        min={0}
-                        max={1.5}
-                        className="admin-input"
-                        value={form.config.temperature}
-                        onChange={(e) => setCfg('temperature', Number(e.target.value) || 0)}
-                      />
-                    </label>
-                    <label className="admin-field">
-                      最大 Tokens
-                      <input
-                        type="number"
-                        min={512}
-                        max={32000}
-                        className="admin-input"
-                        value={form.config.maxTokens}
-                        onChange={(e) => setCfg('maxTokens', Number(e.target.value) || 512)}
-                      />
-                    </label>
-                    <label className="admin-field">
-                      更新摘要/标签
-                      <div className="mt-2">
-                        <AdminToggle
-                          checked={form.config.updateSummaryAndTags}
-                          onChange={() => setCfg('updateSummaryAndTags', !form.config.updateSummaryAndTags)}
+          <section className="admin-dialog__section">
+            <div className="admin-dialog__section-head">
+              <div className="admin-dialog__section-title">策展规则</div>
+            </div>
+            <p className="admin-dialog__hint">优先维护正文偏短或超过「过期天数」未更新的启用知识库。</p>
+            <div className="admin-dialog__grid admin-dialog__grid--3">
+              <label className="admin-field">
+                每轮最多条目
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  className="admin-input"
+                  value={form.config.maxBasesPerRun}
+                  onChange={(e) => setCfg('maxBasesPerRun', Number(e.target.value) || 1)}
+                />
+              </label>
+              <label className="admin-field">
+                薄弱阈值（字）
+                <input
+                  type="number"
+                  min={0}
+                  className="admin-input"
+                  value={form.config.thinContentChars}
+                  onChange={(e) => setCfg('thinContentChars', Number(e.target.value) || 0)}
+                />
+              </label>
+              <label className="admin-field">
+                过期天数
+                <input
+                  type="number"
+                  min={0}
+                  className="admin-input"
+                  value={form.config.staleDays}
+                  onChange={(e) => setCfg('staleDays', Number(e.target.value) || 0)}
+                />
+              </label>
+              <label className="admin-field">
+                温度
+                <input
+                  type="number"
+                  step="0.05"
+                  min={0}
+                  max={1.5}
+                  className="admin-input"
+                  value={form.config.temperature}
+                  onChange={(e) => setCfg('temperature', Number(e.target.value) || 0)}
+                />
+              </label>
+              <label className="admin-field">
+                最大 Tokens
+                <input
+                  type="number"
+                  min={512}
+                  max={32000}
+                  className="admin-input"
+                  value={form.config.maxTokens}
+                  onChange={(e) => setCfg('maxTokens', Number(e.target.value) || 512)}
+                />
+              </label>
+              <div className="admin-dialog__row-toggle self-end">
+                <span>更新摘要/标签</span>
+                <AdminToggle
+                  checked={form.config.updateSummaryAndTags}
+                  onChange={() => setCfg('updateSummaryAndTags', !form.config.updateSummaryAndTags)}
+                />
+              </div>
+            </div>
+            <label className="admin-field mt-3">
+              风格 / 领域指令
+              <textarea
+                className="admin-input min-h-[72px]"
+                value={form.config.styleGuide}
+                onChange={(e) => setCfg('styleGuide', e.target.value)}
+                placeholder="例如：偏跨境合规、保留术语英中对照、操作清单优先…"
+              />
+            </label>
+            <div className="mt-3">
+              <div className="admin-field mb-1.5">限定分类（不选 = 全部启用库）</div>
+              {catOptions.length === 0 ? (
+                <p className="admin-dialog__hint" style={{ marginBottom: 0 }}>
+                  暂无分类
+                </p>
+              ) : (
+                <div className="admin-dialog__chips">
+                  {catOptions.map((c) => {
+                    const on = form.config.categoryIds.includes(c.id)
+                    return (
+                      <label
+                        key={c.id}
+                        className={`admin-dialog__chip${on ? ' is-on' : ''}`}
+                        style={{ marginLeft: c.depth ? `${c.depth * 0.35}rem` : undefined }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() => toggleCategory(c.id)}
                         />
-                      </div>
-                    </label>
-                  </div>
-                  <label className="admin-field">
-                    风格 / 领域补充指令
-                    <textarea
-                      className="admin-input min-h-[72px]"
-                      value={form.config.styleGuide}
-                      onChange={(e) => setCfg('styleGuide', e.target.value)}
-                      placeholder="例如：偏跨境合规、保留术语英中对照、操作清单优先…"
-                    />
-                  </label>
-                  <div>
-                    <div className="mb-1 text-[11px] text-white/45">限定分类（空=全部启用库）</div>
-                    <div className="max-h-36 overflow-y-auto rounded-md border border-white/10 p-2 space-y-1">
-                      {catOptions.length === 0 ? (
-                        <div className="text-[11px] text-white/35">暂无分类</div>
-                      ) : (
-                        catOptions.map((c) => (
-                          <label key={c.id} className="flex items-center gap-2 text-[12px] text-white/70">
-                            <input
-                              type="checkbox"
-                              checked={form.config.categoryIds.includes(c.id)}
-                              onChange={() => toggleCategory(c.id)}
-                            />
-                            {c.label}
-                          </label>
-                        ))
-                      )}
-                    </div>
-                  </div>
+                        {c.label}
+                      </label>
+                    )
+                  })}
                 </div>
+              )}
+            </div>
+          </section>
 
-                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-xs font-medium text-white/70">Tavily 联网检索</div>
-                    <AdminToggle
-                      checked={form.config.useTavily}
-                      onChange={() => setCfg('useTavily', !form.config.useTavily)}
-                      title="是否在策展时调用 Tavily"
-                    />
-                  </div>
-                  <p className="text-[11px] text-white/40">
-                    API Key 使用系统配置中的 TAVILY_API_KEY（与用户「联网搜索」共用）。未配置时本轮会跳过检索仍可改写正文。
-                  </p>
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <label className="admin-field">
-                      每条检索次数
-                      <input
-                        type="number"
-                        min={1}
-                        max={5}
-                        className="admin-input"
-                        disabled={!form.config.useTavily}
-                        value={form.config.researchQueriesPerBase}
-                        onChange={(e) => setCfg('researchQueriesPerBase', Number(e.target.value) || 1)}
-                      />
-                    </label>
-                    <label className="admin-field">
-                      每次结果数
-                      <input
-                        type="number"
-                        min={1}
-                        max={20}
-                        className="admin-input"
-                        disabled={!form.config.useTavily}
-                        value={form.config.tavilyMaxResults}
-                        onChange={(e) => setCfg('tavilyMaxResults', Number(e.target.value) || 1)}
-                      />
-                    </label>
-                    <label className="admin-field">
-                      搜索深度
-                      <AppSelect
-                        value={form.config.tavilySearchDepth}
-                        onChange={(v) => setCfg('tavilySearchDepth', v)}
-                        disabled={!form.config.useTavily}
-                        options={[
-                          { value: 'basic', label: 'basic' },
-                          { value: 'advanced', label: 'advanced' },
-                        ]}
-                        ariaLabel="Tavily 搜索深度"
-                      />
-                    </label>
-                  </div>
-                </div>
+          <section className="admin-dialog__section">
+            <div className="admin-dialog__section-head">
+              <div className="admin-dialog__section-title">Tavily 联网检索</div>
+              <AdminToggle
+                checked={form.config.useTavily}
+                onChange={() => setCfg('useTavily', !form.config.useTavily)}
+                title="是否在策展时调用 Tavily"
+              />
+            </div>
+            <p className="admin-dialog__hint">
+              使用「系统配置」中的 TAVILY_API_KEY。未配置时跳过检索，仍可改写正文。
+            </p>
+            <div className="admin-dialog__grid admin-dialog__grid--3">
+              <label className="admin-field">
+                每条检索次数
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  className="admin-input"
+                  disabled={!form.config.useTavily}
+                  value={form.config.researchQueriesPerBase}
+                  onChange={(e) => setCfg('researchQueriesPerBase', Number(e.target.value) || 1)}
+                />
+              </label>
+              <label className="admin-field">
+                每次结果数
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  className="admin-input"
+                  disabled={!form.config.useTavily}
+                  value={form.config.tavilyMaxResults}
+                  onChange={(e) => setCfg('tavilyMaxResults', Number(e.target.value) || 1)}
+                />
+              </label>
+              <label className="admin-field">
+                搜索深度
+                <AppSelect
+                  value={form.config.tavilySearchDepth}
+                  onChange={(v) => setCfg('tavilySearchDepth', v)}
+                  disabled={!form.config.useTavily}
+                  options={[
+                    { value: 'basic', label: 'basic' },
+                    { value: 'advanced', label: 'advanced' },
+                  ]}
+                  ariaLabel="Tavily 搜索深度"
+                />
+              </label>
+            </div>
+          </section>
+        </form>
+      </AdminDialog>
 
-                <div className="flex justify-end gap-2 pt-1">
-                  <button
-                    type="button"
-                    className="admin-btn admin-btn--ghost admin-btn--sm"
-                    disabled={saveMut.isPending}
-                    onClick={() => setModal(null)}
+      <AdminDialog
+        open={runsFor != null}
+        onClose={() => setRunsFor(null)}
+        width="md"
+        title={runsFor ? `运行记录 · ${runsFor.code}` : '运行记录'}
+        subtitle={runsFor?.name}
+      >
+        {runsQ.isLoading ? (
+          <div className="py-8 text-center text-sm text-white/40">加载中…</div>
+        ) : (runsQ.data?.items.length ?? 0) === 0 ? (
+          <div className="py-8 text-center text-sm text-white/35">暂无运行记录</div>
+        ) : (
+          <ul className="space-y-2">
+            {runsQ.data!.items.map((r) => (
+              <li key={r.id} className="rounded-xl bg-white/[0.03] px-3 py-2.5 text-xs">
+                <div className="flex flex-wrap items-center gap-2 text-white/70">
+                  <span className="font-mono text-white/45">#{r.id}</span>
+                  <span>{r.triggerType}</span>
+                  <span
+                    className={
+                      r.status === 'SUCCESS'
+                        ? 'text-emerald-300/90'
+                        : r.status === 'FAILED'
+                          ? 'text-red-300/90'
+                          : 'text-amber-200/90'
+                    }
                   >
-                    取消
-                  </button>
-                  <button type="submit" className="admin-btn admin-btn--sm" disabled={saveMut.isPending}>
-                    {saveMut.isPending ? '保存中…' : '保存'}
-                  </button>
+                    {r.status}
+                  </span>
+                  <span className="text-white/35">{r.startedAt}</span>
                 </div>
-              </form>
-            </div>
-          </div>,
-          document.body,
+                {r.summary ? <p className="mt-1 text-white/50">{r.summary}</p> : null}
+              </li>
+            ))}
+          </ul>
         )}
-
-      {runsFor &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/65 p-4"
-            onClick={() => setRunsFor(null)}
-          >
-            <div
-              className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-white/12 bg-[#121820] shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="sticky top-0 flex items-center justify-between border-b border-white/10 bg-[#121820] px-4 py-3">
-                <div>
-                  <h4 className="text-sm font-medium text-white">运行记录 · {runsFor.code}</h4>
-                  <p className="mt-0.5 text-[11px] text-white/40">{runsFor.name}</p>
-                </div>
-                <button
-                  type="button"
-                  className="rounded-md p-1 text-white/40 hover:bg-white/10 hover:text-white"
-                  onClick={() => setRunsFor(null)}
-                  aria-label="关闭"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-              <div className="p-4 space-y-3">
-                {runsQ.isLoading ? (
-                  <div className="py-8 text-center text-sm text-white/40">加载中…</div>
-                ) : (runsQ.data?.items.length ?? 0) === 0 ? (
-                  <div className="py-8 text-center text-sm text-white/35">暂无运行记录</div>
-                ) : (
-                  <ul className="space-y-2">
-                    {runsQ.data!.items.map((r) => (
-                      <li key={r.id} className="rounded-lg border border-white/10 px-3 py-2 text-xs">
-                        <div className="flex flex-wrap items-center gap-2 text-white/70">
-                          <span className="font-mono text-white/50">#{r.id}</span>
-                          <span>{r.triggerType}</span>
-                          <span
-                            className={
-                              r.status === 'SUCCESS'
-                                ? 'text-emerald-300/90'
-                                : r.status === 'FAILED'
-                                  ? 'text-red-300/90'
-                                  : 'text-amber-200/90'
-                            }
-                          >
-                            {r.status}
-                          </span>
-                          <span className="text-white/35">{r.startedAt}</span>
-                        </div>
-                        {r.summary ? <p className="mt-1 text-white/50">{r.summary}</p> : null}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {runsQ.data ? (
-                  <AdminPager
-                    page={runsQ.data.page}
-                    size={runsQ.data.size}
-                    total={runsQ.data.total}
-                    onPageChange={setRunsPage}
-                    label="次"
-                    loading={runsQ.isFetching}
-                  />
-                ) : null}
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )}
+        {runsQ.data ? (
+          <div className="mt-3">
+            <AdminPager
+              page={runsQ.data.page}
+              size={runsQ.data.size}
+              total={runsQ.data.total}
+              onPageChange={setRunsPage}
+              label="次"
+              loading={runsQ.isFetching}
+            />
+          </div>
+        ) : null}
+      </AdminDialog>
     </div>
   )
 }

@@ -1,12 +1,12 @@
 import { FormEvent, useMemo, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, X } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { adminApi, type SystemProviderDto } from '../../api/admin'
 import { AdminToggle } from '../../ui/AdminToggle'
 import { AdminQueryBar } from '../../ui/AdminQueryBar'
 import { AppSelect } from '../../ui/AppSelect'
+import { AdminDialog } from './AdminDialog'
 
 const emptyForm = {
   code: '',
@@ -307,88 +307,76 @@ export function AdminProvidersPanel() {
         </div>
       )}
 
-      {createOpen &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/65 p-4"
-            onClick={() => !createMutation.isPending && setCreateOpen(false)}
-          >
-            <div
-              className="w-full max-w-lg rounded-xl border border-white/12 bg-[#121820] shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
+      <AdminDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        busy={createMutation.isPending}
+        width="sm"
+        title="新建服务商"
+        subtitle="编码稳定后尽量不要改；一把 Key 供同服务商模型共用"
+        footer={
+          <>
+            <button
+              type="button"
+              className="admin-btn admin-btn--ghost admin-btn--sm"
+              disabled={createMutation.isPending}
+              onClick={() => setCreateOpen(false)}
             >
-              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-                <div>
-                  <h4 className="text-sm font-medium text-white">新建服务商</h4>
-                  <p className="mt-0.5 text-[11px] text-white/40">编码稳定后尽量不要改；一把 Key 供同服务商模型共用</p>
-                </div>
-                <button
-                  type="button"
-                  className="rounded-md p-1 text-white/40 hover:bg-white/10 hover:text-white"
-                  onClick={() => !createMutation.isPending && setCreateOpen(false)}
-                  aria-label="关闭"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-              <form onSubmit={onCreate} className="space-y-3 p-4">
-                <label className="admin-field">
-                  编码
-                  <input
-                    className="admin-input"
-                    placeholder="如 deepseek / aimodel"
-                    value={form.code}
-                    onChange={(e) => setForm({ ...form, code: e.target.value })}
-                    autoFocus
-                  />
-                </label>
-                <label className="admin-field">
-                  显示名
-                  <input
-                    className="admin-input"
-                    placeholder="DeepSeek"
-                    value={form.displayName}
-                    onChange={(e) => setForm({ ...form, displayName: e.target.value })}
-                  />
-                </label>
-                <label className="admin-field">
-                  说明（可选）
-                  <input
-                    className="admin-input"
-                    placeholder="用途说明"
-                    value={form.description}
-                    onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  />
-                </label>
-                <label className="admin-field">
-                  API Key
-                  <input
-                    type="password"
-                    className="admin-input"
-                    placeholder="sk-... / amk_..."
-                    autoComplete="off"
-                    value={form.apiKey}
-                    onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
-                  />
-                </label>
-                <div className="flex justify-end gap-2 pt-1">
-                  <button
-                    type="button"
-                    className="admin-btn admin-btn--ghost admin-btn--sm"
-                    disabled={createMutation.isPending}
-                    onClick={() => setCreateOpen(false)}
-                  >
-                    取消
-                  </button>
-                  <button type="submit" className="admin-btn admin-btn--sm" disabled={createMutation.isPending}>
-                    {createMutation.isPending ? '添加中…' : '添加'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>,
-          document.body,
-        )}
+              取消
+            </button>
+            <button
+              type="submit"
+              form="admin-provider-create"
+              className="admin-btn admin-btn--sm"
+              disabled={createMutation.isPending}
+            >
+              {createMutation.isPending ? '添加中…' : '添加'}
+            </button>
+          </>
+        }
+      >
+        <form id="admin-provider-create" onSubmit={onCreate} className="space-y-3">
+          <label className="admin-field">
+            编码
+            <input
+              className="admin-input"
+              placeholder="如 deepseek / aimodel"
+              value={form.code}
+              onChange={(e) => setForm({ ...form, code: e.target.value })}
+              autoFocus
+            />
+          </label>
+          <label className="admin-field">
+            显示名
+            <input
+              className="admin-input"
+              placeholder="DeepSeek"
+              value={form.displayName}
+              onChange={(e) => setForm({ ...form, displayName: e.target.value })}
+            />
+          </label>
+          <label className="admin-field">
+            说明（可选）
+            <input
+              className="admin-input"
+              placeholder="用途说明"
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+            />
+          </label>
+          <label className="admin-field">
+            API Key
+            <input
+              type="password"
+              className="admin-input"
+              placeholder="sk-... / amk_..."
+              autoComplete="off"
+              value={form.apiKey}
+              onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+            />
+          </label>
+        </form>
+      </AdminDialog>
     </div>
   )
 }

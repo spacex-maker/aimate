@@ -494,12 +494,27 @@ export function AdminKnowledgePage() {
       </div>
 
       {editing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="admin-kb-modal rounded-xl border border-white/15 bg-[#141414] p-4 shadow-2xl">
-            <h3 className="mb-3 text-sm font-semibold text-white flex-shrink-0">
-              {creating ? '新建原子知识库' : `编辑 · ${editing.publicId}`}
-            </h3>
-            <div className="admin-kb-modal__body space-y-3">
+        <div className="admin-dialog-backdrop" style={{zIndex:80}}>
+          <div className="admin-dialog admin-dialog--lg admin-kb-modal">
+            <div className="admin-dialog__head">
+              <div className="admin-dialog__titles">
+                <h4 className="admin-dialog__title">
+                  {creating ? '新建原子知识库' : `编辑 · ${editing.publicId}`}
+                </h4>
+              </div>
+              <button
+                type="button"
+                className="admin-dialog__close"
+                aria-label="关闭"
+                onClick={() => {
+                  setEditing(null)
+                  setCreating(false)
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div className="admin-dialog__body admin-kb-modal__body space-y-3">
               <label className="block text-[11px] text-white/45">
                 挂载分类
                 <AppSelect
@@ -585,10 +600,10 @@ export function AdminKnowledgePage() {
                 启用
               </label>
             </div>
-            <div className="mt-4 flex justify-end gap-2 flex-shrink-0">
+            <div className="admin-dialog__foot">
               <button
                 type="button"
-                className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/60"
+                className="admin-btn admin-btn--ghost admin-btn--sm"
                 onClick={() => {
                   setEditing(null)
                   setCreating(false)
@@ -598,7 +613,7 @@ export function AdminKnowledgePage() {
               </button>
               <button
                 type="button"
-                className="rounded-lg bg-blue-600/80 px-3 py-1.5 text-xs hover:bg-blue-600"
+                className="admin-btn admin-btn--sm"
                 disabled={saveKbMut.isPending}
                 onClick={() => saveKbMut.mutate()}
               >
