@@ -109,3 +109,68 @@ export interface BillingUsageDetail {
   success: boolean
   createTime: string | null
 }
+
+export interface KbCuratorConfig {
+  categoryIds: number[]
+  maxBasesPerRun: number
+  thinContentChars: number
+  staleDays: number
+  useTavily: boolean
+  tavilyMaxResults: number
+  tavilySearchDepth: string
+  researchQueriesPerBase: number
+  temperature: number
+  maxTokens: number
+  styleGuide: string
+  updateSummaryAndTags: boolean
+}
+
+export interface SystemAgentDto {
+  id: number
+  type: string
+  code: string
+  name: string
+  description: string | null
+  enabled: boolean
+  scheduleHour: number
+  scheduleMinute: number
+  systemModelId: number | null
+  running: boolean
+  lastRunAt: string | null
+  lastRunStatus: string | null
+  lastRunSummary: string | null
+  tavilyConfigured: boolean
+  config: KbCuratorConfig
+  updateTime: string | null
+}
+
+export interface SystemAgentSaveBody {
+  type?: string
+  code: string
+  name: string
+  description?: string
+  enabled?: boolean
+  scheduleHour?: number
+  scheduleMinute?: number
+  systemModelId?: number | null
+  config?: Partial<KbCuratorConfig>
+}
+
+export interface SystemAgentRunItem {
+  id: number
+  agentId: number
+  triggerType: string
+  status: string
+  startedAt: string | null
+  finishedAt: string | null
+  summary: string | null
+  detail: unknown
+}
+
+export interface SystemAgentRunPage {
+  items: SystemAgentRunItem[]
+  page: number
+  size: number
+  total: number
+  totalPages: number
+}

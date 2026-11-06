@@ -1,5 +1,7 @@
 import { FormEvent, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Plus, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { adminApi, type SystemProviderDto } from '../../api/admin'
 import { AdminToggle } from '../../ui/AdminToggle'
@@ -15,6 +17,7 @@ const emptyForm = {
 
 export function AdminProvidersPanel() {
   const queryClient = useQueryClient()
+  const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editKey, setEditKey] = useState('')
@@ -42,6 +45,7 @@ export function AdminProvidersPanel() {
     onSuccess: () => {
       toast.success('已添加服务商')
       setForm(emptyForm)
+      setCreateOpen(false)
       queryClient.invalidateQueries({ queryKey: ['admin-system-providers'] })
     },
     onError: (e: Error) => toast.error(e.message),
@@ -76,6 +80,11 @@ export function AdminProvidersPanel() {
     setEditKey('')
   }
 
+  function openCreate() {
+    setForm(emptyForm)
+    setCreateOpen(true)
+  }
+
   function onCreate(e: FormEvent) {
     e.preventDefault()
     if (!form.code.trim() || !form.displayName.trim()) {
@@ -99,12 +108,19 @@ export function AdminProvidersPanel() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h3 className="text-sm font-medium text-white">服务商管理</h3>
-        <p className="text-xs text-white/40 mt-0.5">
-          一个服务商配置一把 API Key；模型管理里同一服务商下的模型共用该密钥。
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-medium text-white">服务商管理</h3>
+          <p className="text-xs text-white/40 mt-0.5">
+            一个服务商配置一把 API Key；模型管理里同一服务商下的模型共用该密钥。
+          </p>
+        </div>
+        <button type="button" className="admin-btn admin-btn--sm" onClick={openCreate}>
+          <Plus size={14} aria-hidden />
+          新建服务商
+        </button>
       </div>
+
       <AdminQueryBar
         fields={[
           {
@@ -164,45 +180,10 @@ export function AdminProvidersPanel() {
         active={!!q || !!enabledFilter || !!keyFilter || !!qInput.trim()}
       />
 
-      <form onSubmit={onCreate} className="rounded-lg border border-white/10 p-3 space-y-3">
-        <div className="text-xs text-white/70">新增服务商</div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-          <input
-            className="admin-input"
-            placeholder="编码，如 deepseek"
-            value={form.code}
-            onChange={(e) => setForm({ ...form, code: e.target.value })}
-          />
-          <input
-            className="admin-input"
-            placeholder="显示名"
-            value={form.displayName}
-            onChange={(e) => setForm({ ...form, displayName: e.target.value })}
-          />
-          <input
-            className="admin-input"
-            placeholder="说明（可选）"
-            value={form.description}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
-          />
-          <input
-            type="password"
-            className="admin-input"
-            placeholder="API Key"
-            autoComplete="off"
-            value={form.apiKey}
-            onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
-          />
-        </div>
-        <button type="submit" className="admin-btn" disabled={createMutation.isPending}>
-          {createMutation.isPending ? '添加中…' : '添加'}
-        </button>
-      </form>
-
       {isLoading ? (
         <div className="text-sm text-white/40 py-8 text-center">加载中…</div>
       ) : providers.length === 0 ? (
-        <div className="text-sm text-white/35 py-8 text-center">暂无服务商</div>
+        <div className="text-sm text-white/35 py-8 text-center">暂无服务商，点击右上角新建</div>
       ) : filtered.length === 0 ? (
         <div className="text-sm text-white/35 py-8 text-center">无匹配服务商</div>
       ) : (
@@ -224,11 +205,7 @@ export function AdminProvidersPanel() {
                   <td className="py-2.5 px-3 font-mono text-white/60">{p.code}</td>
                   <td className="py-2.5 px-3">
                     {editingId === p.id ? (
-                      <input
-                        className="admin-input"
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                      />
+                      <input className="admin-input" value={editName} onChange={(e) => setEditName(e.target.value)} />
                     ) : (
                       p.displayName
                     )}
@@ -251,11 +228,7 @@ export function AdminProvidersPanel() {
                   </td>
                   <td className="py-2.5 px-3 text-white/50">
                     {editingId === p.id ? (
-                      <input
-                        className="admin-input"
-                        value={editDesc}
-                        onChange={(e) => setEditDesc(e.target.value)}
-                      />
+                      <input className="admin-input" value={editDesc} onChange={(e) => setEditDesc(e.target.value)} />
                     ) : (
                       p.description || '—'
                     )}
@@ -333,6 +306,89 @@ export function AdminProvidersPanel() {
           </table>
         </div>
       )}
+
+      {createOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/65 p-4"
+            onClick={() => !createMutation.isPending && setCreateOpen(false)}
+          >
+            <div
+              className="w-full max-w-lg rounded-xl border border-white/12 bg-[#121820] shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                <div>
+                  <h4 className="text-sm font-medium text-white">新建服务商</h4>
+                  <p className="mt-0.5 text-[11px] text-white/40">编码稳定后尽量不要改；一把 Key 供同服务商模型共用</p>
+                </div>
+                <button
+                  type="button"
+                  className="rounded-md p-1 text-white/40 hover:bg-white/10 hover:text-white"
+                  onClick={() => !createMutation.isPending && setCreateOpen(false)}
+                  aria-label="关闭"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <form onSubmit={onCreate} className="space-y-3 p-4">
+                <label className="admin-field">
+                  编码
+                  <input
+                    className="admin-input"
+                    placeholder="如 deepseek / aimodel"
+                    value={form.code}
+                    onChange={(e) => setForm({ ...form, code: e.target.value })}
+                    autoFocus
+                  />
+                </label>
+                <label className="admin-field">
+                  显示名
+                  <input
+                    className="admin-input"
+                    placeholder="DeepSeek"
+                    value={form.displayName}
+                    onChange={(e) => setForm({ ...form, displayName: e.target.value })}
+                  />
+                </label>
+                <label className="admin-field">
+                  说明（可选）
+                  <input
+                    className="admin-input"
+                    placeholder="用途说明"
+                    value={form.description}
+                    onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  />
+                </label>
+                <label className="admin-field">
+                  API Key
+                  <input
+                    type="password"
+                    className="admin-input"
+                    placeholder="sk-... / amk_..."
+                    autoComplete="off"
+                    value={form.apiKey}
+                    onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                  />
+                </label>
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn--ghost admin-btn--sm"
+                    disabled={createMutation.isPending}
+                    onClick={() => setCreateOpen(false)}
+                  >
+                    取消
+                  </button>
+                  <button type="submit" className="admin-btn admin-btn--sm" disabled={createMutation.isPending}>
+                    {createMutation.isPending ? '添加中…' : '添加'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }

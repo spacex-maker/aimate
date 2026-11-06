@@ -8,11 +8,14 @@ import type {
   ComponentStatusDto,
   HostLoadMetric,
   SystemConfigItem,
+  SystemAgentDto,
+  SystemAgentRunPage,
+  SystemAgentSaveBody,
   SystemProviderDto,
   UserContainerStatus,
 } from '../types/admin'
 
-export type { SystemProviderDto }
+export type { SystemProviderDto, SystemAgentDto, SystemAgentSaveBody, SystemAgentRunPage }
 import { http } from './httpClient'
 
 export const adminApi = {
@@ -294,4 +297,36 @@ export const adminApi = {
       body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
     }),
+  listSystemAgents: (params?: { q?: string; type?: string; enabled?: boolean }) => {
+    const qs = new URLSearchParams()
+    if (params?.q) qs.set('q', params.q)
+    if (params?.type) qs.set('type', params.type)
+    if (params?.enabled != null) qs.set('enabled', String(params.enabled))
+    const q = qs.toString()
+    return http<SystemAgentDto[]>(`/api/admin/system-agents${q ? `?${q}` : ''}`)
+  },
+  getSystemAgent: (id: number) => http<SystemAgentDto>(`/api/admin/system-agents/${id}`),
+  createSystemAgent: (body: SystemAgentSaveBody) =>
+    http<SystemAgentDto>('/api/admin/system-agents', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  updateSystemAgent: (id: number, body: SystemAgentSaveBody) =>
+    http<SystemAgentDto>(`/api/admin/system-agents/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  deleteSystemAgent: (id: number) =>
+    http<{ ok: boolean }>(`/api/admin/system-agents/${id}`, { method: 'DELETE' }),
+  runSystemAgent: (id: number) =>
+    http<{ ok: boolean; message?: string }>(`/api/admin/system-agents/${id}/run`, { method: 'POST' }),
+  listSystemAgentRuns: (id: number, params?: { page?: number; size?: number }) => {
+    const qs = new URLSearchParams()
+    qs.set('page', String(params?.page ?? 0))
+    qs.set('size', String(params?.size ?? 20))
+    return http<SystemAgentRunPage>(`/api/admin/system-agents/${id}/runs?${qs}`)
+  },
+
 }

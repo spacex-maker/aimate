@@ -41,4 +41,17 @@ public interface KnowledgeBaseRepository extends JpaRepository<KnowledgeBase, Lo
             @Param("code") String code,
             Pageable pageable
     );
+
+    /** 策展候选：启用库，可按分类过滤，按更新时间升序（越久未更新越优先）。 */
+    @Query("""
+            SELECT k FROM KnowledgeBase k
+            WHERE k.enabled = true
+              AND (:categoryIdsEmpty = true OR k.categoryId IN :categoryIds)
+            ORDER BY k.updateTime ASC, k.id ASC
+            """)
+    List<KnowledgeBase> findCuratorCandidates(
+            @Param("categoryIdsEmpty") boolean categoryIdsEmpty,
+            @Param("categoryIds") Collection<Long> categoryIds,
+            Pageable pageable
+    );
 }

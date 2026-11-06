@@ -7,6 +7,7 @@ import {
 } from '../../components/admin/AdminModal'
 import { AdminAgentsPanel } from '../../components/admin/AdminAgentsPanel'
 import { AdminProvidersPanel } from '../../components/admin/AdminProvidersPanel'
+import { AdminSystemAgentsPanel } from '../../components/admin/AdminSystemAgentsPanel'
 export { AdminKnowledgePage } from './AdminKnowledgePage'
 
 export function AdminModelsPage() {
@@ -88,6 +89,18 @@ export function AdminAgentsPage() {
       <p className="admin-page__lead">招聘目录、等级模型，以及与官方知识库的绑定</p>
       <div className="mt-4">
         <AdminAgentsPanel />
+      </div>
+    </div>
+  )
+}
+
+export function AdminSystemAgentsPage() {
+  return (
+    <div>
+      <h1 className="admin-page__title">系统 Agent</h1>
+      <p className="admin-page__lead">定时维护官方知识库：联网检索 + 专业改写，让内容持续完善</p>
+      <div className="mt-4">
+        <AdminSystemAgentsPanel />
       </div>
     </div>
   )
