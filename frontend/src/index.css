@@ -3839,3 +3839,28 @@ a.auth-gate__cta {
 }
 .emerge__footer a:hover { color: var(--em-teal); }
 
+
+/* Download page: single quiet composition */
+.agent-land--download {
+  min-height: 100vh;
+  overflow: hidden;
+}
+.agent-land__hero--download {
+  min-height: calc(100vh - 4.5rem);
+  display: grid;
+  place-items: center;
+  padding: 6rem 1.25rem 4rem;
+}
+.agent-land__hero--download .agent-land__hero-inner {
+  text-align: center;
+  max-width: 36rem;
+}
+.agent-land__hero--download .agent-land__cta-row {
+  justify-content: center;
+}
+.agent-land__dl-meta {
+  margin-top: 1.25rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.32);
+}
