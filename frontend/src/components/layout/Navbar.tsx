@@ -9,8 +9,6 @@ import {
   Building2,
   Cog,
   Copy,
-  Cpu,
-  KeyRound,
   LayoutDashboard,
   LogOut,
   MoreHorizontal,
@@ -44,8 +42,6 @@ const baseLinks = [
   { to: '/agents/hire', label: 'Agent 招聘', icon: Briefcase },
   { to: '/offices', label: '办公室租用', icon: Building2 },
   { to: '/agents/mine', label: '我的 Agent', icon: Users },
-  { to: '/api-keys', label: 'API 密钥', icon: KeyRound },
-  { to: '/embedding-models', label: '向量模型', icon: Cpu },
   { to: '/tools', label: '工具', icon: Wrench },
 ]
 
@@ -266,40 +262,54 @@ export function Navbar({ collapsed, onToggle }: NavbarProps) {
 
   return (
     <nav className="h-full flex flex-col min-w-0">
-      <NavLink
-        to="/app"
-        end
+      <div
         className={clsx(
-          'flex items-center border-b border-white/10 flex-shrink-0 text-inherit no-underline',
-          collapsed ? 'justify-center px-0 py-4' : 'gap-2.5 px-5 py-5'
+          'flex items-center border-b border-white/10 flex-shrink-0',
+          collapsed ? 'justify-center px-0 py-3' : 'gap-2 px-3 py-4',
         )}
-        title="控制台"
       >
-        <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0">
-          <Bot className="w-5 h-5 text-white" />
-        </div>
-        {!collapsed && (
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-bold text-white leading-none">AIMATEX-AGENT</div>
-            <div className="text-[10px] text-white/40 mt-0.5">Autonomous Agent</div>
-          </div>
-        )}
-      </NavLink>
-
-      <div className="px-2 pt-2 flex-shrink-0">
-        <button
-          type="button"
-          onClick={onToggle}
-          title={collapsed ? '展开菜单' : '收起菜单'}
+        <NavLink
+          to="/app"
+          end
           className={clsx(
-            'flex items-center rounded-lg text-white/50 hover:text-white/80 hover:bg-white/5 transition-colors w-full',
-            collapsed ? 'justify-center p-2' : 'gap-3 px-3 py-2'
+            'flex items-center min-w-0 text-inherit no-underline',
+            collapsed ? 'justify-center' : 'gap-2.5 flex-1',
           )}
+          title="控制台"
         >
-          {collapsed ? <PanelLeftOpen className="w-5 h-5" /> : <PanelLeftClose className="w-4 h-4 flex-shrink-0" />}
-          {!collapsed && <span className="text-sm">收起菜单</span>}
-        </button>
+          <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0">
+            <Bot className="w-5 h-5 text-white" />
+          </div>
+          {!collapsed && (
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-bold text-white leading-none">AIMATEX-AGENT</div>
+              <div className="text-[10px] text-white/40 mt-0.5">Autonomous Agent</div>
+            </div>
+          )}
+        </NavLink>
+        {!collapsed && (
+          <button
+            type="button"
+            onClick={onToggle}
+            title="收起侧栏"
+            className="flex-shrink-0 rounded-lg p-1.5 text-white/35 hover:text-white/75 hover:bg-white/5 transition-colors"
+          >
+            <PanelLeftClose className="w-4 h-4" />
+          </button>
+        )}
       </div>
+      {collapsed && (
+        <div className="px-2 pt-2 flex-shrink-0 flex justify-center">
+          <button
+            type="button"
+            onClick={onToggle}
+            title="展开侧栏"
+            className="rounded-lg p-2 text-white/45 hover:text-white/80 hover:bg-white/5 transition-colors"
+          >
+            <PanelLeftOpen className="w-5 h-5" />
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 py-3 px-2 space-y-2 overflow-y-auto">
         <button
