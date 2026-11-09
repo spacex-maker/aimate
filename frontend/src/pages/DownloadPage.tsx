@@ -97,7 +97,7 @@ export function DownloadPage() {
               </div>
               <figure className="dl-step__shot">
                 <img
-                  src="/download/smartscreen-1.png"
+                  src="/guide/smartscreen-1.png"
                   alt="Windows 提示：点击更多信息"
                   width={560}
                   height={320}
@@ -113,7 +113,7 @@ export function DownloadPage() {
               </div>
               <figure className="dl-step__shot">
                 <img
-                  src="/download/smartscreen-2.png"
+                  src="/guide/smartscreen-2.png"
                   alt="Windows 提示：点击仍要运行"
                   width={560}
                   height={320}
