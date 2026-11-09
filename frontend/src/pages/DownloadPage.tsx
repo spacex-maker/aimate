@@ -42,7 +42,7 @@ export function DownloadPage() {
         <div className="agent-land__hero-inner">
           <h1 className="agent-land__brand">AIMATEX-AGENT</h1>
           <p className="agent-land__headline">下载客户端</p>
-          <p className="agent-land__lead">让同事操控本机 Cursor。</p>
+          <p className="agent-land__lead">让同事操控本机 AI。</p>
           <div className="agent-land__cta-row">
             <a href={CONNECTOR_DOWNLOAD.windowsSetupUrl} className="agent-land__btn">
               <Download className="w-4 h-4" />
