@@ -11,6 +11,7 @@ import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { OAuthCallbackPage } from './pages/OAuthCallbackPage'
 import { LandingPage } from './pages/LandingPage'
+import { DownloadPage } from './pages/DownloadPage'
 import { EmergencePage } from './pages/EmergencePage'
 import { HomePage } from './pages/HomePage'
 import { DashboardPage } from './pages/DashboardPage'
@@ -106,6 +107,7 @@ export default function App() {
         <Routes>
           {/* ── Public routes (no sidebar) ─────────────────────────────── */}
           <Route path="/" element={<LandingPage />} />
+          <Route path="/download" element={<DownloadPage />} />
           <Route path="/emergence" element={<EmergencePage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />

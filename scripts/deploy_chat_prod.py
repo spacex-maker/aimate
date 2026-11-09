@@ -128,6 +128,12 @@ NGINX_WEB = f"""server {{
         root /var/www/certbot;
     }}
 
+    location ^~ /downloads/ {{
+        default_type application/octet-stream;
+        add_header Content-Disposition "attachment";
+        try_files $uri =404;
+    }}
+
     location / {{
         try_files $uri $uri/ /index.html;
     }}

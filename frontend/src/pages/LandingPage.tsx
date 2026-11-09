@@ -18,6 +18,7 @@ const NAV: { label: string; href?: string; to?: string }[] = [
   { href: '#collab', label: '一起干活' },
   { href: '#trust', label: '放心交给它' },
   { to: '/emergence', label: '智能涌现' },
+  { to: '/download', label: '下载客户端' },
 ]
 
 const HIRE_SCENES = [
@@ -290,6 +291,9 @@ export function LandingPage() {
             <a href="#hire" className="agent-land__btn-ghost">
               看看它能做什么
             </a>
+            <Link to="/download" className="agent-land__btn-ghost">
+              下载客户端
+            </Link>
           </div>
         </div>
         <a href="#hire" className="agent-land__scroll" aria-label="向下滚动">
@@ -505,6 +509,7 @@ export function LandingPage() {
       <footer className="agent-land__footer">
         <span>© {new Date().getFullYear()} AIMATEX</span>
         <Link to="/emergence">智能涌现</Link>
+        <Link to="/download">下载客户端</Link>
         <a href={SOUL_SITE_ORIGIN} target="_blank" rel="noopener noreferrer">
           Soul
         </a>

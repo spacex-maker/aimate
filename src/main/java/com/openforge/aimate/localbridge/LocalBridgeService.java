@@ -1370,10 +1370,10 @@ public class LocalBridgeService {
         if (mode == LocalBridgeDevice.LinkMode.CLIENT) {
             out.put("device", null);
             out.put("clientHint",
-                    "请在本机安装并登录 Aimate Connector，打开对应连接器开关。"
+                    "请先下载并安装 Aimate Connector（https://chat.aimatex.com/download），登录后打开对应连接器开关。"
                             + " 连接成功后，该设备会自动出现在本列表（连接方式：客户端）。"
                             + " 同一账号在多台电脑各装一份 Connector，即可挂到同一 Agent。");
-            out.put("connectorDownloadHint", "从本机已有 Connector 或发行包启动即可；打开开关后约 15 秒内上报在线。");
+            out.put("connectorDownloadHint", "下载：https://chat.aimatex.com/downloads/Aimate-Connector-setup.exe ；安装登录后打开开关，约 15 秒内上报在线。");
             return out;
         }
 

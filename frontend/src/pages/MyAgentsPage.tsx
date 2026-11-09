@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import {
@@ -36,6 +36,7 @@ import { AgentAvatar, formatAgentDisplayTitle } from '../components/agent/AgentA
 import { fileToChatImage } from '../lib/chatImage'
 import { soulConsoleUrl } from '../lib/host'
 import { openUserCenter } from '../lib/userCenter'
+import { CONNECTOR_DOWNLOAD } from '../lib/connectorDownload'
 import { AppToggle } from '../ui/AppToggle'
 import clsx from 'clsx'
 
@@ -1329,13 +1330,28 @@ export function MyAgentsPage() {
                 </button>
               </div>
               <p className="mt-3 text-sm leading-relaxed text-white/65 whitespace-pre-wrap">{clientHint}</p>
-              <button
-                type="button"
-                onClick={() => setClientHint(null)}
-                className="mt-4 w-full rounded-xl bg-cyan-500/85 py-2.5 text-sm font-medium text-black"
-              >
-                知道了
-              </button>
+              <div className="mt-4 grid gap-2">
+                <a
+                  href={CONNECTOR_DOWNLOAD.windowsSetupUrl}
+                  className="w-full rounded-xl bg-emerald-500/90 py-2.5 text-center text-sm font-medium text-black hover:bg-emerald-400"
+                >
+                  下载 Windows 客户端
+                </a>
+                <Link
+                  to={CONNECTOR_DOWNLOAD.pagePath}
+                  onClick={() => setClientHint(null)}
+                  className="w-full rounded-xl border border-white/12 py-2.5 text-center text-sm text-white/70 hover:bg-white/5"
+                >
+                  查看安装说明
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setClientHint(null)}
+                  className="w-full rounded-xl bg-cyan-500/85 py-2.5 text-sm font-medium text-black"
+                >
+                  知道了
+                </button>
+              </div>
             </div>
           </div>,
           document.body,
