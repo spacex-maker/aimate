@@ -518,7 +518,7 @@ def main() -> int:
     if frontend_only:
         sftp = ssh.open_sftp()
         run(ssh, f"mkdir -p {REMOTE_WEB} {REMOTE_ADMIN_WEB}")
-        run(ssh, f"rm -rf {REMOTE_WEB}/* {REMOTE_ADMIN_WEB}/*")
+        run(ssh, f"find {REMOTE_WEB} -mindepth 1 -maxdepth 1 ! -name downloads -exec rm -rf {{}} +; rm -rf {REMOTE_ADMIN_WEB}/*")
         sftp_put_dir(sftp, WEB_DIST, REMOTE_WEB)
         sftp_put_dir(sftp, WEB_DIST, REMOTE_ADMIN_WEB)
         sftp.close()
@@ -580,7 +580,7 @@ def main() -> int:
         print(f"Wrote {REMOTE_ENV}")
 
     print("Uploading frontend dist (user + admin) ...")
-    run(ssh, f"rm -rf {REMOTE_WEB}/* {REMOTE_ADMIN_WEB}/*")
+    run(ssh, f"find {REMOTE_WEB} -mindepth 1 -maxdepth 1 ! -name downloads -exec rm -rf {{}} +; rm -rf {REMOTE_ADMIN_WEB}/*")
     sftp_put_dir(sftp, WEB_DIST, REMOTE_WEB)
     sftp_put_dir(sftp, WEB_DIST, REMOTE_ADMIN_WEB)
     sftp.close()
