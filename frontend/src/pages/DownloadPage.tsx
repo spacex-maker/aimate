@@ -1,7 +1,44 @@
 import { Link } from 'react-router-dom'
-import { ArrowRight, Bot, Download, Monitor } from 'lucide-react'
+import { ArrowRight, Bot, Download } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { CONNECTOR_DOWNLOAD, CONNECTOR_VERSION } from '../lib/connectorDownload'
+
+function HeroCanvas() {
+  return (
+    <div className="agent-land__canvas" aria-hidden>
+      <div className="agent-land__canvas-glow" />
+      <div className="agent-land__canvas-ring agent-land__canvas-ring--a" />
+      <div className="agent-land__canvas-ring agent-land__canvas-ring--b" />
+      <div className="agent-land__canvas-ring agent-land__canvas-ring--c" />
+      <svg className="agent-land__canvas-wires" viewBox="0 0 100 100" preserveAspectRatio="none">
+        <path d="M18 28 C 32 18, 40 42, 50 50" />
+        <path d="M82 24 C 68 20, 60 40, 50 50" />
+        <path d="M20 78 C 34 70, 40 58, 50 50" />
+        <path d="M84 76 C 70 72, 62 58, 50 50" />
+        <path d="M50 12 C 52 28, 48 36, 50 50" />
+        <path d="M50 50 C 48 64, 52 78, 50 90" />
+      </svg>
+      {[
+        { x: 18, y: 28, l: 'HIRE' },
+        { x: 82, y: 24, l: 'SOUL' },
+        { x: 50, y: 50, l: 'YOU', hub: true },
+        { x: 20, y: 78, l: 'WORK' },
+        { x: 84, y: 76, l: 'TEAM' },
+        { x: 50, y: 12, l: 'TRUST' },
+      ].map((n, i) => (
+        <div
+          key={n.l}
+          className={`agent-land__canvas-node ${n.hub ? 'is-hub' : ''}`}
+          style={{ left: `${n.x}%`, top: `${n.y}%`, animationDelay: `${i * 0.35}s` }}
+        >
+          <span className="dot" />
+          <span className="lab">{n.l}</span>
+        </div>
+      ))}
+      <div className="agent-land__canvas-beam" />
+    </div>
+  )
+}
 
 export function DownloadPage() {
   const { isLoggedIn, user } = useAuth()
@@ -38,97 +75,74 @@ export function DownloadPage() {
         </div>
       </header>
 
-      <main className="dl-page">
-        <section className="dl-hero">
-          <div className="dl-hero__visual" aria-hidden>
-            <div className="dl-hero__glow" />
-            <div className="dl-hero__window">
-              <div className="dl-hero__titlebar">
-                <span />
-                <span />
-                <span />
-              </div>
-              <div className="dl-hero__body">
-                <div className="dl-hero__mark">
-                  <Bot className="w-7 h-7" />
-                </div>
-                <div className="dl-hero__lines">
-                  <i />
-                  <i />
-                  <i />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="dl-hero__copy">
-            <p className="dl-kicker">Aimate Connector</p>
-            <h1 className="dl-title">下载客户端</h1>
-            <p className="dl-lead">让同事操控本机 AI。</p>
-
-            <a href={CONNECTOR_DOWNLOAD.windowsSetupUrl} className="dl-cta">
-              <Download className="w-5 h-5" />
+      <section className="agent-land__hero agent-land__hero--dl">
+        <HeroCanvas />
+        <div className="agent-land__hero-inner">
+          <h1 className="agent-land__brand">AIMATEX-AGENT</h1>
+          <p className="agent-land__headline">下载客户端</p>
+          <p className="agent-land__lead">让同事操控本机 AI。</p>
+          <div className="agent-land__cta-row">
+            <a href={CONNECTOR_DOWNLOAD.windowsSetupUrl} className="agent-land__btn">
+              <Download className="w-4 h-4" />
               <span>下载 Windows 版</span>
             </a>
+            <a href="#install" className="agent-land__btn-ghost">
+              安装说明
+            </a>
+          </div>
+          <p className="dl-ver">Windows · v{CONNECTOR_VERSION}</p>
+        </div>
+        <a href="#install" className="agent-land__scroll" aria-label="查看安装说明">
+          <span />
+        </a>
+      </section>
 
-            <div className="dl-meta">
-              <span className="dl-chip">
-                <Monitor className="w-3.5 h-3.5" />
-                Windows
-              </span>
-              <span>v{CONNECTOR_VERSION}</span>
+      <section id="install" className="agent-land__section dl-install">
+        <div className="agent-land__section-head agent-land__section-head--apple">
+          <p className="agent-land__eye">Install</p>
+          <h2>
+            出现绿色提示？
+            <br />
+            两步继续。
+          </h2>
+          <p>新客户端常见拦截。不是病毒，按图操作即可。</p>
+        </div>
+
+        <div className="dl-rail">
+          <article className="dl-rail__item">
+            <div className="dl-rail__cap">
+              <span>01</span>
+              <h3>点「更多信息」</h3>
             </div>
-          </div>
-        </section>
+            <img
+              src="/guide/smartscreen-1.png"
+              alt="Windows SmartScreen：点击更多信息"
+              width={720}
+              height={420}
+              loading="lazy"
+            />
+          </article>
+          <article className="dl-rail__item">
+            <div className="dl-rail__cap">
+              <span>02</span>
+              <h3>再点「仍要运行」</h3>
+            </div>
+            <img
+              src="/guide/smartscreen-2.png"
+              alt="Windows SmartScreen：点击仍要运行"
+              width={720}
+              height={420}
+              loading="lazy"
+            />
+          </article>
+        </div>
+      </section>
 
-        <section className="dl-guide" id="install">
-          <div className="dl-guide__head">
-            <p className="dl-kicker">Install</p>
-            <h2>安装时出现绿色提示？</h2>
-            <p>新发布客户端常见，不是病毒。按两步继续即可。</p>
-          </div>
-
-          <ol className="dl-steps">
-            <li className="dl-step">
-              <div className="dl-step__text">
-                <span className="dl-step__n">01</span>
-                <h3>点击「更多信息」</h3>
-                <p>Windows SmartScreen 会先拦截未广泛下载的安装包。</p>
-              </div>
-              <figure className="dl-step__shot">
-                <img
-                  src="/guide/smartscreen-1.png"
-                  alt="Windows 提示：点击更多信息"
-                  width={560}
-                  height={320}
-                  loading="lazy"
-                />
-              </figure>
-            </li>
-            <li className="dl-step">
-              <div className="dl-step__text">
-                <span className="dl-step__n">02</span>
-                <h3>再点「仍要运行」</h3>
-                <p>展开后选择继续安装，即可打开安装向导。</p>
-              </div>
-              <figure className="dl-step__shot">
-                <img
-                  src="/guide/smartscreen-2.png"
-                  alt="Windows 提示：点击仍要运行"
-                  width={560}
-                  height={320}
-                  loading="lazy"
-                />
-              </figure>
-            </li>
-          </ol>
-        </section>
-
-        <footer className="dl-foot">
-          <Link to="/">返回首页</Link>
-          <span>© {new Date().getFullYear()} AIMATEX</span>
-        </footer>
-      </main>
+      <footer className="agent-land__footer">
+        <span>© {new Date().getFullYear()} AIMATEX</span>
+        <Link to="/">首页</Link>
+        <a href={CONNECTOR_DOWNLOAD.windowsSetupUrl}>重新下载</a>
+      </footer>
     </div>
   )
 }
