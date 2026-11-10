@@ -345,14 +345,20 @@ public class LlmClient {
             model = config.model();
         }
         Integer maxTokens = request.maxTokens();
-        if (maxTokens != null && maxTokens > 8192 && looksLikeLocalOllamaCompat()) {
-            log.debug("[LlmClient:{}] cap max_tokens {} → 8192 for local/Ollama-compat endpoint",
-                    config.name(), maxTokens);
-            maxTokens = 8192;
+        java.util.List<Message> messages = sanitizeMessages(request.messages());
+        if (looksLikeLocalOllamaCompat()) {
+            int promptEst = TokenCounter.estimateTokensForMessages(messages);
+            // Prefer caller-provided maxTokens; still hard-cap so prompt+completion stays sane.
+            int hardCap = Math.max(256, 8_192 - Math.min(promptEst, 7_500));
+            if (maxTokens == null || maxTokens > hardCap) {
+                log.debug("[LlmClient:{}] cap max_tokens {} → {} (prompt≈{} local/Aimodel)",
+                        config.name(), maxTokens, hardCap, promptEst);
+                maxTokens = hardCap;
+            }
         }
         return ChatRequest.builder()
                 .model(model)
-                .messages(sanitizeMessages(request.messages()))
+                .messages(messages)
                 .tools(request.tools())
                 .toolChoice(request.toolChoice())
                 .temperature(request.temperature())

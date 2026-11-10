@@ -13,10 +13,12 @@ import com.openforge.aimate.domain.AgentTool;
 import com.openforge.aimate.domain.SessionMessage;
 import com.openforge.aimate.domain.UserApiKey;
 import com.openforge.aimate.domain.UserDefaultModel;
+import com.openforge.aimate.agent.dto.ContextUsageDto;
 import com.openforge.aimate.llm.LlmClient;
 import com.openforge.aimate.llm.LlmProperties;
 import com.openforge.aimate.llm.LlmRouter;
 import com.openforge.aimate.llm.StreamCallbacks;
+import com.openforge.aimate.llm.TokenCounter;
 import com.openforge.aimate.llm.model.ChatRequest;
 import com.openforge.aimate.llm.model.ChatResponse;
 import com.openforge.aimate.llm.model.Message;
@@ -159,6 +161,8 @@ public class AgentLoopService {
     private final LocalBridgeService         localBridgeService;
     private final LocalBridgeTaskRepository  localBridgeTaskRepository;
     private final UserAgentRepository        userAgentRepository;
+    private final ContextUsageService        contextUsageService;
+    private final ContextCompressService     contextCompressService;
 
     // Tracks which exact contents have already been stored via store_memory
     // in this JVM, per sessionId, to avoid spamming duplicate memories.
@@ -467,6 +471,85 @@ public class AgentLoopService {
         return id.contains("flash-next") || id.contains("qwen3.8-flash");
     }
 
+    /** Resolve selected system model id for context-window accounting (null → default 128k). */
+    private Long resolveSelectedSystemModelId(AgentSession session) {
+        if (session == null || session.getUserId() == null) return null;
+        return userDefaultModelRepository.findByUserId(session.getUserId())
+                .filter(udm -> "SYSTEM".equalsIgnoreCase(udm.getSource()) && udm.getSystemModel() != null)
+                .map(udm -> udm.getSystemModel().getId())
+                .orElse(null);
+    }
+
+    private String resolveSelectedModelId(AgentSession session) {
+        if (session == null || session.getUserId() == null) return null;
+        return userDefaultModelRepository.findByUserId(session.getUserId())
+                .map(udm -> {
+                    if ("SYSTEM".equalsIgnoreCase(udm.getSource()) && udm.getSystemModel() != null) {
+                        return udm.getSystemModel().getModelId();
+                    }
+                    if ("USER_KEY".equalsIgnoreCase(udm.getSource()) && udm.getUserApiKey() != null) {
+                        return udm.getUserApiKey().getModel();
+                    }
+                    return null;
+                })
+                .orElse(null);
+    }
+
+    /** Persist ICA compress when session usage is near/over the selected model window. */
+    private void maybeAutoCompressSession(AgentSession session) {
+        Long modelPk = resolveSelectedSystemModelId(session);
+        ContextUsageDto usage = contextUsageService.estimateRaw(session, modelPk);
+        if (usage.usedTokens() < (int) (usage.limitTokens() * ContextUsageDto.COMPRESS_URGENT_RATIO)) {
+            return;
+        }
+        try {
+            var result = contextCompressService.compress(session, modelPk);
+            log.info("[Agent:{}] Auto-compress before LLM: ok={} before={} after={} hint={}",
+                    session.getSessionId(),
+                    result.ok(),
+                    result.usageBefore() != null ? result.usageBefore().usedTokens() : null,
+                    result.usageAfter() != null ? result.usageAfter().usedTokens() : null,
+                    result.message());
+        } catch (Exception e) {
+            log.warn("[Agent:{}] Auto-compress failed, will hard-trim in memory: {}",
+                    session.getSessionId(), e.getMessage());
+        }
+    }
+
+    /**
+     * When usage already exceeds the selected model window, persist ICA compress once then reload.
+     */
+    private List<Message> maybeAutoCompressAndReload(
+            AgentSession session,
+            SessionMessage placeholder,
+            List<Message> context
+    ) {
+        Long modelPk = resolveSelectedSystemModelId(session);
+        int limit = contextUsageService.resolveLimit(modelPk);
+        int promptEst = TokenCounter.estimateTokensForMessages(context);
+        if (promptEst < (int) (limit * ContextUsageDto.COMPRESS_URGENT_RATIO)) {
+            return context;
+        }
+        maybeAutoCompressSession(session);
+        AgentSession fresh = sessionRepository.findBySessionId(session.getSessionId()).orElse(session);
+        SessionMessage ph = sessionMessageService.findById(placeholder.getId()).orElse(placeholder);
+        List<Message> reloaded = sessionMessageService.loadContextForReply(fresh, ph);
+        return trimTrailingEmptyAssistant(reloaded);
+    }
+
+    private PromptContextFitter.FitResult fitContextToModelWindow(
+            AgentSession session,
+            List<Message> context,
+            int toolCount
+    ) {
+        Long modelPk = resolveSelectedSystemModelId(session);
+        int limit = contextUsageService.resolveLimit(modelPk);
+        String modelId = resolveSelectedModelId(session);
+        int preferred = PromptContextFitter.preferredMaxTokensForModel(modelId, limit);
+        int toolsReserve = PromptContextFitter.estimateToolsReserve(toolCount);
+        return PromptContextFitter.fit(context, limit, toolsReserve, preferred);
+    }
+
     // 已不再提供任何 provider 级默认 baseUrl/model，一切按 DB 显式配置。
 
     private static final List<String> EXECUTION_PLAN = List.of("回忆", "思考与执行", "回答");
@@ -513,6 +596,7 @@ public class AgentLoopService {
                     .orElseThrow(() -> new IllegalStateException("Placeholder not found: " + placeholderId));
             List<Message> context = sessionMessageService.loadContextForReply(session, placeholder);
             context = trimTrailingEmptyAssistant(context);
+            context = maybeAutoCompressAndReload(session, placeholder, context);
 
             publisher.publish(AgentEvent.planReady(sessionId, new ArrayList<>(EXECUTION_PLAN)));
             publisher.publish(AgentEvent.stepStart(sessionId, 1, EXECUTION_PLAN.get(0)));
@@ -601,6 +685,8 @@ public class AgentLoopService {
                     log.warn("[Agent:{}] Pre-warm container for userId={} failed (retry).", sessionId, userId);
                 }
             }
+            maybeAutoCompressSession(session);
+            session = sessionRepository.findBySessionId(sessionId).orElse(session);
             List<Message> context = sessionMessageService.loadContextUpToSeq(session, userSeq);
             context = trimTrailingEmptyAssistant(context);
 
@@ -701,7 +787,17 @@ public class AgentLoopService {
             }
             String        queryForTools = lastUserMessageFrom(context, session.getTaskDescription());
             List<Tool>    tools   = loadRelevantTools(queryForTools, TOP_K_TOOLS, userId, session);
-            ChatRequest   request = ChatRequest.withTools("", context, tools.isEmpty() ? null : tools);
+            PromptContextFitter.FitResult fittedLegacy = fitContextToModelWindow(session, context, tools.size());
+            context = new ArrayList<>(fittedLegacy.messages());
+            ChatRequest.ChatRequestBuilder legacyReq = ChatRequest.builder()
+                    .model("")
+                    .messages(context)
+                    .tools(tools.isEmpty() ? null : tools)
+                    .toolChoice(tools.isEmpty() ? "none" : "auto")
+                    .temperature(0.7)
+                    .maxTokens(fittedLegacy.maxTokens());
+            applyThinkingPreference(legacyReq, session, false);
+            ChatRequest request = legacyReq.build();
             final AgentSession finalSession = session;
             final int          finalIter   = iteration;
 
@@ -836,16 +932,26 @@ public class AgentLoopService {
                 toolChoice = "required";
                 forceDispatchTool = false;
             }
+            final int finalIter = iteration;
+            PromptContextFitter.FitResult fitted = fitContextToModelWindow(session, context, tools.size());
+            context = new ArrayList<>(fitted.messages());
+            if (fitted.droppedMessages() > 0) {
+                log.warn("[Agent:{}] Trimmed {} older messages to fit model window (prompt≈{} max_tokens={})",
+                        sessionId, fitted.droppedMessages(), fitted.promptTokens(), fitted.maxTokens());
+                publisher.publish(AgentEvent.thinking(sessionId,
+                        "上下文超过当前模型窗口，已自动裁剪较早轮次后继续（约 "
+                                + fitted.promptTokens() + " tokens）。",
+                        finalIter));
+            }
             ChatRequest.ChatRequestBuilder reqBuilder = ChatRequest.builder()
                     .model("")
                     .messages(context)
                     .tools(tools.isEmpty() ? null : tools)
                     .toolChoice(tools.isEmpty() ? "none" : toolChoice)
                     .temperature(0.7)
-                    .maxTokens(16384);
+                    .maxTokens(fitted.maxTokens());
             applyThinkingPreference(reqBuilder, session, forcingDispatch);
             ChatRequest request = reqBuilder.build();
-            final int finalIter = iteration;
             StringBuilder currentIterReasoning = new StringBuilder();
 
             StreamCallbacks callbacks = new StreamCallbacks(
