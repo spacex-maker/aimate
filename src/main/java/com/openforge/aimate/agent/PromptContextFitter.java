@@ -5,7 +5,6 @@ import com.openforge.aimate.llm.model.Message;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * Fit chat messages into a model context window before calling the provider.
@@ -82,16 +81,11 @@ public final class PromptContextFitter {
 
     public static int preferredMaxTokensForModel(String modelId, int contextWindow) {
         int ctx = Math.max(1024, contextWindow);
-        if (isSmallWindowModel(modelId) || ctx <= 16_384) {
+        // 小窗口（≤16k）给回复留更大比例；大窗口仍封顶 16k completion
+        if (ctx <= 16_384) {
             return Math.min(2_048, Math.max(512, ctx / 3));
         }
         return 16_384;
-    }
-
-    public static boolean isSmallWindowModel(String modelId) {
-        if (modelId == null || modelId.isBlank()) return false;
-        String id = modelId.toLowerCase(Locale.ROOT);
-        return id.contains("flash-next") || id.contains("qwen3.8-flash");
     }
 
     private static boolean isUnsafeHead(Message m) {

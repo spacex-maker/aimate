@@ -495,11 +495,72 @@ public class AgentLoopService {
                 .orElse(null);
     }
 
-    /** Persist ICA compress when session usage is near/over the selected model window. */
+    /**
+     * 发出请求前：按当前模型窗口判断；若会超限，优先走已有 ICA 压缩（可多轮），
+     * 仍超再内存硬裁（兜底，避免上游 400）。
+     */
+    private List<Message> ensureContextFitsModelBeforeRequest(
+            AgentSession session,
+            SessionMessage placeholder,
+            List<Message> context,
+            String sessionId
+    ) {
+        Long modelPk = resolveSelectedSystemModelId(session);
+        int limit = contextUsageService.resolveLimit(modelPk);
+        int toolsReserve = PromptContextFitter.estimateToolsReserve(8); // 预留工具 schema
+        String modelId = resolveSelectedModelId(session);
+        int preferred = PromptContextFitter.preferredMaxTokensForModel(modelId, limit);
+        int completionFloor = Math.min(preferred, Math.max(256, limit / 4));
+        int safeBudget = Math.max(512, limit - toolsReserve - completionFloor);
+
+        int promptEst = TokenCounter.estimateTokensForMessages(context);
+        if (promptEst <= safeBudget) {
+            return context;
+        }
+
+        log.info("[Agent:{}] Context {} > model budget {} (limit={}), auto ICA compress…",
+                sessionId, promptEst, safeBudget, limit);
+        publisher.publish(AgentEvent.thinking(sessionId,
+                "当前模型上下文上限约 " + limit + "，本轮约 " + promptEst
+                        + " tokens，已自动压缩较早轮次…",
+                0));
+
+        // 优先走现有压缩逻辑，最多 3 轮直到落入安全预算或无法再压
+        for (int round = 1; round <= 3; round++) {
+            ContextUsageDto usage = contextUsageService.estimateRaw(session, modelPk);
+            if (usage.usedTokens() <= safeBudget
+                    && TokenCounter.estimateTokensForMessages(context) <= safeBudget) {
+                break;
+            }
+            try {
+                var result = contextCompressService.compress(session, modelPk);
+                log.info("[Agent:{}] Auto-compress round {}: ok={} before={} after={} hint={}",
+                        sessionId, round, result.ok(),
+                        result.usageBefore() != null ? result.usageBefore().usedTokens() : null,
+                        result.usageAfter() != null ? result.usageAfter().usedTokens() : null,
+                        result.message());
+                if (!result.ok()) {
+                    break;
+                }
+                session = sessionRepository.findBySessionId(sessionId).orElse(session);
+                SessionMessage ph = sessionMessageService.findById(placeholder.getId()).orElse(placeholder);
+                context = trimTrailingEmptyAssistant(
+                        sessionMessageService.loadContextForReply(session, ph));
+            } catch (Exception e) {
+                log.warn("[Agent:{}] Auto-compress round {} failed: {}", sessionId, round, e.getMessage());
+                break;
+            }
+        }
+        return context;
+    }
+
+    /** @deprecated use {@link #ensureContextFitsModelBeforeRequest} */
     private void maybeAutoCompressSession(AgentSession session) {
         Long modelPk = resolveSelectedSystemModelId(session);
+        int limit = contextUsageService.resolveLimit(modelPk);
         ContextUsageDto usage = contextUsageService.estimateRaw(session, modelPk);
-        if (usage.usedTokens() < (int) (usage.limitTokens() * ContextUsageDto.COMPRESS_URGENT_RATIO)) {
+        int safeBudget = Math.max(512, limit - PromptContextFitter.estimateToolsReserve(8) - Math.max(256, limit / 4));
+        if (usage.usedTokens() <= safeBudget) {
             return;
         }
         try {
@@ -514,27 +575,6 @@ public class AgentLoopService {
             log.warn("[Agent:{}] Auto-compress failed, will hard-trim in memory: {}",
                     session.getSessionId(), e.getMessage());
         }
-    }
-
-    /**
-     * When usage already exceeds the selected model window, persist ICA compress once then reload.
-     */
-    private List<Message> maybeAutoCompressAndReload(
-            AgentSession session,
-            SessionMessage placeholder,
-            List<Message> context
-    ) {
-        Long modelPk = resolveSelectedSystemModelId(session);
-        int limit = contextUsageService.resolveLimit(modelPk);
-        int promptEst = TokenCounter.estimateTokensForMessages(context);
-        if (promptEst < (int) (limit * ContextUsageDto.COMPRESS_URGENT_RATIO)) {
-            return context;
-        }
-        maybeAutoCompressSession(session);
-        AgentSession fresh = sessionRepository.findBySessionId(session.getSessionId()).orElse(session);
-        SessionMessage ph = sessionMessageService.findById(placeholder.getId()).orElse(placeholder);
-        List<Message> reloaded = sessionMessageService.loadContextForReply(fresh, ph);
-        return trimTrailingEmptyAssistant(reloaded);
     }
 
     private PromptContextFitter.FitResult fitContextToModelWindow(
@@ -596,7 +636,8 @@ public class AgentLoopService {
                     .orElseThrow(() -> new IllegalStateException("Placeholder not found: " + placeholderId));
             List<Message> context = sessionMessageService.loadContextForReply(session, placeholder);
             context = trimTrailingEmptyAssistant(context);
-            context = maybeAutoCompressAndReload(session, placeholder, context);
+            // 先按模型窗口判断 → 超限优先 ICA 压缩；硬裁只在后续 fit 兜底
+            context = ensureContextFitsModelBeforeRequest(session, placeholder, context, sessionId);
 
             publisher.publish(AgentEvent.planReady(sessionId, new ArrayList<>(EXECUTION_PLAN)));
             publisher.publish(AgentEvent.stepStart(sessionId, 1, EXECUTION_PLAN.get(0)));
