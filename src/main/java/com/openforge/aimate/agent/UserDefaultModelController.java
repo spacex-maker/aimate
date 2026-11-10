@@ -58,7 +58,7 @@ public class UserDefaultModelController {
         Long userId = currentUserId();
         var systemModels = systemModelRepository.findByEnabledTrueOrderBySortOrderAsc()
                 .stream()
-                .map(SystemModelDto::from)
+                .map(SystemModelDto::forPublic)
                 .toList();
 
         UserDefaultModelDto defaultModel;

@@ -19,11 +19,34 @@ import { EmojiPicker } from '../chat/EmojiPicker'
 
 export type { MentionCandidate }
 
-/** provider 转展示用公司名（如 openai → OpenAI，xai → xAI） */
+/** provider 转展示用公司名（如 openai → OpenAI，xai → xAI）；用户自有密钥列表仍用 */
 function formatProvider(provider: string): string {
   const s = (provider || '').toLowerCase()
   if (s === 'xai') return 'xAI'
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : provider
+}
+
+/** 上下文窗口：128000 → 128K 上下文 */
+function formatContextWindow(tokens?: number | null): string {
+  if (!tokens || tokens <= 0) return ''
+  if (tokens >= 1_000_000) {
+    const m = tokens / 1_000_000
+    const label = Number.isInteger(m) ? String(m) : m.toFixed(1).replace(/\.0$/, '')
+    return `${label}M 上下文`
+  }
+  if (tokens >= 1000) {
+    const k = Math.round(tokens / 1000)
+    return `${k}K 上下文`
+  }
+  return `${tokens} 上下文`
+}
+
+/**
+ * 系统模型对用户只展示：参数量（tip，如 8B / 177B MoE）+ 上下文大小。
+ * 不展示中转方、上游地址、运维备注等。
+ */
+function formatSystemModelMeta(m: Pick<SystemModelDto, 'tip' | 'contextWindowTokens'>): string {
+  return [m.tip?.trim(), formatContextWindow(m.contextWindowTokens)].filter(Boolean).join(' · ')
 }
 
 export interface AgentInputBoxProps {
@@ -683,13 +706,15 @@ export function AgentInputBox({
                   title={
                     modelsLoading
                       ? '模型列表加载中…'
-                      : [displayModelLabel, selectedModel?.tip].filter(Boolean).join(' · ')
+                      : selectedModel
+                        ? [displayModelLabel, formatSystemModelMeta(selectedModel)].filter(Boolean).join(' · ')
+                        : displayModelLabel
                   }
                 >
                   <span className="truncate max-w-[7rem] sm:max-w-[10rem]">{displayModelLabel}</span>
-                  {selectedModel?.tip ? (
-                    <span className="hidden sm:inline-block max-w-[9rem] truncate rounded px-1 py-0.5 text-[10px] leading-none bg-emerald-500/15 text-emerald-300/90 border border-emerald-500/20">
-                      {selectedModel.tip}
+                  {selectedModel && formatSystemModelMeta(selectedModel) ? (
+                    <span className="hidden sm:inline-block max-w-[11rem] truncate rounded px-1 py-0.5 text-[10px] leading-none bg-emerald-500/15 text-emerald-300/90 border border-emerald-500/20">
+                      {formatSystemModelMeta(selectedModel)}
                     </span>
                   ) : null}
                   <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />
@@ -783,8 +808,7 @@ export function AgentInputBox({
                                           : 'text-white/80 hover:bg-white/10'
                                       }`}
                                       title={
-                                        [m.tip, m.description].filter(Boolean).join(' · ')
-                                        || `${formatProvider(m.provider)} ${m.displayName}`
+                                        [m.displayName, formatSystemModelMeta(m)].filter(Boolean).join(' · ')
                                       }
                                     >
                                       <div className="flex flex-col gap-0.5">
@@ -800,21 +824,13 @@ export function AgentInputBox({
                                               思考
                                             </span>
                                           ) : null}
-                                          {m.tip ? (
-                                            <span className="shrink-0 max-w-[10rem] truncate rounded px-1.5 py-0.5 text-[10px] leading-none bg-emerald-500/15 text-emerald-300/90 border border-emerald-500/25">
-                                              {m.tip}
-                                            </span>
-                                          ) : null}
                                         </div>
-                                        <span className="text-[11px] text-white/45">
-                                          {formatProvider(m.provider)}
-                                        </span>
+                                        {formatSystemModelMeta(m) ? (
+                                          <span className="text-[11px] text-white/45 truncate">
+                                            {formatSystemModelMeta(m)}
+                                          </span>
+                                        ) : null}
                                       </div>
-                                      {m.description && (
-                                        <span className="block text-white/50 mt-0.5 truncate">
-                                          {m.description}
-                                        </span>
-                                      )}
                                     </button>
                                   ))}
                                 </div>

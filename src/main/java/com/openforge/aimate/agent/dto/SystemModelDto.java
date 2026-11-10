@@ -54,4 +54,54 @@ public record SystemModelDto(
                 m.getCostOutputCnyPer1mOffpeak()
         );
     }
+
+    /**
+     * 用户侧模型列表：不返回上游地址 / Key 配置名 / 运维备注。
+     * tip 仅保留面向用户的短标签（如参数量、非高峰半价）；含中转/网关/密钥字样时清空。
+     */
+    public static SystemModelDto forPublic(SystemModel m) {
+        SystemModelDto full = from(m);
+        if (full == null) return null;
+        return new SystemModelDto(
+                full.id(),
+                full.provider(),
+                full.modelId(),
+                full.displayName(),
+                null,
+                null,
+                full.sortOrder(),
+                full.enabled(),
+                null,
+                sanitizePublicTip(full.tip()),
+                full.supportsVision(),
+                full.supportsThinking(),
+                full.contextWindowTokens(),
+                full.pointsPer1kPromptTokens(),
+                full.pointsPer1kCompletionTokens(),
+                full.costInputCnyPer1mPeak(),
+                full.costInputCnyPer1mOffpeak(),
+                full.costOutputCnyPer1mPeak(),
+                full.costOutputCnyPer1mOffpeak()
+        );
+    }
+
+    private static String sanitizePublicTip(String tip) {
+        if (tip == null) return null;
+        String t = tip.trim();
+        if (t.isEmpty()) return null;
+        String lower = t.toLowerCase();
+        if (lower.contains("aimodel")
+                || lower.contains("llama")
+                || lower.contains("n_ctx")
+                || lower.contains("gateway")
+                || lower.contains("api key")
+                || lower.contains("apikey")
+                || lower.contains("amk_")
+                || t.contains("\u4e2d\u8f6c")
+                || t.contains("\u7f51\u5173")
+                || t.contains("\u5bc6\u94a5")) {
+            return null;
+        }
+        return t.length() > 64 ? t.substring(0, 64) : t;
+    }
 }

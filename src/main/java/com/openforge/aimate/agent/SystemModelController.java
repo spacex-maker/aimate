@@ -26,7 +26,7 @@ public class SystemModelController {
     public ResponseEntity<List<SystemModelDto>> list() {
         List<SystemModelDto> list = systemModelRepository.findByEnabledTrueOrderBySortOrderAsc()
                 .stream()
-                .map(SystemModelDto::from)
+                .map(SystemModelDto::forPublic)
                 .toList();
         return ResponseEntity.ok(list);
     }

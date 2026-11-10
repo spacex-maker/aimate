@@ -1,5 +1,6 @@
 -- Chat: Qwen3.8-Flash-Next via Aimodel gateway (same amk_ account as qwen3-8b)
 -- Idempotent: insert if missing; refresh pricing/context on re-run.
+-- User-facing tip/description: only param size + context; no relay/infra notes.
 
 INSERT INTO system_models (
   provider, model_id, display_name, base_url, api_key_config_key,
@@ -21,8 +22,8 @@ SELECT
   0,
   1,
   131072,
-  'Aimodel 180B MoE（llama.cpp）。训练上下文 262K，当前服务端 n_ctx=131072。与 Qwen3-8B 共用同一 Aimodel API Key。',
-  'Aimodel · 128K',
+  NULL,
+  '177B MoE',
   2,
   4,
   20.0,
@@ -46,8 +47,8 @@ SET
   enabled = 1,
   supports_thinking = 1,
   context_window_tokens = 131072,
-  description = 'Aimodel 180B MoE（llama.cpp）。训练上下文 262K，当前服务端 n_ctx=131072。与 Qwen3-8B 共用同一 Aimodel API Key。',
-  tip = 'Aimodel · 128K',
+  description = NULL,
+  tip = '177B MoE',
   points_per_1k_prompt_tokens = 2,
   points_per_1k_completion_tokens = 4,
   cost_input_cny_per_1m_peak = 20.0,
@@ -56,14 +57,3 @@ SET
   cost_output_cny_per_1m_offpeak = 40.0,
   update_time = NOW()
 WHERE provider = 'aimodel' AND model_id = 'qwen3.8-flash-next';
-
--- Keep Aimodel Chat key description accurate for both models
-UPDATE system_config
-SET description = 'Aimodel Chat 专用 Key（qwen3-8b / qwen3.8-flash-next 共用同一 Aimodel 账户）',
-    update_time = NOW()
-WHERE config_key = 'DEEPSEEK_API_KEY_AIMODEL_CHAT';
-
-UPDATE system_providers
-SET description = 'AIMATEX Aimodel OpenAI-compat gateway（Chat 与 Aimodel 控制台共用 amk_ 账户）',
-    update_time = NOW()
-WHERE code = 'aimodel';
