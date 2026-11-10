@@ -15,6 +15,7 @@ SET supports_thinking = 1
 WHERE model_id IN (
         'qwen3-8b',
         'qwen3:8b',
+        'qwen3.8-flash-next',
         'deepseek-flash',
         'deepseek-v4-flash',
         'deepseek-v4-flash-vision-exp',

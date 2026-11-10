@@ -449,13 +449,22 @@ public class AgentLoopService {
                     .formatted(m.getId(), provider, keyCfg));
         }
 
+        // Flash-Next ~4.7 tok/s：长回复需远超默认 120s；与 chat-api nginx 1200s 对齐
+        int timeoutSeconds = isSlowLocalMoE(model) ? 900 : 120;
+
         return new LlmProperties.ProviderConfig(
                 provider,
                 baseUrl,
                 apiKey,
                 model,
-                120
+                timeoutSeconds
         );
+    }
+
+    private static boolean isSlowLocalMoE(String modelId) {
+        if (modelId == null || modelId.isBlank()) return false;
+        String id = modelId.toLowerCase(java.util.Locale.ROOT);
+        return id.contains("flash-next") || id.contains("qwen3.8-flash");
     }
 
     // 已不再提供任何 provider 级默认 baseUrl/model，一切按 DB 显式配置。

@@ -182,8 +182,8 @@ NGINX_API = f"""server {{
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
+        proxy_read_timeout 1200s;
+        proxy_send_timeout 1200s;
     }}
 }}
 """
