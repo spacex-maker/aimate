@@ -9,7 +9,7 @@ import java.util.List;
 /**
  * Fit chat messages into a model context window before calling the provider.
  * Prevents llama.cpp / Aimodel {@code exceed_context_size_error} when switching
- * from a large-window model (e.g. 128k) to a small one (e.g. Flash-Next 8k).
+ * from a large-window model (e.g. 128k) to a smaller one (uses each model's context_window_tokens).
  */
 public final class PromptContextFitter {
 
@@ -81,11 +81,11 @@ public final class PromptContextFitter {
 
     public static int preferredMaxTokensForModel(String modelId, int contextWindow) {
         int ctx = Math.max(1024, contextWindow);
-        // 小窗口（≤16k）给回复留更大比例；大窗口仍封顶 16k completion
+        // 小窗口给回复留更大比例；大窗口按上下文 1/4 给补全预算（上限 32k），最终仍由 fit() 按剩余空间收紧
         if (ctx <= 16_384) {
             return Math.min(2_048, Math.max(512, ctx / 3));
         }
-        return 16_384;
+        return Math.min(32_768, Math.max(4_096, ctx / 4));
     }
 
     private static boolean isUnsafeHead(Message m) {

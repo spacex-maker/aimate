@@ -333,7 +333,8 @@ public class LlmClient {
     // ── Private helpers ──────────────────────────────────────────────────────
 
     /**
-     * 统一补全 model、透传 think、清洗 Ollama 不耐受的空 assistant，并对本地兼容端点限幅 max_tokens。
+     * 统一补全 model、透传 think、清洗 Ollama 不耐受的空 assistant。
+     * max_tokens 由上层按模型真实 context_window 计算（PromptContextFitter），此处不再做 8K 硬帽。
      */
     private ChatRequest prepareRequest(ChatRequest request) {
         if (request == null) {
@@ -346,16 +347,6 @@ public class LlmClient {
         }
         Integer maxTokens = request.maxTokens();
         java.util.List<Message> messages = sanitizeMessages(request.messages());
-        if (looksLikeLocalOllamaCompat()) {
-            int promptEst = TokenCounter.estimateTokensForMessages(messages);
-            // Prefer caller-provided maxTokens; still hard-cap so prompt+completion stays sane.
-            int hardCap = Math.max(256, 8_192 - Math.min(promptEst, 7_500));
-            if (maxTokens == null || maxTokens > hardCap) {
-                log.debug("[LlmClient:{}] cap max_tokens {} → {} (prompt≈{} local/Aimodel)",
-                        config.name(), maxTokens, hardCap, promptEst);
-                maxTokens = hardCap;
-            }
-        }
         return ChatRequest.builder()
                 .model(model)
                 .messages(messages)
@@ -366,16 +357,6 @@ public class LlmClient {
                 .thinking(request.thinking())
                 .think(request.think())
                 .build();
-    }
-
-    /** Aimodel / Qwen / Ollama 等对 null content、过大 max_tokens 更敏感。 */
-    private boolean looksLikeLocalOllamaCompat() {
-        String name = config.name() != null ? config.name().toLowerCase() : "";
-        String url = config.baseUrl() != null ? config.baseUrl().toLowerCase() : "";
-        String model = config.model() != null ? config.model().toLowerCase() : "";
-        return name.contains("aimodel") || name.contains("qwen") || name.contains("ollama")
-                || url.contains("aimodel") || url.contains(":11434") || url.contains(":11435")
-                || model.contains("qwen");
     }
 
     /**
