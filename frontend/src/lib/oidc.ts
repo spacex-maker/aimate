@@ -15,6 +15,18 @@ export type OidcPublicConfig = {
   redirectUris: string[]
 }
 
+export type OidcCallbackParams = {
+  code: string
+  state: string
+  codeVerifier: string
+  redirectUri: string
+  next: string | null
+}
+
+/** Survive React remount: take session once, reuse in-flight exchange. */
+let cachedCallback: OidcCallbackParams | null = null
+let inFlight: Promise<{ user: import('../types/auth').AuthResponse; next: string | null }> | null = null
+
 function toBase64Url(bytes: ArrayBuffer | Uint8Array): string {
   const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
   let bin = ''
@@ -64,6 +76,10 @@ export async function beginAimatexLogin(
     sessionStorage.removeItem(SS_NEXT)
   }
 
+  // New login attempt: drop any stale callback cache from a previous try.
+  cachedCallback = null
+  inFlight = null
+
   const url = new URL(config.authorizeUrl)
   url.searchParams.set('client_id', config.clientId)
   url.searchParams.set('redirect_uri', redirectUri)
@@ -75,13 +91,9 @@ export async function beginAimatexLogin(
   window.location.assign(url.toString())
 }
 
-export function takeOidcCallbackParams(search: string): {
-  code: string
-  state: string
-  codeVerifier: string
-  redirectUri: string
-  next: string | null
-} {
+export function takeOidcCallbackParams(search: string): OidcCallbackParams {
+  if (cachedCallback) return cachedCallback
+
   const params = new URLSearchParams(search)
   const err = params.get('error')
   if (err) {
@@ -104,5 +116,30 @@ export function takeOidcCallbackParams(search: string): {
     throw new Error('登录会话已失效，请重新登录')
   }
   clearOidcSession()
-  return { code, state, codeVerifier: verifier, redirectUri, next }
+  cachedCallback = { code, state, codeVerifier: verifier, redirectUri, next }
+  // Drop code from address bar so remount/refresh cannot re-enter a half state.
+  try {
+    const u = new URL(window.location.href)
+    u.search = ''
+    window.history.replaceState(window.history.state, '', u.pathname + u.hash)
+  } catch {
+    /* ignore */
+  }
+  return cachedCallback
+}
+
+export function runOidcCallbackOnce(
+  exchange: (p: OidcCallbackParams) => Promise<import('../types/auth').AuthResponse>,
+): Promise<{ user: import('../types/auth').AuthResponse; next: string | null }> {
+  if (inFlight) return inFlight
+  const params = takeOidcCallbackParams(window.location.search)
+  inFlight = (async () => {
+    const user = await exchange(params)
+    return { user, next: params.next }
+  })().catch((e) => {
+    inFlight = null
+    cachedCallback = null
+    throw e
+  })
+  return inFlight
 }

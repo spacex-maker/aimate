@@ -3,38 +3,44 @@ import { Link, useNavigate } from 'react-router-dom'
 import { authApi } from '../api/auth'
 import { AuthGateShell } from '../components/layout/AuthGateShell'
 import { setAuthUser } from '../hooks/useAuth'
-import { takeOidcCallbackParams } from '../lib/oidc'
+import { runOidcCallbackOnce } from '../lib/oidc'
 
 export function OAuthCallbackPage() {
   const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    let cancelled = false
+    let alive = true
     ;(async () => {
       try {
-        const { code, codeVerifier, redirectUri, next } = takeOidcCallbackParams(window.location.search)
-        const data = await authApi.oidcCallback({ code, codeVerifier, redirectUri })
-        if (cancelled) return
+        const { user, next } = await runOidcCallbackOnce((p) =>
+          authApi.oidcCallback({
+            code: p.code,
+            codeVerifier: p.codeVerifier,
+            redirectUri: p.redirectUri,
+          }),
+        )
+        // Persist even if this effect instance unmounted — remount must not drop the JWT.
         setAuthUser({
-          userId: data.userId,
-          username: data.username,
-          displayName: data.displayName,
-          avatarUrl: data.avatarUrl ?? null,
-          role: data.role,
-          token: data.token,
+          userId: user.userId,
+          username: user.username,
+          displayName: user.displayName,
+          avatarUrl: user.avatarUrl ?? null,
+          role: user.role,
+          token: user.token,
         })
+        if (!alive) return
         const raw = next && next.startsWith('/') && !next.startsWith('//') ? next : '/app'
         const safeNext = raw === '/' ? '/app' : raw
         navigate(safeNext, { replace: true })
       } catch (e) {
-        if (!cancelled) {
+        if (alive) {
           setError(e instanceof Error ? e.message : '统一登录失败')
         }
       }
     })()
     return () => {
-      cancelled = true
+      alive = false
     }
   }, [navigate])
 
